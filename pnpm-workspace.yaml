@@ -1,0 +1,102 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+  - 'test'
+
+# pnpm 11 reads workspace settings here; .npmrc stays registry/auth-only by policy
+engineStrict: true
+saveExact: true
+
+# single React/Ink copy across the graph — two copies break Ink's reconciler
+publicHoistPattern:
+  - 'react'
+  - 'react-*'
+  - '@types/react'
+  - 'ink'
+
+# supply-chain posture — mirrors codex (repos/codex/pnpm-workspace.yaml), the strictest
+# of the adopted repos: 7-day quarantine on freshly-published versions, no exotic
+# transitive deps, no lockfile downgrades, no un-vetted dependency build scripts.
+minimumReleaseAge: 10080
+blockExoticSubdeps: true
+strictDepBuilds: true
+trustPolicy: no-downgrade
+# Scopes the no-downgrade check to versions published within the last 7 days (the same
+# takeover window minimumReleaseAge quarantines). Without it the check spans all of
+# registry history and hard-errors on pre-provenance-era backport releases (e.g.
+# semver@6.3.1, published 2023 without attestation after 7.5.x shipped with it).
+# Mirrors codex verbatim (repos/codex/pnpm-workspace.yaml: trustPolicyIgnoreAfter: 10080).
+trustPolicyIgnoreAfter: 10080
+# Build-script allowlist — pnpm 11 shape. Under the pinned pnpm 11.8.0 the per-dependency
+# build/postinstall decision lives in the `allowBuilds` MAP (`<pkg>: true|false`), the same
+# form the adopted renderer uses at the closest pnpm major (repos/json-render/pnpm-workspace.yaml:3-11
+# @ pnpm 11.1.3, e.g. `esbuild: false`); the pnpm-10-era `ignoredBuiltDependencies` LIST is
+# superseded (a permission-gated agent takes the current key). With `strictDepBuilds: true` any
+# dependency carrying a build script that is NOT listed here hard-errors at install, so every
+# native/script dep is an explicit decision: esbuild ships prebuilt binaries (via tsup + plan 20's
+# SEA re-bundler) and needs no build -> false; lefthook's git hooks are installed explicitly in
+# Task 8, never via its postinstall -> false; node-pty (plan 20's opt-in PTY suite, a test/ devDep)
+# is a native addon that MUST run node-gyp when Slice-3 lands -> true. Settled by one clean
+# `pnpm install` as PR-1's first gate (derived tier — the real pnpm confirms the exact key).
+allowBuilds:
+  esbuild: false
+  lefthook: false
+  node-pty: true
+
+# SINGLE source of truth for adopted-library + shared-toolchain versions. Packages
+# (and the root) pin via "<dep>": "catalog:". EXACT versions only — every adopted entry is
+# pinned to its PUBLISHED release, cross-checked against the cloned source in repos/ (ledger
+# §F/§G13; where a clone's HEAD trails the pin — e.g. @ag-ui/* 0.0.1 vs 0.0.57,
+# @modelcontextprotocol/client alpha.0 vs alpha.2 — the published version governs); ranges
+# are banned so two installs can never resolve two different adopted-API surfaces.
+catalog:
+  # adopted runtime libraries (exact, repo-verified)
+  react: 19.2.4
+  react-dom: 19.2.4
+  '@types/react': 19.2.3
+  ink: 6.8.0
+  ink-testing-library: 4.0.0
+  '@json-render/core': 0.19.0
+  '@json-render/ink': 0.19.0
+  zod: 4.3.6
+  '@ag-ui/client': 0.0.57
+  '@ag-ui/core': 0.0.57
+  fast-json-patch: 3.1.1
+  rxjs: 7.8.1
+  ai: 5.0.45
+  '@ai-sdk/anthropic': 2.0.17
+  # v2 client. alpha.2 KEPT over the published beta.2 (re-verified 2026-07-06): beta.2 targets the
+  # newer 2026-07-28 spec RC (breaking API changes expected), while the whole MCP consumer surface
+  # (plan 19: paginated listTools, callTool(params, options), ProtocolError) is verified against the
+  # alpha /client line — a deliberate conservative pin, NOT a bug (ledger §Q). Revisit once a beta
+  # the plan set is re-reviewed against lands.
+  '@modelcontextprotocol/client': 2.0.0-alpha.2
+  # alpha.2 declares @cfworker/json-schema an OPTIONAL peer but imports it UNCONDITIONALLY at
+  # module-init (upstream typescript-sdk#2093), so it is effectively a HARD dep — pin it here
+  # explicitly (4.x line, satisfies alpha.2's peer range) or MCP crashes on load with a missing
+  # "optional" peer. plan 08 (exec) declares it via "@cfworker/json-schema": "catalog:" alongside the
+  # @modelcontextprotocol/client dep (only exec imports MCP, so its transitive schema-validator dep lives there too).
+  # Drop this pin once the client moves to a beta that lazy-imports the schema validator.
+  '@cfworker/json-schema': 4.1.1
+  '@anthropic-ai/sandbox-runtime': 0.0.60
+  web-tree-sitter: 0.25.10
+  tree-sitter-bash: 0.25.1
+  node-pty: 1.1.0           # plan 20's opt-in PTY suite (repos/node-pty); native dep, devDependency of test/ only
+  '@xterm/headless': 5.5.0  # pairs with node-pty in the PTY suite (exact pin matches repos/gemini-cli)
+  # shared toolchain (root devDeps + later package plans pin these via catalog:)
+  typescript: 5.6.3
+  '@types/node': 22.19.19   # Node 22.x DefinitelyTyped substrate (§Z80). Every package whose src touches
+                            # node:*/process/Buffer/AbortSignal/NodeJS.* / a web-stream global pins
+                            # "@types/node": "catalog:" — a catalog entry with no consumer installs nothing.
+  tsup: 8.3.5
+  tsx: 4.19.2              # plan 20's release scripts run via `pnpm tsx`; single-sourced here (§Z80/LO-08) so the version lives in ONE file
+  vitest: 4.0.17            # matches repos/json-render (^4.0.17); the adopted renderer's test tooling is vitest 4
+  eslint: 9.13.0
+  eslint-plugin-import: 2.31.0
+  typescript-eslint: 8.12.2
+  # plan 20 release-script tooling — pinned here so the version lives in ONE file (the catalog),
+  # same single-source rule as every other tool; plan 20 references each via "<dep>": "catalog:".
+  esbuild: 0.28.1          # the CJS re-bundler for the Node SEA main (plan 20 Task 8)
+  postject: 1.0.0-alpha.6  # injects the SEA blob into the per-arch binary (the version the Node 22 SEA docs target)
+  yaml: 2.9.0              # parses release.yml in plan 20's workflow test (Task 13)
+  cross-env: 10.1.0        # cross-platform env-var setter; plan 17's integration-tests package pins this via catalog: (§Z33)
