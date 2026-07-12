@@ -2,26 +2,7 @@
   "name": "minitui-monorepo",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "packageManager": "pnpm@11.8.0",
-  "engines": {
-    "node": ">=22.13"
-  },
-  "scripts": {
-    "build": "turbo run build",
-    "test": "turbo run test",
-    "lint": "turbo run lint",
-    "lint:boundary-fixture": "eslint --no-ignore test/eslint-boundary-fixture",
-    "lint:test-policy": "DIRS=$(find . \\( -path '*/node_modules' -o -path '*/dist' -o -path '*/repos' -o -path '*/docs' \\) -prune -o \\( -name test -o -name __tests__ \\) -type d -print); grep -rEn --include='*.test.ts' --include='*.test.tsx' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=repos --exclude-dir=docs 'vi\\.mock|vi\\.spyOn|vi\\.fn\\b|\\.mock\\.calls|vi\\.mocked|toHaveBeenCalled|mockResolvedValue|mockReturnValue|mockImplementation|mockRejectedValue' .; G1=$?; if [ -n \"$DIRS\" ]; then grep -rEn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=repos --exclude-dir=docs 'vi\\.mock|vi\\.spyOn|vi\\.fn\\b|\\.mock\\.calls|vi\\.mocked|toHaveBeenCalled|mockResolvedValue|mockReturnValue|mockImplementation|mockRejectedValue' $DIRS; G2=$?; else G2=1; fi; [ \"$G1\" -eq 1 ] && [ \"$G2\" -eq 1 ]",
-    "typecheck": "turbo run typecheck",
-    "typecheck:tsc": "tsc -b",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "syncpack": "syncpack lint",
-    "changeset": "changeset",
-    "test:all": "vitest run",
-    "build:all": "turbo run build"
-  },
   "devDependencies": {
     "@changesets/cli": "2.27.9",
     "@eslint/js": "9.13.0",
@@ -39,5 +20,24 @@
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"
-  }
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "build:all": "turbo run build",
+    "changeset": "changeset",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "turbo run lint",
+    "lint:boundary-fixture": "eslint --no-ignore test/eslint-boundary-fixture",
+    "lint:test-policy": "DIRS=$(find . \\( -path '*/node_modules' -o -path '*/dist' -o -path '*/repos' -o -path '*/docs' \\) -prune -o \\( -name test -o -name __tests__ \\) -type d -print); grep -rEn --include='*.test.ts' --include='*.test.tsx' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=repos --exclude-dir=docs 'vi\\.mock|vi\\.spyOn|vi\\.fn\\b|\\.mock\\.calls|vi\\.mocked|toHaveBeenCalled|mockResolvedValue|mockReturnValue|mockImplementation|mockRejectedValue' .; G1=$?; if [ -n \"$DIRS\" ]; then grep -rEn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=repos --exclude-dir=docs 'vi\\.mock|vi\\.spyOn|vi\\.fn\\b|\\.mock\\.calls|vi\\.mocked|toHaveBeenCalled|mockResolvedValue|mockReturnValue|mockImplementation|mockRejectedValue' $DIRS; G2=$?; else G2=1; fi; [ \"$G1\" -eq 1 ] && [ \"$G2\" -eq 1 ]",
+    "syncpack": "syncpack lint",
+    "test": "turbo run test",
+    "test:all": "vitest run",
+    "typecheck": "turbo run typecheck",
+    "typecheck:tsc": "tsc -b"
+  },
+  "type": "module"
 }

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/syncpack@13.0.0/dist/schema.json",
+  "indent": "  ",
+  "sortFirst": ["name", "version", "private", "packageManager"],
+  "dependencyTypes": ["prod", "dev"],
+  "versionGroups": [
+    {
+      "label": "single-version policy: react/react-dom/ink/json-render/zod/typescript/tree-sitter identical across all packages",
+      "dependencies": [
+        "react",
+        "react-dom",
+        "@types/react",
+        "ink",
+        "@json-render/core",
+        "@json-render/ink",
+        "zod",
+        "typescript",
+        "web-tree-sitter",
+        "tree-sitter-bash"
+      ],
+      "packages": ["**"],
+      "preferVersion": "highestSemver"
+    },
+    {
+      "label": "workspace internal deps use the workspace protocol",
+      "dependencies": ["@minitui/**"],
+      "packages": ["**"],
+      "isIgnored": true
+    }
+  ]
+}
