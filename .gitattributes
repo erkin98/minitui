@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.golden -text
+*.ansi -text
+pnpm-lock.yaml linguist-generated=true -diff
