@@ -1,0 +1,8 @@
+**/dist/**
+**/dist-types/**
+**/*.tsbuildinfo
+pnpm-lock.yaml
+**/__golden__/**
+**/*.golden
+**/*.ansi
+coverage/**
