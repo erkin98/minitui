@@ -2,7 +2,11 @@
 // Loaded by vitest.shared.ts setupFiles. Makes every test run byte-deterministic
 // so golden .ansi snapshots are stable across machines and CI runners.
 
-export const FROZEN_EPOCH_MS = 1_700_000_000_000; // fixed: 2023-11-14T22:13:20Z
+import { FROZEN_EPOCH_MS } from './vitest.determinism.constants';
+
+// wiring sentinel: proves this module ran via setupFiles (removing setupFiles from
+// vitest.shared.ts makes the sentinel absent → the determinism test reds).
+globalThis.__MINITUI_DET_SETUP__ = true;
 
 // lock timezone + locale BEFORE any Date is constructed
 process.env.TZ = 'UTC';

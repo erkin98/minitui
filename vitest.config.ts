@@ -16,8 +16,9 @@ export default defineConfig({
       },
       // plan 20's release-script + workflow tests live OUTSIDE every package (under scripts/ and
       // .github/), so no package glob reaches them — a dedicated inline project runs them under a
-      // plain `vitest run` (`test:all`) and under `vitest run --project release-scripts` (plan 17's
-      // CI lane). Globs, not bare paths (a lone .test.ts is silently dropped). Empty until plan 20
+      // plain `vitest run` (`test:all`) and under `vitest run --project release-scripts` (plan 20's
+      // release-slice CI (§Z53-J: plan-17 does not run the named empty project)). Globs, not bare
+      // paths (a lone .test.ts is silently dropped). Empty until plan 20
       // lands — an inert no-op, zero matches.
       {
         test: {
