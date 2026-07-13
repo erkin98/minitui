@@ -47,7 +47,7 @@ export default tseslint.config(
         // Type-aware rules need the TS program. projectService (not `project`) is the
         // typescript-eslint 8 choice for a composite/solution monorepo — it locates each
         // package's own tsconfig via the language service (the root solution tsconfig is
-        // `files: []`, so `project: ['./tsconfig.json']` would type-check nothing). The two
+        // `include: []`, so `project: ['./tsconfig.json']` would type-check nothing). The two
         // root config .ts files that sit outside every package tsconfig are excluded below.
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
