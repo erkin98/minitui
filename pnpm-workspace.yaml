@@ -42,6 +42,8 @@ allowBuilds:
   esbuild: false
   lefthook: false
   node-pty: true
+  # .wasm subpath only via web-tree-sitter; native binding never imported (§Z94-family, plan-08)
+  tree-sitter-bash: false
 
 # SINGLE source of truth for adopted-library + shared-toolchain versions. Packages
 # (and the root) pin via "<dep>": "catalog:". EXACT versions only — every adopted entry is

@@ -126,6 +126,7 @@ export default tseslint.config(
       '**/*.cjs',
       'vitest.config.ts',
       'vitest.shared.ts',
+      'vitest.determinism.constants.ts',
       'vitest.determinism.setup.ts',
       'vitest.determinism.test.ts',
       '**/tsup.config.ts',

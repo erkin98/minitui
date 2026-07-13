@@ -1,8 +1,16 @@
 // vitest.determinism.test.ts
 import { describe, it, expect } from 'vitest';
-import { FROZEN_EPOCH_MS } from './vitest.determinism.setup';
+import { FROZEN_EPOCH_MS } from './vitest.determinism.constants';
 
 describe('ansi-determinism setup', () => {
+  it('loads the determinism setup via setupFiles, not a test import', () => {
+    // The sentinel is set only by vitest.determinism.setup.ts. This test imports the
+    // frozen epoch from the side-effect-free constants module, so if the sentinel is
+    // present the setup must have run through setupFiles — remove that line from
+    // vitest.shared.ts and this assertion reds.
+    expect(globalThis.__MINITUI_DET_SETUP__).toBe(true);
+  });
+
   it('freezes Date.now to the fixed epoch', () => {
     expect(Date.now()).toBe(FROZEN_EPOCH_MS);
     expect(new Date().getTime()).toBe(FROZEN_EPOCH_MS);
@@ -23,7 +31,12 @@ describe('ansi-determinism setup', () => {
   });
 
   it('locks the timezone to UTC', () => {
-    expect(new Date(0).getUTCHours()).toBe(0);
+    // getHours()/getTimezoneOffset() are LOCAL — they honor process.env.TZ, unlike
+    // getUTCHours() which returns UTC regardless of the lock (so the old getUTCHours()===0
+    // assert was a tautology). At epoch 0 (1970-01-01T00:00:00Z) local hours are 0 and the
+    // offset is 0 ONLY because TZ=UTC; any other zone shifts both, so this tests the lock.
+    expect(new Date(0).getHours()).toBe(0);
+    expect(new Date(0).getTimezoneOffset()).toBe(0);
     expect(process.env.TZ).toBe('UTC');
   });
 });

@@ -7,10 +7,10 @@ You describe what you want ("merge these two videos", "rename every file by its 
 ## How it works
 
 1. **Route** — your intent is classified: a quick chat answer, a one-shot command, or a generated mini-app.
-2. **Generate** — for an app, the model emits a *declarative spec*, not code. Every element and action in that spec must already exist in a frozen catalog allowlist — there is no path to arbitrary code.
+2. **Generate** — for an app, the model emits a _declarative spec_, not code. Every element and action in that spec must already exist in a frozen catalog allowlist — there is no path to arbitrary code.
 3. **Validate** — the spec is checked structurally and semantically (do the bindings resolve? is that codec actually available on this machine?) with an automatic repair-and-retry loop before anything renders.
 4. **Render** — the validated spec mounts as an interactive terminal UI.
-5. **Gate & run** — when an action fires, the *host* parses the real command (never the model), splits compound commands, refuses opaque substitution, and resolves it against a deny-first permission engine with a non-overridable hard floor. Approved commands run inside an OS sandbox. Output is stripped of terminal control sequences before it ever reaches the screen.
+5. **Gate & run** — when an action fires, the _host_ parses the real command (never the model), splits compound commands, refuses opaque substitution, and resolves it against a deny-first permission engine with a non-overridable hard floor. Approved commands run inside an OS sandbox. Output is stripped of terminal control sequences before it ever reaches the screen.
 6. **Keep** — useful apps can be saved and relaunched later, re-binding their parameters on the way back in.
 
 ## Design principles
