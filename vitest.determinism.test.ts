@@ -22,7 +22,7 @@ describe('ansi-determinism setup', () => {
     expect(a).toBeGreaterThanOrEqual(0);
     expect(a).toBeLessThan(1);
     // Assert the EXACT seeded sequence, not just the range: mulberry32(0x1234abcd)'s first two
-    // draws. `a ∈ [0,1)` alone is a vacuous gate (LO-09) — native un-seeded Math.random passes
+    // draws. `a ∈ [0,1)` alone is a vacuous gate — native un-seeded Math.random passes
     // it, so removing the seed would leave the check green. These literals only reproduce under
     // the frozen seed, so de-seeding the setup reds this test.
     expect(a).toBe(0.10277144517749548);

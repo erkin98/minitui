@@ -1,22 +1,22 @@
 // config/eslint-boundaries.js
-// Single source of truth for the acyclic import DAG (PROJECT-STRUCTURE.md §5). Each
+// Single source of truth for the acyclic import DAG. Each
 // zone bars a package's `target` dir from importing any internal package OUTSIDE its
 // allowed-dep set. The rule runs at error level — a forbidden import fails CI (the
 // hard gate). The FULL 13-package edge matrix is SEEDED COMPLETE here: all 12
 // restricted @minitui packages get a forward-declared zone now (integration-tests
-// imports ALL, so it has none). The earlier "each later plan appends its own zone"
+// imports ALL, so it has none). The earlier "each package appends its own zone"
 // model left 8 packages with no zone — their lint gates passed vacuously and a
 // forbidden edge such as renderer-ink -> exec or agent-core -> exec was caught by NO
 // machine gate; seeding the whole matrix here closes that hole. A zone is INERT until
 // its target package dir exists (no-restricted-paths matches nothing inside a
-// non-existent dir), then activates automatically as plans 02–18 bring each package
-// on disk. No later plan edits this table except plan 15's `apps/cli` zone — apps/cli
-// is outside the `packages/*` glob seeded here, so plan 15 appends that one zone (the
-// only gate for the cli -> not-test-kit/integration-tests edge).
+// non-existent dir), then activates automatically as each package is brought on
+// disk. No later change edits this table except the `apps/cli` zone — apps/cli
+// is outside the `packages/*` glob seeded here, so that one zone is appended
+// separately (the only gate for the cli -> not-test-kit/integration-tests edge).
 //
 // Encoding (verified against eslint-plugin-import 2.31.0 `no-restricted-paths`):
 // from='./packages' bars EVERY internal package; `except` re-permits the package's OWN
-// dir + its allowed deps, so one line maps 1:1 to a §5 DAG edge ("A may import B,C" =>
+// dir + its allowed deps, so one line maps 1:1 to a DAG edge ("A may import B,C" =>
 // except:[self,B,C]). Excepting self is REQUIRED: a package's own relative imports
 // (`./foo.js`) resolve inside `./packages`, so a bare `from:'./packages'` with no
 // `except` red-flags same-package imports, and a negated glob (`./packages/!(types)`)
@@ -47,13 +47,13 @@ function pkgZone(pkg, ...allowed) {
     target: `./packages/${pkg}`,
     from: './packages',
     except: [`./${pkg}`, ...allowed.map((dep) => `./${dep}`)],
-    message: `@minitui/${pkg} may import only [${allowed.join(', ') || 'no internal package'}] per the §5 DAG.`,
+    message: `@minitui/${pkg} may import only [${allowed.join(', ') || 'no internal package'}] per the package import DAG.`,
   };
 }
 
 /** @type {BoundaryZone[]} */
 export const BOUNDARY_ZONES = [
-  // EXERCISED in PR-1: a leaf may not reach an internal sibling. Both paths on disk, so
+  // EXERCISED from the start: a leaf may not reach an internal sibling. Both paths on disk, so
   // this fires NOW — it is the flat-config compatibility witness for the eslint quartet.
   {
     target: './test/eslint-boundary-fixture/illegal-import.ts',
@@ -62,9 +62,9 @@ export const BOUNDARY_ZONES = [
       'boundary fixture is treated as a leaf: importing the internal stub is a planted violation.',
   },
   // The 12 restricted-package zones (the 13th package, integration-tests in `test/`,
-  // imports ALL — no zone). Each transcribes its §5 DAG allowed-edge set; forward-
+  // imports ALL — no zone). Each transcribes its DAG allowed-edge set; forward-
   // declared + inert until the package dir lands, then active. `types` and `sanitizer` are the
-  // two zero-internal-dep leaves; `transport` imports ONLY those two (§Z11 — allowing the
+  // two zero-internal-dep leaves; `transport` imports ONLY those two (allowing the
   // `sanitize` chokepoint import at the `snapshot-delta.ts` ingress makes it machine-checkable).
   pkgZone('types'),
   pkgZone('transport', 'types', 'sanitizer'),

@@ -10,10 +10,10 @@ pre-commit:
     typecheck:
       # Through turbo (^build) so upstream package .d.ts resolve against the built
       # dist/ (tsup); a raw `tsc -b` fails cold now that tsc emits to dist-types/, not
-      # dist/, so the exports-resolved dist/index.d.ts wouldn't exist pre-build (§Z92).
+      # dist/, so the exports-resolved dist/index.d.ts wouldn't exist pre-build.
       run: pnpm run typecheck
     test-policy:
-      # §Z55-G: fire on any staged .test.ts(x) AND any .ts(x) under a test/ or __tests__/
+      # Fire on any staged .test.ts(x) AND any .ts(x) under a test/ or __tests__/
       # dir (helpers/fixtures/setup the script also scans), so pre-commit covers the same
       # set as the CI witness. Single-string brace glob with the alternatives inlined —
       # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).

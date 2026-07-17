@@ -217,10 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# build output + internal review scratch (kept out of the tree)
+# build output (kept out of the tree)
 node_modules/
 .turbo/
 dist-types/
 *.tsbuildinfo
 coverage/
-agent-findings/
