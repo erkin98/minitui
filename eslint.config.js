@@ -4,6 +4,17 @@ import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
 
+// Local-only ignores (untracked working-copy trees). This checkout can double as a
+// multi-project workspace, so `eslint .` would otherwise walk many non-repo trees
+// (ESLint 9 does not read .gitignore). Loaded best-effort — a clean clone has neither
+// the file nor those directories, so its absence is fine.
+let localIgnores = [];
+try {
+  ({ default: localIgnores } = await import('./eslint.ignores.local.mjs'));
+} catch {
+  localIgnores = [];
+}
+
 export default tseslint.config(
   {
     // The planted-violation fixture is INTENTIONALLY a permanent boundary violation.
@@ -15,28 +26,16 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/*.tsbuildinfo',
       'test/eslint-boundary-fixture/**',
-      // Gitignored local-only trees (this working copy doubles as a docs/reference
-      // workspace; a clean clone has none of these). ESLint 9 does not read .gitignore,
-      // so without these entries `eslint .` walks thousands of non-repo files (and
-      // crashes on type-aware rules in docs/ clones). Rule set untouched — these only
-      // exclude content that is not part of the repo.
-      'docs/**',
-      'repos/**',
-      'tasks/**',
-      'graphify-out/**',
-      'srt/**',
-      'agent-findings/**',
-      '.srt-cv/**',
-      '.claude/**',
-      '.grok/**',
-      '.ruff_cache/**',
+      // Any local-only working-copy trees (absent in a clean clone) come from the
+      // best-effort loader above; the rule set is untouched.
+      ...localIgnores,
     ],
   },
   js.configs.recommended,
   // recommendedTypeChecked (not plain recommended) is the TYPE/ASYNC half of the clean-code
   // gate: it turns on no-explicit-any + the no-unsafe-* family + the type-aware
   // no-floating-promises at error level — the enforcement AGENTS.md's "no `as any` masking a
-  // real type gap" previously left to review. (The §Z24 lint:test-policy mock-grep is the
+  // real type gap" previously left to review. (The lint:test-policy mock-grep is the
   // other half — replacement-mock bans; this is the type/async half.)
   ...tseslint.configs.recommendedTypeChecked,
   {
@@ -66,9 +65,9 @@ export default tseslint.config(
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
       // Cyclomatic-complexity ceiling — catches tangled functions by branch count, the
-      // companion to the 800-line file ceiling (clean-code research §0). 15, not the more
-      // common 10, stays a real gate for the ~200 ordinary functions. POLICY (§Z81, retires
-      // §Z68's under-scoped "disable exactly 2"): the ceiling is NEVER raised — raising it
+      // companion to the 800-line file ceiling. 15, not the more
+      // common 10, stays a real gate for the ~200 ordinary functions. POLICY: the ceiling
+      // is NEVER raised — raising it
       // would silently permit unbounded complexity everywhere. The genuinely irreducible
       // cases — an event-dispatch or stream-loop `switch` over a CLOSED union, which is
       // exhaustive rather than tangled — opt out ONE AT A TIME with a targeted
@@ -77,13 +76,13 @@ export default tseslint.config(
       // SET of functions that breach 15 is NOT hand-enumerated here: early hand-counts
       // spread 15/16/18/23/30/34 for the same function, so only the real eslint settles
       // membership at build — each over-ceiling function then earns its own disable (an
-      // irreducible closed-union dispatcher) or a helper extraction along the plan's own
-      // signpost (a decomposable one). Do not hand-count; do not raise the ceiling.
+      // irreducible closed-union dispatcher) or a helper extraction
+      // (a decomposable one). Do not hand-count; do not raise the ceiling.
       complexity: ['error', 15],
       // Casing as a CI rule: PascalCase types, camelCase functions, UPPER_CASE / PascalCase
       // (React components) variables. Conservative — object properties, imports, and
       // parameters stay unrestricted so external-API field names don't false-positive.
-      // §Z82: React components declared as function STATEMENTS (`function GenerationStatus()`,
+      // React components declared as function STATEMENTS (`function GenerationStatus()`,
       // `function OffCatalogFallback()`) are PascalCase functions — a PascalCase-name FILTER
       // re-permits them without widening the camelCase rule for ordinary functions.
       '@typescript-eslint/naming-convention': [
@@ -91,7 +90,7 @@ export default tseslint.config(
         { selector: 'typeLike', format: ['PascalCase'] },
         { selector: 'function', format: ['camelCase'] },
         {
-          // component exception (§Z82): a function whose name starts uppercase is a React
+          // component exception: a function whose name starts uppercase is a React
           // component — the filter narrows this entry to those names, so an ordinary function
           // still falls to the camelCase entry above and only PascalCase-named ones are exempt.
           selector: 'function',
