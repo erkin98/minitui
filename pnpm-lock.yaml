@@ -30,6 +30,9 @@ catalogs:
     vitest:
       specifier: 4.0.17
       version: 4.0.17
+    zod:
+      specifier: 4.3.6
+      version: 4.3.6
 
 importers:
 
@@ -52,7 +55,7 @@ importers:
         version: 9.13.0
       eslint-import-resolver-typescript:
         specifier: 3.6.3
-        version: 3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-plugin-import@2.31.0)(eslint@9.13.0)
+        version: 3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-import-resolver-node@0.3.10)(eslint-plugin-import@2.31.0)(eslint@9.13.0)
       eslint-plugin-import:
         specifier: 'catalog:'
         version: 2.31.0(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-import-resolver-typescript@3.6.3)(eslint@9.13.0)
@@ -80,6 +83,25 @@ importers:
       typescript-eslint:
         specifier: 'catalog:'
         version: 8.12.2(eslint@9.13.0)(typescript@5.6.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.0.17(@types/node@22.19.19)(tsx@4.19.2)
+
+  packages/types:
+    dependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.19
+      zod:
+        specifier: 'catalog:'
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: 'catalog:'
+        version: 8.3.5(postcss@8.5.16)(tsx@4.19.2)(typescript@5.6.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.6.3
       vitest:
         specifier: 'catalog:'
         version: 4.0.17(@types/node@22.19.19)(tsx@4.19.2)
@@ -2713,6 +2735,9 @@ packages:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
 
+  zod@4.3.6:
+    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+
 snapshots:
 
   '@babel/code-frame@7.29.7':
@@ -3919,7 +3944,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-plugin-import@2.31.0)(eslint@9.13.0):
+  eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-import-resolver-node@0.3.10)(eslint-plugin-import@2.31.0)(eslint@9.13.0):
     dependencies:
       '@nolyfill/is-core-module': 1.0.39
       debug: 4.4.3
@@ -3945,7 +3970,7 @@ snapshots:
       '@typescript-eslint/parser': 8.12.2(eslint@9.13.0)(typescript@5.6.3)
       eslint: 9.13.0
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-plugin-import@2.31.0)(eslint@9.13.0)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@8.12.2(eslint@9.13.0)(typescript@5.6.3))(eslint-import-resolver-node@0.3.10)(eslint-plugin-import@2.31.0)(eslint@9.13.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -5387,3 +5412,5 @@ snapshots:
   yallist@2.1.2: {}
 
   yocto-queue@0.1.0: {}
+
+  zod@4.3.6: {}
