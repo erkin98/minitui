@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { stripAnsi, hasEscape } from '../src/ansi.js';
 import { stripDangerousOsc, stripHyperlinks } from '../src/osc.js';
-import { sanitize } from '../src/index.js';
+import { sanitize, sanitizeStream } from '../src/index.js';
 
 const ESC = '\x1b';
 const ST = '\x1b\\'; // String Terminator (ESC \)
@@ -261,5 +261,80 @@ describe('sanitize', () => {
 
   it('preserves layout whitespace', () => {
     expect(sanitize('a\tb\nc')).toBe('a\tb\nc');
+  });
+});
+
+async function runStream(
+  chunks: string[],
+  opts?: { allow?: 'none' | 'renderer-sgr' | undefined },
+): Promise<string> {
+  const t = sanitizeStream(opts);
+  const writer = t.writable.getWriter();
+  const reader = t.readable.getReader();
+  const out: string[] = [];
+  const pump = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.push(value);
+    }
+  })();
+  for (const c of chunks) await writer.write(c);
+  await writer.close();
+  await pump;
+  return out.join('');
+}
+
+describe('sanitizeStream', () => {
+  it('sanitizes a single chunk', async () => {
+    expect(await runStream([`${ESC}[31mred${ESC}[0m`])).toBe('red');
+  });
+
+  it('sanitizes an escape sequence split across two chunks', async () => {
+    // OSC 52 clipboard split mid-sequence must not leak the first half. The
+    // first chunk's tail `ESC]52;c;ZX` ENDS IN A LETTER but is NOT complete —
+    // an OSC is only complete at its ST/BEL terminator, never at a letter.
+    expect(await runStream([`x${ESC}]52;c;ZX`, `ZpbA==${BEL}y`])).toBe('xy');
+  });
+
+  it('never leaks an OSC 52 payload no matter where the chunk boundary falls', async () => {
+    const full = `x${ESC}]52;c;ZXZpbA==${BEL}y`;
+    for (let i = 1; i < full.length; i++) {
+      expect(await runStream([full.slice(0, i), full.slice(i)])).toBe('xy');
+    }
+  });
+
+  it('handles a CSI split right after the ESC byte', async () => {
+    expect(await runStream([`a${ESC}`, `[2Jb`])).toBe('ab');
+  });
+
+  it('caret-encodes a dangling lone ESC at end of stream', async () => {
+    expect(await runStream([`done${ESC}`])).toBe('done^[');
+  });
+
+  it('holds an unterminated OSC whose payload contains a LATER ESC (lastIndexOf would leak the live introducer)', async () => {
+    // The first chunk's unterminated OSC 52 contains a later `ESC q`. A
+    // hold-from-last-ESC splitter would emit `x ESC]52;c;ab` — a live OSC
+    // introducer — to the screen. The forward scan holds from the FIRST
+    // unterminated introducer instead.
+    expect(await runStream([`x${ESC}]52;c;ab${ESC}q`, `${BEL}y`])).toBe('xy');
+  });
+
+  it('drops an unterminated OSC 52 fail-closed at flush', async () => {
+    expect(await runStream([`x${ESC}]52;c;ZXZpbA==`])).toBe('x');
+  });
+
+  it('caps the carry: a >MAX_CARRY unterminated OSC is dropped fail-closed, memory stays bounded', async () => {
+    // Once the cap trips, the buffered span is sanitized (the unterminated
+    // OSC drops to end-of-buffer). Payload arriving AFTER the cap flush
+    // becomes inert visible text — the documented ceiling: bounded memory
+    // and no live bytes, at the cost of junk on a >8 KiB sequence.
+    const out = await runStream([`x${ESC}]52;c;`, 'A'.repeat(9000), 'tail']);
+    expect(out).toBe('xtail');
+    expect(out).not.toContain(ESC);
+  });
+
+  it('passes clean text through unchanged', async () => {
+    expect(await runStream(['hello ', 'world'])).toBe('hello world');
   });
 });

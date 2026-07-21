@@ -2,8 +2,10 @@
   "name": "@minitui/sanitizer",
   "version": "0.0.0",
   "private": false,
+  "dependencies": {
+    "@types/node": "catalog:"
+  },
   "devDependencies": {
-    "@types/node": "catalog:",
     "eslint": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
