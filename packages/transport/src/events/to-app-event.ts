@@ -1,7 +1,6 @@
 import { EventType, type BaseEvent } from '@ag-ui/core';
 import { JsonValueSchema, JsonPatchArraySchema, TokenUsageSchema } from '@minitui/types';
 import type { AppEvent } from './app-event.js';
-import type { JsonValue } from '../state/json-pointer.js';
 
 const NON_RETRIABLE_CODES = new Set([
   'non-retriable',
@@ -66,6 +65,17 @@ export function toAppEvent(raw: unknown): AppEvent {
     return { kind: 'passthrough', rawType: String(raw) };
   }
   const e = raw as { type: string } & Record<string, unknown>;
+  // PIN-NORMALIZER-TOTAL (fold): a non-string/absent discriminant is MALFORMED, not an
+  // unmodeled-but-valid event — fail CLOSED rather than emit a passthrough whose rawType
+  // would violate the { rawType: string } union member (the cast below is boundary-only).
+  if (typeof e.type !== 'string') {
+    return {
+      kind: 'run-error',
+      message: 'malformed wire event: non-string type discriminant',
+      code: 'non-retriable',
+      retriable: false,
+    };
+  }
   // The predicate is claimed as EventType so every case shares the enum type; the claim is
   // boundary-only — an unmodeled wire string still lands in the default passthrough arm.
   switch (e.type as EventType) {
@@ -91,17 +101,17 @@ export function toAppEvent(raw: unknown): AppEvent {
     }
     case EventType.RUN_ERROR: {
       const code = e.code === undefined ? undefined : String(e.code);
-      // Retriability precedence: an explicit `retriable` boolean wins — but that is a Slice-2+ BFF
-      // wire extension (§Z79); no Slice-1 producer emits it. The minitui Slice-1 producer (plan-11)
-      // carries `code?` and maps a non-retriable failure to `code:'non-retriable'`, so the derived
-      // path (`NON_RETRIABLE_CODES` — 'non-retriable' + the ContextOverflow family) is what actually
-      // fires; context-overflow must never re-feed.
+      // PIN-RETRIABLE-FLOOR (fold): the §Z79 non-retriable family is a HARD FLOOR — a code in
+      // NON_RETRIABLE_CODES ('non-retriable' + the ContextOverflow family) forces retriable:false
+      // and is NOT overridable by an explicit wire `retriable` flag (a Slice-2+ BFF extension a
+      // remote could set). Only an unknown/retriable code honors the explicit flag; absent flag +
+      // non-floor code defaults retriable. context-overflow must never re-feed, wire flag or not.
       const retriable =
-        typeof e.retriable === 'boolean'
-          ? e.retriable
-          : code === undefined
-            ? true
-            : !NON_RETRIABLE_CODES.has(code);
+        code !== undefined && NON_RETRIABLE_CODES.has(code)
+          ? false
+          : typeof e.retriable === 'boolean'
+            ? e.retriable
+            : true;
       return { kind: 'run-error', message: str(e.message, 'run error'), code, retriable };
     }
     case EventType.TEXT_MESSAGE_CONTENT:
@@ -134,7 +144,9 @@ export function toAppEvent(raw: unknown): AppEvent {
       // rather than casting — the snapshot VALUE is otherwise unguarded before it folds into the
       // store. FAIL-CLOSED: a rejected snapshot never reaches the store; since toAppEvent is
       // declared total (no diagnostics sink here), it surfaces a non-retriable run-error, never throws.
-      const parsed = JsonValueSchema.safeParse(e.snapshot ?? null);
+      // PIN-NORMALIZER-TOTAL (fold): parse `e.snapshot` DIRECTLY (no `?? null`) — a MISSING snapshot
+      // is malformed and fails closed here, never fabricates a `snapshot: null` state event.
+      const parsed = JsonValueSchema.safeParse(e.snapshot);
       if (!parsed.success) {
         return {
           kind: 'run-error',
@@ -150,7 +162,9 @@ export function toAppEvent(raw: unknown): AppEvent {
       // `value` members inherit the same reserved-key guard, adding VALUE-member coverage. The
       // applyStatePatch banPrototypeModifications guard still defends PATCH PATHS downstream; this
       // is the complementary VALUE check. FAIL-CLOSED to a non-retriable run-error (declared-total).
-      const parsed = JsonPatchArraySchema.safeParse(e.delta ?? []);
+      // PIN-NORMALIZER-TOTAL (fold): parse `e.delta` DIRECTLY (no `?? []`) — a MISSING delta is
+      // malformed and fails closed here, never fabricates an empty-patch state-delta event.
+      const parsed = JsonPatchArraySchema.safeParse(e.delta);
       if (!parsed.success) {
         return {
           kind: 'run-error',
@@ -165,11 +179,24 @@ export function toAppEvent(raw: unknown): AppEvent {
       return toVisibility(e, e.value ?? e.name);
     case EventType.RAW:
       return toVisibility(e, e.event);
-    case EventType.ACTIVITY_SNAPSHOT:
+    case EventType.ACTIVITY_SNAPSHOT: {
       // minitui-owned payload pinned to { spec } (ledger G9; plan-02 AgentEvent; SpecSinkPort emits
       // it). The REAL AG-UI ActivitySnapshotEvent carries { messageId, activityType, content } —
       // mapping content→spec belongs to the remote adapter (Slice 2+). ONE shape here, no fallbacks.
-      return { kind: 'activity-snapshot', spec: (e.spec ?? null) as JsonValue };
+      // PIN-NORMALIZER-TOTAL (fold): PARSE `e.spec` through the reserved-key-guarded schema rather
+      // than casting — this CLONES (breaks the wire alias so a later caller mutation can't reach the
+      // emitted event) AND validates (§Z100 own-key guard). FAIL-CLOSED on a missing/invalid spec.
+      const parsed = JsonValueSchema.safeParse(e.spec);
+      if (!parsed.success) {
+        return {
+          kind: 'run-error',
+          message: 'invalid ACTIVITY_SNAPSHOT rejected at transport wire boundary',
+          code: 'non-retriable',
+          retriable: false,
+        };
+      }
+      return { kind: 'activity-snapshot', spec: parsed.data };
+    }
     default:
       return { kind: 'passthrough', rawType: e.type };
   }
