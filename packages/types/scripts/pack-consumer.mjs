@@ -4,17 +4,24 @@
 // + the pre-publish CI lane), not review-only. §Z102.
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
+// process.exit() skips finally and would leak the mkdtemp dir on every gate failure.
 const die = (m) => {
-  console.error('pack-consumer gate: ' + m);
-  process.exit(1);
+  throw new Error(m);
 };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const pkgDir = fileURLToPath(new URL('..', import.meta.url));
+// Repo root is the single source of truth for the Node floor + the pinned pnpm — read
+// them (no second hardcoded copy) so the throwaway consumer install uses the repo's
+// pinned pnpm, not an ambient one, and the packed engines floor is checked by value.
+const rootPkg = JSON.parse(readFileSync(resolve(pkgDir, '..', '..', 'package.json'), 'utf8'));
+const nodeFloor = rootPkg.engines?.node;
+const pkgMgr = rootPkg.packageManager;
 const tmp = mkdtempSync(join(tmpdir(), 'minitui-types-pack-'));
 try {
   // 1. Pack the built package to a temp dir (rewrites catalog: → concrete).
@@ -41,11 +48,18 @@ try {
   );
   if (!/^\d+\.\d+\.\d+/.test(m.dependencies?.zod ?? ''))
     die('zod not published concrete: ' + m.dependencies?.zod);
-  if (!m.engines?.node) die('packed manifest missing engines.node');
-  // 4. Install the tarball into a fresh strict consumer.
+  // Engines floor checked by VALUE against the repo floor (not mere presence): a
+  // weakened '*'/'>=18' or a dropped range reds instead of silently passing.
+  if (m.engines?.node !== nodeFloor)
+    die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' ≠ repo floor ' + nodeFloor);
+  // Exports map must ship both the types + import conditions — a deleted/half exports
+  // map breaks every consumer's resolution yet would otherwise pass unchecked.
+  if (!m.exports?.['.']?.types || !m.exports?.['.']?.import)
+    die('packed manifest missing exports map: ' + JSON.stringify(m.exports));
+  // 4. Install the tarball into a fresh strict consumer (pinned pnpm, not ambient).
   writeFileSync(
     join(tmp, 'package.json'),
-    JSON.stringify({ name: 'c', private: true, type: 'module' }),
+    JSON.stringify({ name: 'c', private: true, type: 'module', packageManager: pkgMgr }),
   );
   writeFileSync(
     join(tmp, 'tsconfig.json'),
@@ -91,6 +105,9 @@ try {
   });
   execFileSync('node', ['run.mjs'], { cwd: tmp, stdio: 'inherit' });
   console.log('pack-consumer gate: OK');
+} catch (e) {
+  console.error('pack-consumer gate: ' + (e instanceof Error ? e.message : String(e)));
+  process.exitCode = 1;
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

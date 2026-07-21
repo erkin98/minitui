@@ -25,7 +25,7 @@
       "label": "workspace internal deps use the workspace protocol",
       "dependencies": ["@minitui/**"],
       "packages": ["**"],
-      "isIgnored": true
+      "pinVersion": "workspace:*"
     }
   ]
 }
