@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { stripAnsi, hasEscape } from '../src/ansi.js';
 import { stripDangerousOsc, stripHyperlinks } from '../src/osc.js';
+import { sanitize } from '../src/index.js';
 
 const ESC = '\x1b';
 const ST = '\x1b\\'; // String Terminator (ESC \)
@@ -189,5 +190,76 @@ describe('stripHyperlinks (OSC 8 width helper)', () => {
 
   it('is a no-op for text with no escape frames (fast path)', () => {
     expect(stripHyperlinks('plain columns')).toBe('plain columns');
+  });
+});
+
+describe('sanitize', () => {
+  it('runs OSC strip then ANSI strip (default allow:none removes color too)', () => {
+    const evil = `${ESC}]52;c;ZXZpbA==${BEL}${ESC}[31mhello${ESC}[0m`;
+    expect(sanitize(evil)).toBe('hello');
+  });
+
+  it('neutralizes a combined clipboard + cursor + BEL payload', () => {
+    // OSC 52 + cursor-clear are removed; the bare BEL between them is a lone C0
+    // control, so per the strip contract it is caret-encoded (^G), never dropped
+    // silently — the visible text survives intact after it.
+    const evil = `${ESC}]52;c;cHduZWQ=${ST}${ESC}[2J\x07text`;
+    expect(sanitize(evil)).toBe('^Gtext');
+  });
+
+  it('keeps an allowed https OSC 8 link through the full pipeline (default mode reduces it to its visible text)', () => {
+    // The chokepoint guarantees no raw ESC reaches the screen in default mode,
+    // so an allowed link degrades cleanly to its visible text — never an
+    // orphaned `8;;` fragment (the bug a kept-then-restripped OSC 8 produced).
+    const link = `${ESC}]8;;https://example.com${ST}text${ESC}]8;;${ST}`;
+    expect(sanitize(`a${link}b`)).toBe('atextb');
+  });
+
+  it('strips a disallowed-scheme OSC 8 link through the full pipeline, keeping only the visible text', () => {
+    const evil = `${ESC}]8;;javascript:alert(1)${ST}click${ESC}]8;;${ST}`;
+    expect(sanitize(`a${evil}b`)).toBe('aclickb');
+  });
+
+  it('with allow:renderer-sgr keeps color but still drops OSC 52 and cursor moves', () => {
+    const input = `${ESC}]52;c;ZXZpbA==${BEL}${ESC}[31mred${ESC}[2J${ESC}[0m`;
+    const out = sanitize(input, { allow: 'renderer-sgr' });
+    expect(out).toContain(`${ESC}[31m`); // SGR color survives
+    expect(out).toContain(`${ESC}[0m`); // SGR reset survives
+    expect(out).toContain('red');
+    expect(out).not.toContain('52;c'); // clipboard gone
+    expect(out).not.toContain('2J'); // cursor clear gone
+  });
+
+  it('with allow:renderer-sgr keeps an allowed OSC 8 link LIVE (the allowlist made observable)', () => {
+    const link = `${ESC}]8;;https://example.com${ST}text${ESC}]8;;${ST}`;
+    expect(sanitize(`a${link}b`, { allow: 'renderer-sgr' })).toBe(`a${link}b`);
+  });
+
+  it('with allow:renderer-sgr still strips a disallowed-scheme OSC 8 wrapper', () => {
+    const evil = `${ESC}]8;;javascript:alert(1)${ST}click${ESC}]8;;${ST}`;
+    expect(sanitize(`a${evil}b`, { allow: 'renderer-sgr' })).toBe('aclickb');
+  });
+
+  it('with allow:renderer-sgr caret-encodes a bare ESC — never emits it raw', () => {
+    expect(sanitize(`a${ESC}zb`, { allow: 'renderer-sgr' })).toBe('a^[zb');
+  });
+
+  it('with allow:renderer-sgr drops a private-parameter CSI even though it ends in m', () => {
+    // ESC[>4;2m is modifyOtherKeys, not color — the strict SGR check
+    // ([\d:;]* params only, ink's sanitize-ansi rule) rejects it.
+    expect(sanitize(`a${ESC}[>4;2mb`, { allow: 'renderer-sgr' })).toBe('ab');
+  });
+
+  it('with allow:renderer-sgr an unterminated OSC 52 is dropped fail-closed', () => {
+    expect(sanitize(`x${ESC}]52;c;ZXZpbA==`, { allow: 'renderer-sgr' })).toBe('x');
+  });
+
+  it('is a no-op for clean text under both modes', () => {
+    expect(sanitize('plain')).toBe('plain');
+    expect(sanitize('plain', { allow: 'renderer-sgr' })).toBe('plain');
+  });
+
+  it('preserves layout whitespace', () => {
+    expect(sanitize('a\tb\nc')).toBe('a\tb\nc');
   });
 });
