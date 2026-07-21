@@ -20,21 +20,41 @@ const ST = '(?:\\x1b\\\\|\\x9c)';
 // removed as a WHOLE span — never matched as `ESC] + final byte`, which would
 // orphan the `8;;` tail. This is why `]`, `_`, `P`, `^`, `X` are all excluded
 // from ANSI_SEQUENCE's 2-byte-escape alternative below.
+// A doubled ESC (ESC ESC) inside a control-string payload is a tmux-escaped
+// literal ESC, not the start of the ST — the pair is consumed as one unit so the
+// terminator search does not stop one byte early (mirrors ink's doubled-ESC
+// skip). `BODY` replaces the old `[\s\S]*?`.
+const BODY = '(?:\\x1b\\x1b|[\\s\\S])*?';
 const STRING_SEQUENCE = new RegExp(
-  `(?:\\x1b\\]|\\x9d)[\\s\\S]*?(?:${ST}|\\x07)` +
-    `|(?:\\x1b[_P^X]|[\\x90\\x98\\x9e\\x9f])[\\s\\S]*?${ST}`,
+  `(?:\\x1b\\]|\\x9d)${BODY}(?:${ST}|\\x07)` +
+    `|(?:\\x1b[_P^X]|[\\x90\\x98\\x9e\\x9f])${BODY}${ST}`,
   'g',
 );
 
-// CSI/SGR and other ESC-introduced escape sequences, including the 8-bit C1
-// CSI (0x9b). Covers: ESC[ ... final, ESC + one of the simple 2-byte escapes.
-// The 2-byte alternative deliberately excludes every string-parameter
-// introducer (P 0x50, X 0x58, ] 0x5d, ^ 0x5e, _ 0x5f): an UNTERMINATED string
-// sequence reaching this mop-up layer must degrade to a caret-encoded ESC plus
-// inert text, never a consumed introducer with its payload left dangling.
+// CSI/SGR and other ESC-introduced escape sequences, three ordered alternatives.
+// Uses ink's ECMA-48 byte classes (repos/ink/src/ansi-tokenizer.ts) for what
+// FORMS a sequence, but keeps minitui's stricter fallback: a bare ESC + an
+// UNCURATED single final byte is NOT stripped here — it falls through to the
+// caret-encode loop below (a visible `^[c`), so an unknown escape is neutralized
+// AND made visible, never silently swallowed. Only recognizable structured forms
+// are stripped:
+//   1. CSI — ESC[ or C1 0x9b, params 0x30-0x3f, intermediates 0x20-0x2f, one
+//      final 0x40-0x7e. ONLY `ESC[`/0x9b introduce a CSI. The old grammar also
+//      fired on `ESC( ESC) ESC# ESC; ESC?`, over-consuming the following
+//      character (`ESC ; Z` silently deleted the Z) — the real content-loss bug;
+//   2. ESC + one-or-more intermediates 0x20-0x2f + one final 0x30-0x7e — a
+//      structured multi-byte escape (e.g. `ESC ( B` charset select), stripped as
+//      one unit so a chunk split between the intermediate and its final cannot
+//      diverge from the one-shot output;
+//   3. ESC + one CURATED final byte — the known one-byte-final escapes. The set
+//      deliberately excludes the string-parameter introducers (P X ] ^ _) so an
+//      unterminated string sequence reaching this mop-up layer degrades to a
+//      caret-encoded ESC, never a half-consumed introducer with a dangling
+//      payload. An uncurated final (e.g. RIS `ESC c`, `ESC b`) is left for the
+//      caret-encode loop — safe (no live ESC) and visible, per minitui's posture.
 const ANSI_SEQUENCE =
   // eslint-disable-next-line no-control-regex
-  /(?:\x1b[[()#;?]|\x9b)[0-?]*[ -/]*[@-~]|\x1b[@-OQ-WYZ\\]/g;
+  /(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\x20-\x2f]+[\x30-\x7e]|\x1b[@-OQ-WYZ\\]/g;
 
 // Any byte that is ESC, a C1 control (0x80-0x9f), DEL, or a non-preserved C0.
 // eslint-disable-next-line no-control-regex
