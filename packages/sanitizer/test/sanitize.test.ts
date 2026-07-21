@@ -372,7 +372,10 @@ describe('sanitizeSpecStrings', () => {
     expect(out).toEqual({ n: 1, b: true, z: null, s: 'ok' });
   });
 
-  it('does not sanitize object keys, only values', () => {
+  it('sanitizes object keys as well as values (a clean key is unchanged)', () => {
+    // PIN-SANITIZE-KEYS: keys are sanitized with the same strip so an
+    // ANSI-bearing key cannot dangle a `root`/child reference. A clean key like
+    // an RFC-6901 pointer has nothing to strip and passes through unchanged.
     const spec = { '/inputs/0': `${ESC}[31mv${ESC}[0m` };
     const out = sanitizeSpecStrings(spec);
     expect(Object.keys(out)).toEqual(['/inputs/0']);

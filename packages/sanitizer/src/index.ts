@@ -1,7 +1,12 @@
 // @minitui/sanitizer — ANSI/control-character chokepoint leaf (zero-dep).
 // The single import every package routes untrusted text through before the screen.
 import { caretEncode, hasEscape, stripAnsi } from './ansi.js';
-import { stripDangerousOsc, ALLOWED_OSC8_SCHEMES, stripHyperlinks } from './osc.js';
+import {
+  stripDangerousOsc,
+  ALLOWED_OSC8_SCHEMES,
+  stripHyperlinks,
+  type OscLinkState,
+} from './osc.js';
 
 export interface SanitizeOptions {
   /**
@@ -93,7 +98,16 @@ function sgrPassClean(text: string): string {
 // MAX_CARRY — callers with a large one-shot capture should prefer it over a
 // single sanitize() call on the whole buffer.
 export function sanitize(text: string, opts: SanitizeOptions = {}): string {
-  const oscStripped = stripDangerousOsc(text);
+  // One-shot: a fresh OSC 8 link-pairing state per call keeps sanitize() pure.
+  return sanitizeWith(text, opts, { keeping: false });
+}
+
+// Shared body of sanitize(): strip dangerous OSC (threading the OSC 8 open/close
+// pairing state so a stream can pair an open in one chunk with its close in the
+// next — a fresh state cannot, which dropped the close and left an unmatched
+// open that swallowed later text), then apply the mode's residual strip.
+function sanitizeWith(text: string, opts: SanitizeOptions, oscState: OscLinkState): string {
+  const oscStripped = stripDangerousOsc(text, oscState);
   if (opts.allow === 'renderer-sgr') return sgrPassClean(oscStripped);
   return stripAnsi(oscStripped);
 }
@@ -115,6 +129,10 @@ const MAX_CARRY = 8192;
 
 export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<string, string> {
   let carry = '';
+  // OSC 8 open/close pairing state, PERSISTENT across chunks: an open emitted in
+  // one chunk and its close in the next now pair correctly (a per-chunk fresh
+  // state dropped the close, leaving an unmatched open that swallowed later text).
+  const oscState: OscLinkState = { keeping: false };
 
   // Sequence completeness mirrors the osc.ts/ansi.ts grammar per family:
   //   - OSC (ESC ] / 0x9d): complete at ST (ESC \ or 0x9c) or BEL;
@@ -123,7 +141,8 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
   //   - CSI (ESC [ / 0x9b): complete at a final byte 0x40-0x7e; a byte that
   //     can never appear in a CSI ends the hold (sanitize() handles the mess);
   //   - a lone trailing ESC: incomplete — hold it;
-  //   - ESC + any other byte: a complete 2-byte escape.
+  //   - ESC escape: zero-or-more intermediates 0x20-0x2f then one final
+  //     0x30-0x7e (held until the final arrives; zero intermediates = 2 bytes).
   // Returns the index just past the sequence, or -1 while incomplete.
   // eslint-disable-next-line complexity
   function sequenceEnd(buf: string, start: number): number {
@@ -136,7 +155,18 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
       if (intro === ']') kind = 'osc';
       else if (intro === '_' || intro === 'P' || intro === '^' || intro === 'X') kind = 'string';
       else if (intro === '[') kind = 'csi';
-      else return start + 2; // complete 2-byte escape
+      else {
+        // ESC escape (ECMA-48): zero-or-more intermediates 0x20-0x2f then one
+        // final 0x30-0x7e. Hold (-1) if intermediates are seen but the final has
+        // not arrived yet, so a chunk split mid-escape matches the one-shot
+        // grammar (the old `return start + 2` assumed every non-CSI escape was
+        // 2 bytes, splitting `ESC ( B` and diverging from one-shot output).
+        const code = buf.charCodeAt(start + 1);
+        if (code < 0x20 || code > 0x2f) return start + 2; // complete 2-byte escape
+        let i = start + 2;
+        while (i < buf.length && buf.charCodeAt(i) >= 0x20 && buf.charCodeAt(i) <= 0x2f) i++;
+        return i >= buf.length ? -1 : i + 1;
+      }
       bodyStart = start + 2;
     } else if (first === 0x9d) kind = 'osc';
     else if (first === 0x9b) kind = 'csi';
@@ -153,6 +183,10 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
       const c = buf.charCodeAt(i);
       if (c === 0x9c) return i + 1; // C1 ST
       if (c === 0x07 && kind === 'osc') return i + 1; // BEL terminates OSC only
+      if (c === 0x1b && buf.charCodeAt(i + 1) === 0x1b) {
+        i++; // doubled ESC: tmux-escaped literal in the payload, not the ST
+        continue;
+      }
       if (c === 0x1b && buf[i + 1] === '\\') return i + 2; // ESC \
     }
     return -1;
@@ -188,36 +222,53 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
       const { emit, hold } = splitTail(buf);
       if (hold.length > MAX_CARRY) {
         carry = '';
-        const cleaned = sanitize(buf, opts); // unterminated span drops fail-closed
+        const cleaned = sanitizeWith(buf, opts, oscState); // unterminated span drops fail-closed
         if (cleaned) controller.enqueue(cleaned);
         return;
       }
       carry = hold;
-      if (emit) controller.enqueue(sanitize(emit, opts));
+      if (emit) controller.enqueue(sanitizeWith(emit, opts, oscState));
     },
     flush(controller) {
-      if (carry) controller.enqueue(sanitize(carry, opts));
+      if (carry) controller.enqueue(sanitizeWith(carry, opts, oscState));
       carry = '';
     },
   });
 }
 
+// PIN-DEPTH (fold): bounded fail-closed, not RangeError. A spec/state nested
+// past MAX_DEPTH is adversarial — a real AppSpec nests far shallower (its depth
+// is bounded by the catalog's element tree) — so the over-deep subtree is
+// dropped to an inert null rather than recursing until the stack overflows. 256
+// is far above any real spec and far below stack exhaustion (~1000s of frames).
+const MAX_DEPTH = 256;
+
 // Deep, immutable string-prop clean for a spec object. The leaf cannot import
 // AppSpec (zero-dep DAG rule), so this is generic over the runtime shape; the
 // renderer/catalog call sites pass their concrete AppSpec and get it back.
-function cleanValue(value: unknown): unknown {
+function cleanValue(value: unknown, depth: number): unknown {
   if (typeof value === 'string') return sanitize(value); // allow:'none'
-  if (Array.isArray(value)) return value.map(cleanValue);
   if (value !== null && typeof value === 'object') {
+    // PIN-DEPTH (fold): bounded fail-closed, not RangeError
+    if (depth > MAX_DEPTH) return null;
+    if (Array.isArray(value)) return value.map((item) => cleanValue(item, depth + 1));
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>)) {
-      // defineProperty, not `out[key] =`: a JSON-parse-produced own "__proto__"
-      // key must be copied as DATA — plain assignment would invoke the
+      // PIN-SANITIZE-KEYS (fold): sanitize object KEYS too, not only string
+      // values. An ANSI/control-bearing key would otherwise survive while a
+      // `root`/child string VALUE that references it gets sanitized, dangling
+      // the reference. Two keys that collide after sanitize resolve
+      // last-writer-wins in Object.keys order (defineProperty configurable
+      // redefines the earlier one).
+      const cleanKey = sanitize(key); // allow:'none'
+      // defineProperty, not `out[cleanKey] =`: a JSON-parse-produced own
+      // "__proto__" key — or one a sanitize strip collapses down to "__proto__"
+      // — must be copied as DATA; plain assignment would invoke the
       // Object.prototype.__proto__ setter and swap the new object's prototype
       // instead of copying the key (§Z100 pattern: never write untrusted keys
       // into a fresh object through the prototype chain).
-      Object.defineProperty(out, key, {
-        value: cleanValue((value as Record<string, unknown>)[key]),
+      Object.defineProperty(out, cleanKey, {
+        value: cleanValue((value as Record<string, unknown>)[key], depth + 1),
         enumerable: true,
         writable: true,
         configurable: true,
@@ -229,7 +280,7 @@ function cleanValue(value: unknown): unknown {
 }
 
 export function sanitizeSpecStrings<S>(spec: S): S {
-  return cleanValue(spec) as S;
+  return cleanValue(spec, 0) as S;
 }
 
 // stripHyperlinks re-exported for @minitui/renderer-ink (plan 13): strip the
