@@ -43,6 +43,16 @@ describe('AppSpec', () => {
   it('rejects an element whose props value is undefined', () => {
     expect(SpecElementSchema.safeParse({ type: 'T', props: { a: undefined } }).success).toBe(false);
   });
+  it('strips an unknown top-level key from AppSpec and SpecElement (§Z105 strip-by-design, C15)', () => {
+    const spec = AppSpecSchema.parse({
+      root: 'a',
+      elements: { a: { type: 'Box', props: {} } },
+      hax: 1,
+    });
+    expect('hax' in spec).toBe(false);
+    const el = SpecElementSchema.parse({ type: 'T', props: {}, hax: 1 });
+    expect('hax' in el).toBe(false);
+  });
 });
 
 describe('dynamic-key containers reject reserved keys (ledger §Z100 AMEND)', () => {
@@ -88,6 +98,45 @@ describe('dynamic-key containers reject reserved keys (ledger §Z100 AMEND)', ()
     }
     expect(
       AppSpecSchema.safeParse({ root: 'a', elements: { a: { type: 'Box', props: {} } } }).success,
+    ).toBe(true);
+  });
+  it('SpecElement.on and .watch reject a reserved binding key (same guardedRecord factory, C15)', () => {
+    for (const field of ['on', 'watch']) {
+      for (const k of reserved) {
+        const r = SpecElementSchema.safeParse(
+          JSON.parse(`{"type":"T","props":{},"${field}":{${JSON.stringify(k)}:{"action":"x"}}}`),
+        );
+        expect(r.success).toBe(false);
+        if (!r.success) expect(r.error.issues.some((i) => i.path.includes(k))).toBe(true);
+      }
+    }
+    // Positive control: a legit event/watch key is accepted (no over-rejection).
+    expect(
+      SpecElementSchema.safeParse({ type: 'T', props: {}, on: { press: { action: 'x' } } }).success,
+    ).toBe(true);
+    expect(
+      SpecElementSchema.safeParse({ type: 'T', props: {}, watch: { '/s': { action: 'x' } } })
+        .success,
+    ).toBe(true);
+  });
+});
+
+// PIN-C14 (fold): the guarded dynamic containers are shallow-READONLY — the
+// `guardedRecord(...).readonly()` shape (pointer.ts) freezes the top container,
+// consistent with the codebase's immutability principle. Lock Object.isFrozen so
+// dropping `.readonly()` reds this gate (C14 decision, ratified in the ledger).
+describe('dynamic-key containers are shallow-frozen (PIN-C14)', () => {
+  it('ActionBinding.params / SpecElement.props / AppSpec.elements parse to frozen containers', () => {
+    expect(
+      Object.isFrozen(ActionBindingSchema.parse({ action: 'm', params: { codec: 'h264' } }).params),
+    ).toBe(true);
+    expect(
+      Object.isFrozen(SpecElementSchema.parse({ type: 'T', props: { label: 'ok' } }).props),
+    ).toBe(true);
+    expect(
+      Object.isFrozen(
+        AppSpecSchema.parse({ root: 'a', elements: { a: { type: 'Box', props: {} } } }).elements,
+      ),
     ).toBe(true);
   });
 });

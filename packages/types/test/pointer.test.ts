@@ -48,6 +48,40 @@ describe('JsonValue', () => {
   });
 });
 
+// PIN-DEPTH (fold): a JSON value nested past the 256 ceiling — or cyclic — must
+// fail CLOSED with a validation issue at the boundary, NEVER an uncaught
+// RangeError through the declared-total safeParse contract (finding C07).
+describe('JsonValue depth ceiling (PIN-DEPTH)', () => {
+  const nest = (depth: number): unknown => {
+    let v: unknown = 0;
+    for (let i = 0; i < depth; i++) v = { a: v };
+    return v;
+  };
+
+  it('rejects an over-deep value with an issue instead of throwing RangeError', () => {
+    const deep = nest(50_000);
+    expect(() => JsonValueSchema.safeParse(deep)).not.toThrow();
+    const r = JsonValueSchema.safeParse(deep);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => /depth/i.test(i.message))).toBe(true);
+  });
+
+  it('rejects a cyclic value with an issue instead of hanging or throwing', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => JsonValueSchema.safeParse(cyclic)).not.toThrow();
+    expect(JsonValueSchema.safeParse(cyclic).success).toBe(false);
+  });
+
+  it('still accepts values nested within the ceiling (does not over-reject)', () => {
+    // 200 is above any real spec/state nesting yet under the 256 ceiling.
+    expect(JsonValueSchema.safeParse(nest(200)).success).toBe(true);
+    // Boundary lock on the 256 constant: at the ceiling parses, one past rejects.
+    expect(JsonValueSchema.safeParse(nest(256)).success).toBe(true);
+    expect(JsonValueSchema.safeParse(nest(257)).success).toBe(false);
+  });
+});
+
 describe('Pointer', () => {
   it('accepts the empty pointer and rooted slash paths', () => {
     expect(PointerSchema.parse('')).toBe('');
@@ -59,6 +93,12 @@ describe('Pointer', () => {
   it('brands the parsed value so it is assignable to Pointer', () => {
     const p: Pointer = PointerSchema.parse('/merge/progress');
     expect(p).toBe('/merge/progress');
+  });
+  it('accepts a malformed ~ escape by design (loose partial brand, ledger §Z11)', () => {
+    // RFC-6901's ~0/~1 escape grammar is intentionally NOT enforced — locking the
+    // loose acceptance so it reads as a settled decision, not an oversight (C25).
+    expect(PointerSchema.safeParse('/bad~2escape').success).toBe(true);
+    expect(PointerSchema.safeParse('/trailing~').success).toBe(true);
   });
 });
 

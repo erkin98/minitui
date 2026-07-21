@@ -38,6 +38,19 @@ describe('ActionRequest', () => {
     };
     expect(ActionRequestSchema.parse(req)).toEqual(req);
   });
+  it('rejects a reserved params key at the guardedRecord boundary (ledger §Z100 AMEND, C15)', () => {
+    for (const k of ['__proto__', 'constructor', 'prototype']) {
+      const r = ActionRequestSchema.safeParse(
+        JSON.parse(`{"actionName":"m","elementKey":"e","params":{${JSON.stringify(k)}:1}}`),
+      );
+      expect(r.success).toBe(false);
+    }
+    // Positive control: a legit dynamic param key is accepted (no over-rejection).
+    expect(
+      ActionRequestSchema.safeParse({ actionName: 'm', elementKey: 'e', params: { codec: 1 } })
+        .success,
+    ).toBe(true);
+  });
 });
 
 describe('ActionResult', () => {

@@ -4,6 +4,7 @@ import type {
   McpBridgePort,
   McpToolRecord,
   McpCallResult,
+  ExecEvent,
 } from '../src/ports.js';
 import type { Decision, PermissionRequest } from '../src/permission.js';
 
@@ -50,5 +51,17 @@ describe('executor ports', () => {
     expect(res.isError).toBe(false);
     expect(seen).toEqual([0.5]);
     await mcp.teardown();
+  });
+
+  it('ExecEvent covers the four streamed variants at value level (C15 shape witness)', () => {
+    // Constructing each variant proves the exported shape at value level — a drift
+    // in ExecEvent's discriminants or fields reds tsc here (surface golden sees names only).
+    const evs: ExecEvent[] = [
+      { kind: 'stdout', chunk: 'x' },
+      { kind: 'stderr', chunk: 'y' },
+      { kind: 'progress', value: 0.5, message: 'half' },
+      { kind: 'exit', code: 0 },
+    ];
+    expect(evs.map((e) => e.kind)).toEqual(['stdout', 'stderr', 'progress', 'exit']);
   });
 });
