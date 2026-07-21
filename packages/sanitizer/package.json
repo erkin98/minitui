@@ -26,7 +26,7 @@
     "build": "tsup",
     "lint": "eslint .",
     "test": "vitest run",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
   },
   "type": "module",
   "types": "./dist/index.d.ts"
