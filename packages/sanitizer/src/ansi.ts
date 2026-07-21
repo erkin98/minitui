@@ -21,7 +21,6 @@ const ST = '(?:\\x1b\\\\|\\x9c)';
 // orphan the `8;;` tail. This is why `]`, `_`, `P`, `^`, `X` are all excluded
 // from ANSI_SEQUENCE's 2-byte-escape alternative below.
 const STRING_SEQUENCE = new RegExp(
-  // eslint-disable-next-line no-control-regex
   `(?:\\x1b\\]|\\x9d)[\\s\\S]*?(?:${ST}|\\x07)` +
     `|(?:\\x1b[_P^X]|[\\x90\\x98\\x9e\\x9f])[\\s\\S]*?${ST}`,
   'g',
