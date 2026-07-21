@@ -202,6 +202,36 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
   });
 }
 
+// Deep, immutable string-prop clean for a spec object. The leaf cannot import
+// AppSpec (zero-dep DAG rule), so this is generic over the runtime shape; the
+// renderer/catalog call sites pass their concrete AppSpec and get it back.
+function cleanValue(value: unknown): unknown {
+  if (typeof value === 'string') return sanitize(value); // allow:'none'
+  if (Array.isArray(value)) return value.map(cleanValue);
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      // defineProperty, not `out[key] =`: a JSON-parse-produced own "__proto__"
+      // key must be copied as DATA — plain assignment would invoke the
+      // Object.prototype.__proto__ setter and swap the new object's prototype
+      // instead of copying the key (§Z100 pattern: never write untrusted keys
+      // into a fresh object through the prototype chain).
+      Object.defineProperty(out, key, {
+        value: cleanValue((value as Record<string, unknown>)[key]),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
+  return value; // number, boolean, null, undefined, bigint, symbol — untouched
+}
+
+export function sanitizeSpecStrings<S>(spec: S): S {
+  return cleanValue(spec) as S;
+}
+
 // stripHyperlinks re-exported for @minitui/renderer-ink (plan 13): strip the
 // zero-width kept-OSC-8 frames before any manual column/wrap math (§X4).
 export { ALLOWED_OSC8_SCHEMES, stripHyperlinks };
