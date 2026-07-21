@@ -34,7 +34,6 @@ const ST = '(?:\\x1b\\\\|\\x9c)';
 // the nearest ST/BEL. Second alternative (command/body undefined): NO
 // terminator anywhere ahead — consume to end of input (fail closed).
 const OSC = new RegExp(
-  // eslint-disable-next-line no-control-regex
   `(?:\\x1b\\]|\\x9d)(?:([0-9]*);?([\\s\\S]*?)(?:${ST}|\\x07)|[\\s\\S]*$)`,
   'g',
 );
@@ -42,7 +41,6 @@ const OSC = new RegExp(
 // APC / DCS / PM / SOS — both introducer forms; whole payload up to ST ONLY
 // (BEL is data here), or to end of input when unterminated (fail closed).
 const STRING_SEQ = new RegExp(
-  // eslint-disable-next-line no-control-regex
   `(?:\\x1b[_P^X]|[\\x90\\x98\\x9e\\x9f])(?:[\\s\\S]*?${ST}|[\\s\\S]*$)`,
   'g',
 );
@@ -56,7 +54,6 @@ const PASTE_MARKERS = /(?:\x1b\[|\x9b)20[01]~/g;
 const HAS_INTRODUCER = /[\x1b\x90\x98\x9b\x9d-\x9f]/;
 
 // A kept OSC 8 span may contain ONLY printable ASCII between its frame bytes.
-// eslint-disable-next-line no-control-regex
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
 function schemeOf(uri: string): string {
