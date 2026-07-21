@@ -90,4 +90,15 @@ describe('ApprovalMode / Reply / Rule', () => {
     const aliased: Rule = rule;
     expect(aliased.effect).toBe('allow');
   });
+  it('round-trips the optional §Z90 identity path and omits it when absent (C15)', () => {
+    const withId = PermissionRuleSchema.parse({
+      pattern: '/opt/bin/ffmpeg',
+      effect: 'allow',
+      layer: 'user',
+      identity: '/opt/bin/ffmpeg',
+    });
+    expect(withId.identity).toBe('/opt/bin/ffmpeg');
+    const noId = PermissionRuleSchema.parse({ pattern: 'ls *', effect: 'allow', layer: 'user' });
+    expect('identity' in noId).toBe(false);
+  });
 });

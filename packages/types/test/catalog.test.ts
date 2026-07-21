@@ -10,9 +10,15 @@ describe('ActionKind', () => {
     expect(k).toBe('exec-local');
     expect(ActionKindSchema.safeParse('exec-remote').success).toBe(false);
   });
-  it('assertNever throws on an unhandled discriminant (§Z47 exhaustiveness guard)', () => {
+  it('assertNever throws the exact context-tagged message (§Z44/§Z47 exhaustiveness guard)', () => {
     // `as never` is REQUIRED here (not gap-masking): assertNever's param is typed `never` by
     // design, so exercising its runtime throw forces an impossible value in — the canonical test.
-    expect(() => assertNever('surprise' as never, 'ActionKind')).toThrow(/unhandled/);
+    // Exact message locked (was a loose /unhandled/) so any format drift from the shipped shape
+    // is gate-visible (C25). NOTE: ledger §Z44's illustrative literal (`unhandled: ${context}...`)
+    // differs from this shipped+plan-02 format and needs a main-thread reconcile.
+    expect(() => assertNever('surprise' as never, 'ActionKind')).toThrow(
+      /^unhandled ActionKind: "surprise"$/,
+    );
+    expect(() => assertNever('x' as never)).toThrow(/^unhandled: "x"$/);
   });
 });

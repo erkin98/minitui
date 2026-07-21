@@ -8,8 +8,10 @@ import {
 } from '../src/events.js';
 
 describe('EventType', () => {
-  it('includes the active AG-UI families minitui consumes', () => {
-    for (const t of [
+  it('is EXACTLY the active AG-UI families minitui consumes, in order (C15)', () => {
+    // Exact-equality (not containment): a dropped or reordered family reds this,
+    // and it locks the vocabulary the AgentEvent discriminants must mirror.
+    expect(EVENT_TYPES).toEqual([
       'RUN_STARTED',
       'RUN_FINISHED',
       'RUN_ERROR',
@@ -20,10 +22,8 @@ describe('EventType', () => {
       'TOOL_CALL_RESULT',
       'ACTIVITY_SNAPSHOT',
       'CUSTOM',
-    ]) {
-      expect(EVENT_TYPES).toContain(t);
-      expect(EventTypeSchema.parse(t)).toBe(t);
-    }
+    ]);
+    for (const t of EVENT_TYPES) expect(EventTypeSchema.parse(t)).toBe(t);
   });
 });
 
