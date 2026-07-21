@@ -1,4 +1,5 @@
 import type { RunAgentInput } from '@ag-ui/client';
+import type { AgentEvent } from '@minitui/types';
 import { toAppEvent } from '../events/to-app-event.js';
 import type { AppEvent } from '../events/app-event.js';
 import { createSeqGuard } from '../sequencing/seq-guard.js';
@@ -15,8 +16,8 @@ import type { AgentPort, RunHandle } from './agent-port.js';
  * remote BFF producing real AG-UI wire events and is never invoked here. Slice-1 default;
  * wired in cli/main.tsx so transport never imports agent-core.
  */
-export function createLocalAgentPort<E extends { type: string }>(
-  genFactory: (input: RunAgentInput, signal: AbortSignal) => AsyncGenerator<E>,
+export function createLocalAgentPort(
+  genFactory: (input: RunAgentInput, signal: AbortSignal) => AsyncGenerator<AgentEvent>,
 ): AgentPort {
   return {
     run(input: RunAgentInput): RunHandle {
@@ -24,11 +25,18 @@ export function createLocalAgentPort<E extends { type: string }>(
       const seq = createSeqGuard();
 
       async function* events(): AsyncGenerator<AppEvent> {
-        const source = genFactory(input, signal);
+        // `source` is created INSIDE the try so a synchronous genFactory throw (sync pre-validation
+        // before the generator is built) still runs the finally teardown. Driven manually (not
+        // `for await`) so ONLY the finally ever calls source.return() — a for-await would ALSO
+        // trigger language IteratorClose on a consumer break, double-releasing the injected source.
+        let source: AsyncGenerator<AgentEvent> | undefined;
         try {
-          for await (const raw of source) {
+          source = genFactory(input, signal);
+          for (;;) {
+            const next = await source.next();
+            if (next.done) break;
             if (signal.aborted) break;
-            const app = toAppEvent(raw);
+            const app = toAppEvent(next.value);
             // seq-guard live path. Slice 1 enforces the missed-baseline invariant (a delta
             // before any snapshot is a desync). The out-of-order branch (strictly-increasing
             // seq) activates in Slice 2 once STATE_DELTA carries a seq on the wire — resync.ts.
@@ -46,10 +54,11 @@ export function createLocalAgentPort<E extends { type: string }>(
           }
         } finally {
           // Parity with the remote return() teardown (controller.abort(); finish()): a consumer
-          // breaking out of for-await WITHOUT an explicit handle.abort() must still fire the run's
-          // controller, so anything the injected genFactory keyed on `signal` is torn down.
+          // breaking out WITHOUT an explicit handle.abort() must still fire the run's controller,
+          // so anything the injected genFactory keyed on `signal` is torn down. `source` is
+          // undefined only when genFactory threw synchronously — nothing to close in that case.
           controller.abort();
-          await source.return(undefined);
+          await source?.return(undefined);
         }
       }
 

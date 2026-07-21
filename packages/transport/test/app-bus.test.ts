@@ -40,6 +40,50 @@ describe('AppBus', () => {
     expect(errors).toBe(0);
   });
 
+  it('isolates a throwing subscriber — sibling still delivered, publish never throws (C17)', () => {
+    // A throwing callback used to escape the drain loop: it propagated out of publish() to the
+    // caller AND starved every sibling queued after it in `ready`. Each callback is now isolated.
+    const warnings: string[] = [];
+    const diagnostics = {
+      warn: (msg: string) => {
+        warnings.push(msg);
+      },
+      debug() {},
+    };
+    const bus = createAppBus({ diagnostics });
+    const sibling: unknown[] = [];
+    bus.subscribe('state-delta', () => {
+      throw new Error('boom');
+    });
+    bus.subscribe('state-delta', (p) => sibling.push(p.delta));
+    expect(() => bus.publish('state-delta', { delta: [1] })).not.toThrow();
+    expect(sibling).toEqual([[1]]);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('does not deliver an in-flight batch to a subscriber unsubscribed mid-publish (bus-04)', () => {
+    // `unsubscribe()` removed the sub from the topic Set, but the drain delivered from a `ready`
+    // entry holding a direct ref, so a sub unsubscribed by a sibling mid-publish still got the batch.
+    const bus = createAppBus();
+    const bSeen: unknown[] = [];
+    // Forward ref: A (subscribed first, so drained first) unsubscribes B before B is reached.
+    const b: { off?: () => void } = {};
+    bus.subscribe('state-delta', () => {
+      b.off?.();
+    });
+    b.off = bus.subscribe('state-delta', (p) => bSeen.push(p.delta));
+    bus.publish('state-delta', { delta: [1] });
+    expect(bSeen).toEqual([]);
+  });
+
+  it('rejects an invalid capacity at construction — no publish hang (C02)', () => {
+    // A negative capacity would spin the BoundedQueue push loop forever the moment a payload is
+    // published; NaN would silently disable the bound. Fail closed at the public boundary instead.
+    expect(() => createAppBus({ capacity: -1 })).toThrow(RangeError);
+    expect(() => createAppBus({ capacity: Number.NaN })).toThrow(RangeError);
+    expect(() => createAppBus({ capacity: 0 })).toThrow(RangeError);
+  });
+
   it('a re-entrant publisher buffers (no stack recursion, no deadlock) and drops past capacity', () => {
     // The no-deadlock moat under load: a subscriber that re-publishes to its OWN topic
     // while mid-flight must NOT recurse the stack — the payload buffers in its bounded
@@ -87,6 +131,28 @@ describe('AppBus', () => {
     expect(warnings.length).toBeGreaterThan(0);
     expect(warnings[0]?.[0]).toContain('dropped');
     expect(warnings.at(-1)?.[1]).toMatchObject({ topic: 'state-delta' });
+  });
+
+  it('bounds the ready scheduler under a re-entrant burst — no quadratic blowup (C02)', () => {
+    // Pre-fix `ready.push(sub)` fires once per publish with no dedup, so a burst of N re-entrant
+    // publishes leaves N entries drained via O(k) Array.shift() each — O(N^2), seconds+ for large N.
+    // Post-fix a per-subscriber `scheduled` flag keeps `ready` to one entry per subscriber, O(N).
+    const bus = createAppBus({ capacity: 4 });
+    const N = 80_000;
+    let bursted = false;
+    let delivered = 0;
+    bus.subscribe('state-delta', () => {
+      delivered += 1;
+      if (!bursted) {
+        bursted = true;
+        for (let i = 0; i < N; i++) bus.publish('state-delta', { delta: [i] });
+      }
+    });
+    const start = process.hrtime.bigint();
+    bus.publish('state-delta', { delta: [-1] });
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(delivered).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(1500);
   });
 
   it('preserves global publish order across subscribers under a re-entrant publish', () => {

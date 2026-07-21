@@ -33,4 +33,27 @@ describe('seq-guard', () => {
     g.reset();
     expect(g.checkDelta(1)).toEqual({ ok: false, reason: 'missed-baseline' });
   });
+
+  // D03: a non-finite seq (NaN/±Infinity) must be rejected, never stored as the
+  // watermark — NaN <= last is always false, so the old code passed it AND poisoned
+  // `last`, silently DISABLING every subsequent ordering check.
+  it('rejects a non-finite delta seq without poisoning the watermark (D03)', () => {
+    const g = createSeqGuard();
+    g.onSnapshot(1);
+    expect(g.checkDelta(NaN)).toEqual({ ok: false, reason: 'out-of-order' });
+    expect(g.checkDelta(Infinity)).toEqual({ ok: false, reason: 'out-of-order' });
+    // watermark still 1: a regression is still caught, a valid advance still passes
+    expect(g.checkDelta(0)).toEqual({ ok: false, reason: 'out-of-order' });
+    expect(g.checkDelta(2)).toEqual({ ok: true });
+  });
+
+  // A fresh snapshot is a full re-baseline (Slice-2 resync rebuilds the baseline):
+  // its delta watermark must reset, never retain the PREVIOUS baseline's high-water mark.
+  it('resets the delta watermark on a seq-less re-baseline (no stale high-water mark)', () => {
+    const g = createSeqGuard();
+    g.onSnapshot();
+    expect(g.checkDelta(10)).toEqual({ ok: true }); // advances watermark to 10
+    g.onSnapshot(); // re-baseline with no seq — watermark must drop back, not stay 10
+    expect(g.checkDelta(3)).toEqual({ ok: true }); // 3 is valid against the fresh baseline
+  });
 });

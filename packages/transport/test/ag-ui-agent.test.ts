@@ -97,4 +97,24 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(warnings).toHaveLength(2); // two drops -> two diagnostics
     expect(warnings[0]?.[0]).toContain('dropped');
   });
+
+  it('abort() settles a next() parked on an empty queue (no forever-hang) (bus-agent-01)', async () => {
+    const subject = new Subject<BaseEvent>();
+    const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
+    const it = handle.events[Symbol.asyncIterator]();
+    const parked = it.next(); // nothing queued yet -> parks in the waiters array
+    handle.abort(); // before the fix: aborts the controller but never finish() -> parked hangs
+    const res = await parked;
+    expect(res.done).toBe(true);
+  }, 2000);
+
+  it('throw() tears the run down: aborts the signal and settles a parked next() (bus-agent-03)', async () => {
+    const subject = new Subject<BaseEvent>();
+    const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
+    const it = handle.events[Symbol.asyncIterator]();
+    const parked = it.next();
+    await expect(it.throw?.(new Error('boom'))).rejects.toThrow('boom');
+    expect(handle.signal.aborted).toBe(true); // throw() must fire the controller too
+    expect((await parked).done).toBe(true); // and settle the parked read, not leave it hung
+  }, 2000);
 });

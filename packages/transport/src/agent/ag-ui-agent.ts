@@ -58,6 +58,13 @@ export function createAgUiAgentPort(
           w = waiters.shift();
         }
       };
+      // One idempotent teardown for every consumer-initiated close (handle.abort / return / throw):
+      // fire the run controller (its signal unsubscribes the rxjs source) AND finish() so a next()
+      // parked on the empty queue settles with { done: true } instead of hanging forever.
+      const close = (): void => {
+        controller.abort();
+        finish();
+      };
 
       // Without these two stages a chunked remote stream falls to passthrough downstream
       // and an out-of-protocol stream corrupts state silently instead of erroring.
@@ -83,11 +90,11 @@ export function createAgUiAgentPort(
           return new Promise((resolve) => waiters.push(resolve));
         },
         return(): Promise<IteratorResult<AppEvent, undefined>> {
-          controller.abort();
-          finish();
+          close();
           return Promise.resolve({ value: undefined, done: true });
         },
         throw(e: unknown): Promise<IteratorResult<AppEvent, undefined>> {
+          close();
           return Promise.reject(e instanceof Error ? e : new Error(String(e)));
         },
         [Symbol.asyncIterator]() {
@@ -95,7 +102,7 @@ export function createAgUiAgentPort(
         },
       };
 
-      return { events, abort: () => controller.abort(), signal };
+      return { events, abort: () => close(), signal };
     },
   };
 }
