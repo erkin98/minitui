@@ -163,4 +163,101 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     });
     expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
   });
+
+  // ── PIN-RETRIABLE-FLOOR (C18) — the §Z79 non-retriable family is a hard, non-overridable floor.
+  it('§Z79 floor: a non-retriable code overrides an explicit retriable:true wire flag', () => {
+    // A Slice-2+ remote wire could set retriable:true on a ContextOverflow; the derived
+    // non-retriable floor MUST win so a context-overflow error can never re-feed.
+    const ev = toAppEvent({
+      type: EventType.RUN_ERROR,
+      message: 'x',
+      code: 'ContextOverflow',
+      retriable: true,
+    });
+    expect(ev).toEqual({
+      kind: 'run-error',
+      message: 'x',
+      code: 'ContextOverflow',
+      retriable: false,
+    });
+  });
+
+  it('still honors an explicit retriable flag when the code is NOT in the non-retriable floor', () => {
+    // Guards against over-fixing: the flag stays live for unknown/retriable codes.
+    const ev = toAppEvent({
+      type: EventType.RUN_ERROR,
+      message: 'rate limited',
+      code: 'RateLimited',
+      retriable: false,
+    });
+    expect(ev).toEqual({
+      kind: 'run-error',
+      message: 'rate limited',
+      code: 'RateLimited',
+      retriable: false,
+    });
+  });
+
+  // ── PIN-NORMALIZER-TOTAL (C08) — total + fail-closed; distinguish MISSING from malformed.
+  it('fails closed on a STATE_SNAPSHOT with a MISSING snapshot (no fabricated null state)', () => {
+    const ev = toAppEvent({ type: EventType.STATE_SNAPSHOT });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  it('fails closed on a STATE_DELTA with a MISSING delta (no fabricated empty patch)', () => {
+    const ev = toAppEvent({ type: EventType.STATE_DELTA });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  it('fails closed on an object-valued type discriminant (never emits a non-string rawType)', () => {
+    const ev = toAppEvent({ type: { malformed: true } });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  it('fails closed on an event object with an absent type', () => {
+    const ev = toAppEvent({ notAType: 1 });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  it('fails closed on a reserved-key ACTIVITY_SNAPSHOT spec (parse-not-cast, §Z100)', () => {
+    const ev = toAppEvent({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      spec: JSON.parse('{"constructor":1}'),
+    });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  it('clones the ACTIVITY_SNAPSHOT spec — a later wire mutation cannot reach the emitted event', () => {
+    // The activity-snapshot local path must clone/validate, not alias: a caller mutating the
+    // wire object after normalization must not be able to reach into the emitted AppEvent.
+    const elements: Record<string, unknown> = {};
+    const ev = toAppEvent({ type: EventType.ACTIVITY_SNAPSHOT, spec: { root: 'r', elements } });
+    elements.injected = true;
+    expect(ev).toEqual({ kind: 'activity-snapshot', spec: { root: 'r', elements: {} } });
+  });
+
+  // ── Coverage: the STATE_DELTA fail-closed twin (its STATE_SNAPSHOT sibling was tested, it was not).
+  it('fails closed on a reserved-key STATE_DELTA op value — non-retriable run-error (§Z100 mirror)', () => {
+    // An op `value` bearing an own reserved key is rejected by JsonPatchArraySchema (its value
+    // members route through the same §Z100 guard) before the delta can fold into the store.
+    const ev = toAppEvent({
+      type: EventType.STATE_DELTA,
+      delta: [{ op: 'add', path: '/x', value: JSON.parse('{"constructor":1}') }],
+    });
+    expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
+  });
+
+  // ── Coverage: the RUN_FINISHED fail-soft drop-invalid-usage branch (only the valid path was tested).
+  it('drops invalid usage on RUN_FINISHED (fail-soft: still fires, no usage key, never throws)', () => {
+    // An out-of-bounds usage count DROPS the usage field (never emits usage:undefined, never throws)
+    // so a cosmetic token/cost counter can't abort a completed run.
+    const ev = toAppEvent({
+      type: EventType.RUN_FINISHED,
+      threadId: 't1',
+      runId: 'r1',
+      usage: { inputTokens: -1, outputTokens: 5 },
+    });
+    // toStrictEqual so a fabricated `usage: undefined` (not just a real object) also fails.
+    expect(ev).toStrictEqual({ kind: 'run-finished', threadId: 't1', runId: 'r1' });
+  });
 });
