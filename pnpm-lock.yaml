@@ -88,10 +88,11 @@ importers:
         version: 4.0.17(@types/node@22.19.19)(tsx@4.19.2)
 
   packages/sanitizer:
-    devDependencies:
+    dependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.19
+    devDependencies:
       eslint:
         specifier: 'catalog:'
         version: 9.13.0
