@@ -14,11 +14,11 @@ export function parsePointer(pointer: string): string[] {
 // Typed guards over the READONLY JsonValue members: a bare Array.isArray narrows a
 // `readonly JsonValue[]` union member to `any[]` (readonly arrays are not assignable
 // to the guard's `any[]`), leaking `any` into every element access downstream.
-function isArrayValue(v: JsonValue | undefined): v is readonly JsonValue[] {
+export function isArrayValue(v: JsonValue | undefined): v is readonly JsonValue[] {
   return Array.isArray(v);
 }
 
-function isObject(v: JsonValue | undefined): v is { [k: string]: JsonValue } {
+export function isObject(v: JsonValue | undefined): v is { [k: string]: JsonValue } {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
