@@ -2,10 +2,10 @@ pre-commit:
   parallel: true
   commands:
     lint:
-      glob: '*.{ts,tsx,mts,js}'
+      glob: '*.{ts,tsx,mts,mjs,js}'
       run: pnpm exec eslint {staged_files}
     format:
-      glob: '*.{ts,tsx,mts,js,json,md,yaml,yml}'
+      glob: '*.{ts,tsx,mts,mjs,js,json,md,yaml,yml}'
       run: pnpm exec prettier --check {staged_files}
     typecheck:
       # Through turbo (^build) so upstream package .d.ts resolve against the built
@@ -30,3 +30,9 @@ pre-push:
       run: pnpm run test:all
     build:
       run: pnpm run build:all
+    pack:
+      # Published-artifact gate (§Z102): pack each publishing package, assert the
+      # tarball's files/manifest/exports/engines, then compile + run a strict consumer
+      # against the SHIPPED tarball. Self-builds via cached turbo, so it is order-safe
+      # against the build command above. Closes the "committed but never invoked" gap.
+      run: pnpm run pack:check

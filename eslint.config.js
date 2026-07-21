@@ -113,6 +113,49 @@ export default tseslint.config(
     },
   },
   {
+    // Exec-moat capability wall (AGENTS.md security invariant): ONLY packages/exec may
+    // import the subprocess / OS-sandbox / MCP-client specifiers. Enforced repo-wide on
+    // shipped SOURCE so a capability-wall breach reds at lint today — the plan-17 dist
+    // bundle-leak gate scans the built bundle (the stronger, later backstop); this is the
+    // cheap source-level companion. Scope is packages/*/src (the ship surface) only:
+    // tooling scripts (scripts/*.mjs) legitimately shell out and are intentionally out of
+    // scope. The three specifiers below are exec-ONLY across the whole product — no other
+    // package ever needs them — so an except-exec ban is correct for every future package.
+    files: ['packages/*/src/**/*.{ts,tsx,mts}'],
+    ignores: ['packages/exec/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'child_process',
+              message: 'Exec-moat: only @minitui/exec may import child_process.',
+            },
+            {
+              name: 'node:child_process',
+              message: 'Exec-moat: only @minitui/exec may import child_process.',
+            },
+            {
+              name: '@anthropic-ai/sandbox-runtime',
+              message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
+            },
+            {
+              name: '@modelcontextprotocol/client',
+              message: 'Exec-moat: only @minitui/exec may import the MCP client.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
+              message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Config/test files carry no in-project type info — package tsconfigs are
     // include:["src/**"], so anything under a package's test/ dir, plus the root
     // determinism files and every tsup/vitest config, sits outside every tsconfig's
