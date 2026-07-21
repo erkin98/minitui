@@ -6,9 +6,17 @@ import { sanitize } from '@minitui/sanitizer';
 // transport state-seam chokepoint that the import lint / tsc composite refs /
 // bundle-leak test can now SEE — a composition root can no longer wire the wrong
 // or a missing sanitize fn here.
-export function sanitizeStrings(value: JsonValue): JsonValue {
+// PIN-DEPTH (fold): bounded fail-closed, not RangeError. 256 is far above any real widget-state
+// nesting and far below the native stack limit; an over-deep (or cyclic) document is rejected with
+// a typed error the DataStore catches and drops, never an uncaught stack RangeError.
+const MAX_STATE_DEPTH = 256;
+
+export function sanitizeStrings(value: JsonValue, depth = 0): JsonValue {
+  if (depth > MAX_STATE_DEPTH) {
+    throw new Error(`state document exceeds max nesting depth (${MAX_STATE_DEPTH})`);
+  }
   if (typeof value === 'string') return sanitize(value);
-  if (isArrayValue(value)) return value.map((v) => sanitizeStrings(v));
+  if (isArrayValue(value)) return value.map((v) => sanitizeStrings(v, depth + 1));
   if (isObject(value)) {
     // §Z100 defense-in-depth: assign each cloned key as an OWN data property via
     // Object.defineProperty. A raw model object can carry an own `__proto__` key (JSON.parse makes
@@ -18,7 +26,7 @@ export function sanitizeStrings(value: JsonValue): JsonValue {
     const out: { [k: string]: JsonValue } = {};
     for (const [k, v] of Object.entries(value)) {
       Object.defineProperty(out, k, {
-        value: sanitizeStrings(v),
+        value: sanitizeStrings(v, depth + 1),
         writable: true,
         enumerable: true,
         configurable: true,
