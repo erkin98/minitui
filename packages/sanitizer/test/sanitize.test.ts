@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { stripAnsi, hasEscape } from '../src/ansi.js';
 import { stripDangerousOsc, stripHyperlinks } from '../src/osc.js';
-import { sanitize, sanitizeStream } from '../src/index.js';
+import { sanitize, sanitizeStream, sanitizeSpecStrings } from '../src/index.js';
 
 const ESC = '\x1b';
 const ST = '\x1b\\'; // String Terminator (ESC \)
@@ -336,5 +336,66 @@ describe('sanitizeStream', () => {
 
   it('passes clean text through unchanged', async () => {
     expect(await runStream(['hello ', 'world'])).toBe('hello world');
+  });
+});
+
+describe('sanitizeSpecStrings', () => {
+  it('cleans every nested string prop and returns a new object', () => {
+    const spec = {
+      root: 'r',
+      elements: {
+        r: { type: 'Text', props: { label: `${ESC}]52;c;ZXZpbA==${BEL}${ESC}[31mhi${ESC}[0m` } },
+      },
+    };
+    const out = sanitizeSpecStrings(spec);
+    expect(out.elements.r.props.label).toBe('hi');
+    expect(out).not.toBe(spec); // new object
+    expect(out.elements.r.props).not.toBe(spec.elements.r.props);
+  });
+
+  it('does not mutate the input (immutability)', () => {
+    const dirty = `a${ESC}[2Jb`;
+    const spec = { elements: { x: { props: { t: dirty } } } };
+    sanitizeSpecStrings(spec);
+    expect(spec.elements.x.props.t).toBe(dirty); // original untouched
+  });
+
+  it('cleans strings inside arrays', () => {
+    const spec = { items: [`x${ESC}[0m`, 'clean', `${ESC}]52;c;ZA==${BEL}`] };
+    const out = sanitizeSpecStrings(spec);
+    expect(out.items).toEqual(['x', 'clean', '']);
+  });
+
+  it('leaves numbers, booleans and null untouched', () => {
+    const spec = { n: 1, b: true, z: null, s: `${ESC}[0mok` };
+    const out = sanitizeSpecStrings(spec);
+    expect(out).toEqual({ n: 1, b: true, z: null, s: 'ok' });
+  });
+
+  it('does not sanitize object keys, only values', () => {
+    const spec = { '/inputs/0': `${ESC}[31mv${ESC}[0m` };
+    const out = sanitizeSpecStrings(spec);
+    expect(Object.keys(out)).toEqual(['/inputs/0']);
+    expect(out['/inputs/0']).toBe('v');
+  });
+
+  it('copies a JSON-parse-produced own __proto__ key as data, never as a prototype set', () => {
+    // JSON.parse creates an OWN "__proto__" property (it does not invoke the
+    // Object.prototype accessor). The walk must copy it the same way — a plain
+    // `out[key] = v` assignment would instead SET the new object's prototype
+    // (§Z100 pattern: walking untrusted keys into a fresh object).
+    const spec = JSON.parse(`{"__proto__":{"polluted":"${'\\u001b'}[31mx"},"ok":"v"}`) as Record<
+      string,
+      unknown
+    >;
+    const out = sanitizeSpecStrings(spec);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype); // prototype NOT swapped
+    expect(Object.prototype).not.toHaveProperty('polluted'); // global prototype clean
+    expect(Object.keys(out).sort()).toEqual(['__proto__', 'ok'].sort()); // key kept as data
+    const protoVal = Object.getOwnPropertyDescriptor(out, '__proto__')?.value as Record<
+      string,
+      unknown
+    >;
+    expect(protoVal).toEqual({ polluted: 'x' }); // value cleaned, carried as data
   });
 });
