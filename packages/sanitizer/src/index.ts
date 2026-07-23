@@ -279,6 +279,17 @@ function cleanValue(value: unknown, depth: number): unknown {
   return value; // number, boolean, null, undefined, bigint, symbol — untouched
 }
 
+/**
+ * Deep-clean a JSON-shaped value: every string value AND dynamic object key is
+ * sanitized, arrays/objects are rebuilt immutably. Depth-bounded (fail-closed at
+ * the ceiling, never a RangeError). Contract (C13): the input MUST be a JSON value
+ * — the generic `<S>` is a caller convenience (the zero-dep leaf cannot import
+ * `JsonValue` per §Z11), NOT a promise to preserve non-JSON runtime capabilities.
+ * A non-JSON member (a class instance, a function/symbol value) is NOT preserved:
+ * an object is rebuilt as a plain object (prototype/methods dropped) and a
+ * function/symbol/bigint value passes through untouched but uncleaned. Real callers
+ * pass an `AppSpec` (pure JSON), for which the returned `S` is faithful.
+ */
 export function sanitizeSpecStrings<S>(spec: S): S {
   return cleanValue(spec, 0) as S;
 }
