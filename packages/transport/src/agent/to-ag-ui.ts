@@ -1,8 +1,7 @@
 import { EventType, type BaseEvent } from '@ag-ui/core';
 
 /**
- * Explicit minitui -> AG-UI adapter (ledger §L, verified against plan-02 AgentEventSchema +
- * repos/ag-ui/.../core/src/events.ts). minitui's wire vocabulary already mirrors AG-UI's own
+ * Explicit minitui -> AG-UI adapter. minitui's wire vocabulary mirrors AG-UI's own
  * field names where a field exists at all — RUN_STARTED/RUN_FINISHED carry threadId+runId,
  * TOOL_CALL_START carries toolCallName (never toolName) — so nothing needs renaming there. The
  * one field genuinely absent everywhere is messageId (agent-core has no message-identity
@@ -13,7 +12,7 @@ import { EventType, type BaseEvent } from '@ag-ui/core';
  * Reserved for a genuinely-remote BFF (Slice 2+) that runs the same agent-core loop behind an
  * HTTP+SSE endpoint and must speak real AG-UI wire protocol; the Slice-1 in-process path
  * (local-agent.ts) never crosses this boundary — it feeds MinituiEvent straight through
- * toAppEvent (ledger §L).
+ * toAppEvent.
  */
 export interface AgUiSynthesisContext {
   readonly threadId: string;

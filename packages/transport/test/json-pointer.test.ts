@@ -35,13 +35,12 @@ describe('json-pointer (RFC-6901)', () => {
   });
 });
 
-// C05 + opus correctness-transport-state-01/02/04. PIN-POINTER: the pointer
-// helpers reject malformed array tokens and reserved keys, never Number()-coerce
+// Pointer helpers reject malformed array tokens and reserved keys, never Number()-coerce
 // to a wrong element, never materialize null on a missing remove, never write a
 // sparse hole. A malformed pointer is a typed throw (this file's fail-closed
 // contract — parsePointer already throws).
-describe('json-pointer hardening (PIN-POINTER, C05)', () => {
-  it('rejects a reserved-key read instead of returning the live constructor (state-01)', () => {
+describe('json-pointer validation', () => {
+  it('rejects a reserved-key read instead of returning the live constructor', () => {
     expect(() => getIn({}, '/constructor')).toThrow(/reserved/i);
     expect(() => getIn({ a: {} }, '/a/constructor')).toThrow(/reserved/i);
     expect(() => getIn({}, '/__proto__')).toThrow(/reserved/i);
@@ -53,7 +52,7 @@ describe('json-pointer hardening (PIN-POINTER, C05)', () => {
     expect(getIn({}, '/hasOwnProperty')).toBeUndefined();
   });
 
-  it('rejects malformed array-index reads (no Number() coercion) (state-04)', () => {
+  it('rejects malformed array-index reads without Number coercion', () => {
     const arr = ['zero', 'one', 'two'];
     expect(() => getIn(arr, '/01')).toThrow(/index/i); // leading zero
     expect(() => getIn(arr, '/ 1')).toThrow(/index/i); // whitespace
@@ -65,7 +64,7 @@ describe('json-pointer hardening (PIN-POINTER, C05)', () => {
     expect(getIn(arr, '/5')).toBeUndefined();
   });
 
-  it('rejects a malformed removeIn index instead of splicing the wrong element (state-02)', () => {
+  it('rejects a malformed removeIn index instead of splicing the wrong element', () => {
     expect(() => removeIn(['a', 'b', 'c'], '/not-an-index')).toThrow(/index/i);
     expect(() => removeIn(['a', 'b', 'c'], '/-1')).toThrow(/index/i);
     expect(() => removeIn(['a', 'b', 'c'], '/01')).toThrow(/index/i);
@@ -95,6 +94,29 @@ describe('json-pointer hardening (PIN-POINTER, C05)', () => {
     expect(() => removeIn({}, '/constructor')).toThrow(/reserved/i);
   });
 
+  it('prevalidates every token before traversal, including after a missing ancestor', () => {
+    for (const pointer of ['/missing/constructor', '/missing/__proto__', '/missing/prototype']) {
+      expect(() => getIn({}, pointer)).toThrow(/reserved/i);
+      expect(() => setIn({}, pointer, 1)).toThrow(/reserved/i);
+      expect(() => removeIn({}, pointer)).toThrow(/reserved/i);
+    }
+  });
+
+  it('rejects state tokens that the terminal sanitizer would rewrite', () => {
+    const dirty = `/safe/na\u001b[31mme`;
+    expect(() => getIn({}, dirty)).toThrow(/canonical/i);
+    expect(() => setIn({}, dirty, 1)).toThrow(/canonical/i);
+    expect(() => removeIn({}, dirty)).toThrow(/canonical/i);
+  });
+
+  it('never descends through an inherited child while setting a path', () => {
+    const inherited = { branch: { inherited: true } };
+    const doc: Record<string, import('../src/state/json-pointer.js').JsonValue> =
+      Object.create(inherited);
+    const next = setIn(doc, '/branch/own', true);
+    expect(next).toEqual({ branch: { own: true } });
+  });
+
   it("treats '-' as a normal object key, not an array token", () => {
     expect(setIn({}, '/-', 5)).toEqual({ '-': 5 });
     expect(getIn({ '-': 5 }, '/-')).toBe(5);
@@ -102,10 +124,8 @@ describe('json-pointer hardening (PIN-POINTER, C05)', () => {
   });
 });
 
-// PIN-DEPTH (C07): the recursive walkers (setIn/removeIn recurse once per pointer
-// token) fail CLOSED at a 256 ceiling with a typed throw, never an uncaught
-// RangeError through the fail-closed boundary.
-describe('json-pointer depth ceiling (PIN-DEPTH, C07)', () => {
+// Recursive walkers fail closed at the depth ceiling before exhausting the call stack.
+describe('json-pointer depth ceiling', () => {
   const deep = (n: number) => '/' + Array.from({ length: n }, () => 'a').join('/');
 
   it('setIn rejects an over-deep pointer with a typed throw, not a RangeError', () => {

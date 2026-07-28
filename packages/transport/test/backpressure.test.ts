@@ -35,15 +35,24 @@ describe('BoundedQueue', () => {
     expect(COALESCIBLE.has('visibility')).toBe(true);
   });
 
-  it('COALESCIBLE is immutable at runtime — a cast-escape cannot add state-delta (C17)', () => {
+  it('COALESCIBLE is immutable at runtime', () => {
     // The ReadonlySet type is compile-time only; if a runtime cast-escape added 'state-delta',
     // state deltas would start coalescing and drop intermediate RFC-6902 patches, corrupting state.
     expect(() => (COALESCIBLE as Set<Topic>).add('state-delta')).toThrow();
     expect(COALESCIBLE.has('state-delta')).toBe(false);
   });
+
+  it('rejects borrowed native Set mutation methods', () => {
+    const runtime = COALESCIBLE as Set<Topic>;
+    expect(() => Set.prototype.add.call(runtime, 'state-delta')).toThrow();
+    expect(() => Set.prototype.delete.call(runtime, 'token')).toThrow();
+    expect(() => Set.prototype.clear.call(runtime)).toThrow();
+    expect(COALESCIBLE.has('state-delta')).toBe(false);
+    expect(COALESCIBLE.has('token')).toBe(true);
+  });
 });
 
-describe('BoundedQueue capacity validation (C02)', () => {
+describe('BoundedQueue capacity validation', () => {
   it('rejects a negative capacity that would hang the push loop forever', () => {
     // push()'s `while (items.length > capacity)` never terminates for capacity < 0 once the
     // array empties (0 > -1 stays true) — a synchronous, unrecoverable process hang. Reject early.

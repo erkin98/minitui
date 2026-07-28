@@ -1,5 +1,10 @@
+import { sanitize } from '@minitui/sanitizer';
 import type { JsonValue, Pointer } from '@minitui/types';
-export type { JsonValue, Pointer }; // canonical owners are @minitui/types (§Z11); re-exported so transport keeps one import site AND one Pointer brand
+
+export type { JsonValue, Pointer };
+
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_POINTER_DEPTH = 256;
 
 function unescape(token: string): string {
   return token.replace(/~1/g, '/').replace(/~0/g, '~');
@@ -11,107 +16,124 @@ export function parsePointer(pointer: string): string[] {
   return pointer.slice(1).split('/').map(unescape);
 }
 
-// Typed guards over the READONLY JsonValue members: a bare Array.isArray narrows a
-// `readonly JsonValue[]` union member to `any[]` (readonly arrays are not assignable
-// to the guard's `any[]`), leaking `any` into every element access downstream.
-export function isArrayValue(v: JsonValue | undefined): v is readonly JsonValue[] {
-  return Array.isArray(v);
+export function isArrayValue(value: JsonValue | undefined): value is readonly JsonValue[] {
+  return Array.isArray(value);
 }
 
-export function isObject(v: JsonValue | undefined): v is { [k: string]: JsonValue } {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
+export function isObject(
+  value: JsonValue | undefined,
+): value is { readonly [key: string]: JsonValue } {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// Reserved keys (§Z100) — rejected on READ and WRITE so a pointer can never reach
-// a prototype member (getIn '/constructor' → the live ctor) or write a key
-// JsonValueSchema itself rejects. Own-property-only reads (below) cover every
-// other inherited member (toString, …) as "missing".
-const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-// PIN-DEPTH (fold): bounded fail-closed, not RangeError. setIn/removeIn recurse
-// once per pointer token; 256 is far above any real state nesting and far below
-// stack exhaustion, so an over-deep pointer is rejected before it can overflow.
-const MAX_POINTER_DEPTH = 256;
-
-// RFC-6901/6902 array-index token: a canonical non-negative integer (String(n)
-// must round-trip — no leading '+'/'0'/'0x'/whitespace) or '-' (RFC-6902 append).
-// Anything else is malformed → the caller rejects; NEVER Number()-coerce a
-// malformed token (NaN → splice(0), '01' → wrong element, whitespace → coerced).
-function arrayIndex(token: string): number | '-' | undefined {
+export function parseArrayIndexToken(token: string): number | '-' | undefined {
   if (token === '-') return '-';
   if (!/^(0|[1-9][0-9]*)$/.test(token)) return undefined;
-  const n = Number(token);
-  return Number.isSafeInteger(n) ? n : undefined;
+  const index = Number(token);
+  return Number.isSafeInteger(index) ? index : undefined;
+}
+
+export function assertCanonicalStateKey(key: string): void {
+  if (RESERVED_KEYS.has(key)) throw new Error(`reserved state key not allowed: ${key}`);
+  if (sanitize(key) !== key) throw new Error(`state key is not canonical: ${JSON.stringify(key)}`);
+}
+
+export function parseStatePointer(pointer: string): string[] {
+  const tokens = parsePointer(pointer);
+  if (tokens.length > MAX_POINTER_DEPTH) {
+    throw new Error(`JSON pointer exceeds max depth ${MAX_POINTER_DEPTH}`);
+  }
+  for (const token of tokens) assertCanonicalStateKey(token);
+  return tokens;
+}
+
+export function assertCanonicalStateValue(value: JsonValue): void {
+  const pending: JsonValue[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (isArrayValue(current)) {
+      for (const item of current) pending.push(item);
+    } else if (isObject(current)) {
+      for (const [key, item] of Object.entries(current)) {
+        assertCanonicalStateKey(key);
+        pending.push(item);
+      }
+    }
+  }
 }
 
 export function getIn(doc: JsonValue, pointer: string): JsonValue | undefined {
-  let cur: JsonValue | undefined = doc;
-  for (const token of parsePointer(pointer)) {
-    if (isArrayValue(cur)) {
-      const idx = arrayIndex(token);
-      if (idx === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
-      cur = idx === '-' ? undefined : cur[idx];
-    } else if (isObject(cur)) {
-      if (RESERVED_KEYS.has(token)) throw new Error(`reserved key not allowed: ${token}`);
-      cur = Object.hasOwn(cur, token) ? cur[token] : undefined; // own-property only
-    } else return undefined;
+  const tokens = parseStatePointer(pointer);
+  let current: JsonValue | undefined = doc;
+  for (const token of tokens) {
+    if (isArrayValue(current)) {
+      const index = parseArrayIndexToken(token);
+      if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+      current = index === '-' ? undefined : current[index];
+    } else if (isObject(current)) {
+      current = Object.hasOwn(current, token) ? current[token] : undefined;
+    } else {
+      return undefined;
+    }
   }
-  return cur;
+  return current;
 }
 
-function rejoin(rest: string[]): string {
-  return rest.length
-    ? '/' + rest.map((t) => t.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')
-    : '';
-}
-
-export function setIn(doc: JsonValue, pointer: string, value: JsonValue): JsonValue {
-  const tokens = parsePointer(pointer);
-  if (tokens.length > MAX_POINTER_DEPTH)
-    throw new Error(`JSON pointer exceeds max depth ${MAX_POINTER_DEPTH}`);
-  if (tokens.length === 0) return value;
-  const [head, ...rest] = tokens;
-  if (head === undefined) return value;
+function setTokens(
+  doc: JsonValue,
+  tokens: readonly string[],
+  offset: number,
+  value: JsonValue,
+): JsonValue {
+  if (offset === tokens.length) return value;
+  const token = tokens[offset];
+  if (token === undefined) return value;
   if (isArrayValue(doc)) {
-    const idx = arrayIndex(head);
-    if (idx === undefined) throw new Error(`invalid array index: ${JSON.stringify(head)}`);
-    const target = idx === '-' ? doc.length : idx;
-    if (target > doc.length)
-      throw new Error(`array index out of range (would create a sparse hole): ${head}`);
+    const index = parseArrayIndexToken(token);
+    if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+    const target = index === '-' ? doc.length : index;
+    if (target > doc.length) {
+      throw new Error(`array index out of range (would create a sparse hole): ${token}`);
+    }
     const next = doc.slice();
-    next[target] = setIn(next[target] ?? null, rejoin(rest), value);
+    next[target] = setTokens(target < doc.length ? doc[target]! : null, tokens, offset + 1, value);
     return next;
   }
   const base = isObject(doc) ? doc : {};
-  if (RESERVED_KEYS.has(head)) throw new Error(`reserved key not allowed: ${head}`);
-  return { ...base, [head]: setIn(base[head] ?? null, rejoin(rest), value) };
+  const child = Object.hasOwn(base, token) ? base[token]! : null;
+  return { ...base, [token]: setTokens(child, tokens, offset + 1, value) };
+}
+
+export function setIn(doc: JsonValue, pointer: string, value: JsonValue): JsonValue {
+  return setTokens(doc, parseStatePointer(pointer), 0, value);
+}
+
+function removeTokens(doc: JsonValue, tokens: readonly string[], offset: number): JsonValue {
+  if (offset === tokens.length) return doc;
+  const token = tokens[offset];
+  if (token === undefined) return doc;
+  const leaf = offset === tokens.length - 1;
+  if (isArrayValue(doc)) {
+    const index = parseArrayIndexToken(token);
+    if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+    if (index === '-' || index >= doc.length) return doc;
+    const next = doc.slice();
+    if (leaf) {
+      next.splice(index, 1);
+    } else {
+      next[index] = removeTokens(doc[index]!, tokens, offset + 1);
+    }
+    return next;
+  }
+  if (!isObject(doc) || !Object.hasOwn(doc, token)) return doc;
+  if (leaf) {
+    const { [token]: _removed, ...remaining } = doc;
+    return remaining;
+  }
+  return { ...doc, [token]: removeTokens(doc[token]!, tokens, offset + 1) };
 }
 
 export function removeIn(doc: JsonValue, pointer: string): JsonValue {
-  const tokens = parsePointer(pointer);
-  if (tokens.length > MAX_POINTER_DEPTH)
-    throw new Error(`JSON pointer exceeds max depth ${MAX_POINTER_DEPTH}`);
-  if (tokens.length === 0) return doc;
-  const [head, ...rest] = tokens;
-  if (head === undefined) return doc;
-  if (isArrayValue(doc)) {
-    const idx = arrayIndex(head);
-    if (idx === undefined) throw new Error(`invalid array index: ${JSON.stringify(head)}`);
-    if (idx === '-' || idx >= doc.length) return doc; // nothing to remove: no-op
-    const next = doc.slice();
-    if (rest.length === 0) {
-      next.splice(idx, 1);
-      return next;
-    }
-    next[idx] = removeIn(next[idx] ?? null, rejoin(rest));
-    return next;
-  }
-  if (!isObject(doc)) return doc;
-  if (RESERVED_KEYS.has(head)) throw new Error(`reserved key not allowed: ${head}`);
-  if (!Object.hasOwn(doc, head)) return doc; // missing intermediate: no-op, never materialize null
-  if (rest.length === 0) {
-    const { [head]: _drop, ...keep } = doc;
-    return keep;
-  }
-  return { ...doc, [head]: removeIn(doc[head] ?? null, rejoin(rest)) };
+  return removeTokens(doc, parseStatePointer(pointer), 0);
 }

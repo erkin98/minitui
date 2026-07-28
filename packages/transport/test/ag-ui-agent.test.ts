@@ -72,7 +72,7 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(events[events.length - 1]).toMatchObject({ kind: 'run-finished' });
   });
 
-  it('bounds the buffer: a fast producer with no consumer drops OLDEST past the ceiling (§Z30)', async () => {
+  it('drops the oldest buffered event past the remote queue ceiling', async () => {
     const subject = new Subject<BaseEvent>();
     const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
     const diagnostics = {
@@ -82,7 +82,7 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
       debug() {},
     };
     // ceiling of 2, nothing consuming yet -> events buffer and the OLDEST drop past the ceiling
-    // (bounded remote pump, §Z30 — not an unbounded AppEvent[]).
+    // The remote pump is bounded rather than retaining an unbounded AppEvent array.
     const handle = createAgUiAgentPort(fakeAgent(subject), { maxQueue: 2, diagnostics }).run(input);
     subject.next({ type: EventType.RUN_STARTED, threadId: 't', runId: 'r' } as BaseEvent);
     subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 1 } } as BaseEvent);
@@ -98,17 +98,17 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(warnings[0]?.[0]).toContain('dropped');
   });
 
-  it('abort() settles a next() parked on an empty queue (no forever-hang) (bus-agent-01)', async () => {
+  it('abort() settles a next() parked on an empty queue', async () => {
     const subject = new Subject<BaseEvent>();
     const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
     const it = handle.events[Symbol.asyncIterator]();
     const parked = it.next(); // nothing queued yet -> parks in the waiters array
-    handle.abort(); // before the fix: aborts the controller but never finish() -> parked hangs
+    handle.abort();
     const res = await parked;
     expect(res.done).toBe(true);
   }, 2000);
 
-  it('throw() tears the run down: aborts the signal and settles a parked next() (bus-agent-03)', async () => {
+  it('throw() tears the run down, aborts the signal, and settles a parked next()', async () => {
     const subject = new Subject<BaseEvent>();
     const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
     const it = handle.events[Symbol.asyncIterator]();

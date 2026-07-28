@@ -1,134 +1,165 @@
-import { type Topic, type TopicPayloads, COALESCIBLE } from './topics.js';
-import { BoundedQueue, assertValidCapacity } from './backpressure.js';
-import type { BusPort } from './bus-port.js';
 import type { DiagnosticsPort } from '@minitui/types';
+import { formatUnknown } from '../format-unknown.js';
+import { BoundedQueue, assertValidCapacity } from './backpressure.js';
+import type { BusPort, PublishArgs } from './bus-port.js';
+import { COALESCIBLE, type Topic, type TopicPayloads } from './topics.js';
 
 export interface AppBus extends BusPort {
   readonly droppedCount: number;
 }
 
-interface Sub<T extends Topic> {
-  fn: (p: TopicPayloads[T]) => void;
-  queue: BoundedQueue<TopicPayloads[T]>;
-  topic: T;
-  // `scheduled` dedupes `ready`: a subscriber sits in the drain schedule at most once regardless of
-  // how many payloads it has buffered (its BoundedQueue holds them), so a re-entrant burst of N
-  // publishes can no longer leave N entries to drain via O(k) shift() each — O(N^2) → O(N).
+interface ScheduledSub {
+  readonly topic: Topic;
   scheduled: boolean;
-  // `live` is cleared on unsubscribe: the drain reads `ready`, which holds a direct ref, so a
-  // subscriber unsubscribed mid-publish must be skipped here (deleting from the topic Set is not
-  // enough) — otherwise it receives an in-flight batch after it asked to stop.
   live: boolean;
+  drain(): void;
 }
+
+interface TopicSub<T extends Topic> extends ScheduledSub {
+  readonly fn: (payload: TopicPayloads[T]) => void;
+  readonly queue: BoundedQueue<TopicPayloads[T]>;
+}
+
+interface TopicChannel<T extends Topic> {
+  publish(payload: TopicPayloads[T]): void;
+  subscribe(fn: (payload: TopicPayloads[T]) => void): () => void;
+}
+
+type ChannelMap = { [T in Topic]: TopicChannel<T> };
 
 export function createAppBus(opts?: { capacity?: number; diagnostics?: DiagnosticsPort }): AppBus {
   const capacity = opts?.capacity ?? 256;
-  // Fail closed at the public boundary: a bad capacity would otherwise hang or disable the bound
-  // lazily on the first publish (per-subscriber BoundedQueue). Surface it here, at construction.
   assertValidCapacity(capacity);
   const diagnostics = opts?.diagnostics;
-  const subs = new Map<Topic, Set<Sub<Topic>>>();
-  let dropped = 0;
-  // Single global-FIFO delivery: `ready` records subscribers with buffered payloads in GLOBAL
-  // publish order (one entry per pushed payload); `draining` is the one drain-loop flag. A
-  // re-entrant publish only appends to `ready` and returns — the outermost publish owns the
-  // drain — so every subscriber observes payloads in publish order (a per-subscriber drain would
-  // let a later subscriber see a re-published payload before the outer one, inverting order-
-  // dependent RFC-6902 patches).
-  const ready: Array<Sub<Topic>> = [];
+  const ready: ScheduledSub[] = [];
+  let readyHead = 0;
   let draining = false;
+  let dropped = 0;
 
-  const setFor = (topic: Topic): Set<Sub<Topic>> => {
-    let s = subs.get(topic);
-    if (!s) {
-      s = new Set();
-      subs.set(topic, s);
+  const report = (message: string, meta: Record<string, unknown>): void => {
+    try {
+      diagnostics?.warn(message, meta);
+    } catch {
+      // Diagnostics is observational and cannot break bus delivery.
     }
-    return s;
+  };
+
+  const drainReady = (): void => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (readyHead < ready.length) {
+        const sub = ready[readyHead++]!;
+        sub.scheduled = false;
+        sub.drain();
+      }
+    } finally {
+      ready.length = 0;
+      readyHead = 0;
+      draining = false;
+    }
+  };
+
+  const createChannel = <T extends Topic>(topic: T): TopicChannel<T> => {
+    const subscribers = new Set<TopicSub<T>>();
+    return {
+      publish(payload) {
+        for (const sub of subscribers) {
+          const before = sub.queue.dropped;
+          sub.queue.push(payload);
+          const justDropped = sub.queue.dropped - before;
+          if (justDropped > 0) {
+            dropped += justDropped;
+            report('app-bus dropped oldest payload (subscriber backpressure)', {
+              topic,
+              dropped,
+            });
+          }
+          if (!sub.scheduled) {
+            sub.scheduled = true;
+            ready.push(sub);
+          }
+        }
+        drainReady();
+      },
+      subscribe(fn) {
+        const queue = new BoundedQueue<TopicPayloads[T]>(capacity, COALESCIBLE.has(topic));
+        const sub: TopicSub<T> = {
+          fn,
+          queue,
+          topic,
+          scheduled: false,
+          live: true,
+          drain() {
+            const batch = queue.drain();
+            if (!sub.live) return;
+            for (const item of batch) {
+              if (!sub.live) break;
+              try {
+                fn(item);
+              } catch (error) {
+                report('app-bus subscriber threw (isolated)', {
+                  topic,
+                  error: formatUnknown(error),
+                });
+              }
+            }
+          },
+        };
+        subscribers.add(sub);
+        return () => {
+          sub.live = false;
+          subscribers.delete(sub);
+        };
+      },
+    };
+  };
+
+  const channels: ChannelMap = {
+    token: createChannel('token'),
+    content: createChannel('content'),
+    visibility: createChannel('visibility'),
+    'state-delta': createChannel('state-delta'),
+    'state-snapshot': createChannel('state-snapshot'),
+    'run-status': createChannel('run-status'),
+    error: createChannel('error'),
+    action: createChannel('action'),
   };
 
   return {
     get droppedCount() {
       return dropped;
     },
-    publish<T extends Topic>(topic: T, payload: TopicPayloads[T]): void {
-      const s = subs.get(topic);
-      if (!s) return;
-      for (const sub of s) {
-        const before = sub.queue.dropped;
-        // `as never`: existential-map variance boundary — `Map<Topic, Sub>` erases the per-key
-        // payload relationship (TS has no existential types), so `TopicPayloads[T]` cannot be proven
-        // assignable to this erased sub's queue element type. This is the standard typed-pub/sub escape,
-        // NOT a fixable type-gap dodge (the §v10/§Z42 completion casts were removed above); leave as-is.
-        sub.queue.push(payload as never);
-        const justDropped = sub.queue.dropped - before;
-        if (justDropped > 0) {
-          dropped += justDropped;
-          // §Z5/§Z30: the bounded-queue drop is a real backpressure signal, not swallowed — surface it
-          // through the injected DiagnosticsPort (still poll-able via droppedCount) so a runaway
-          // re-publisher on `topic` is observable at the composition root's log sink.
-          diagnostics?.warn('app-bus dropped oldest payload (subscriber backpressure)', {
-            topic,
-            dropped,
-          });
-        }
-        // Record this subscriber for delivery in cross-subscriber publish order. The per-subscriber
-        // BoundedQueue still caps/coalesces the payload (drop-oldest into droppedCount); `ready`
-        // only tracks WHEN each subscriber is due, so the single drain below delivers globally FIFO.
-        // Schedule at most once — the buffered payloads live in the queue, which drains in one shot.
-        if (!sub.scheduled) {
-          sub.scheduled = true;
-          ready.push(sub);
-        }
-      }
-      // The no-deadlock + in-order mechanism: whoever is not already draining runs the ONE loop.
-      // A re-entrant publish appended to `ready` above and returned, so the outer loop picks it up
-      // instead of recursing the stack; a runaway re-publisher drops oldest (bounded queue) rather
-      // than overflowing the stack or blocking the producer.
-      if (draining) return;
-      draining = true;
-      try {
-        while (ready.length) {
-          const sub = ready.shift();
-          if (!sub) break;
-          // Clear before draining so a subscriber that re-publishes to itself re-schedules for the
-          // new payloads (rather than being skipped as still-scheduled).
-          sub.scheduled = false;
-          const batch = sub.queue.drain();
-          // Drop the batch for a subscriber unsubscribed mid-publish — its queue is still drained
-          // (no leak) but the callback is not invoked after it unsubscribed.
-          if (!sub.live) continue;
-          for (const item of batch) {
-            try {
-              (sub.fn as (p: unknown) => void)(item);
-            } catch (err) {
-              // Isolate a throwing subscriber: route it to diagnostics and keep draining so one bad
-              // callback cannot starve its siblings or propagate out of publish() to the caller.
-              diagnostics?.warn('app-bus subscriber threw (isolated)', {
-                topic: sub.topic,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          }
-        }
-      } finally {
-        draining = false;
+    publish(...args: PublishArgs): void {
+      switch (args[0]) {
+        case 'token':
+          channels.token.publish(args[1]);
+          return;
+        case 'content':
+          channels.content.publish(args[1]);
+          return;
+        case 'visibility':
+          channels.visibility.publish(args[1]);
+          return;
+        case 'state-delta':
+          channels['state-delta'].publish(args[1]);
+          return;
+        case 'state-snapshot':
+          channels['state-snapshot'].publish(args[1]);
+          return;
+        case 'run-status':
+          channels['run-status'].publish(args[1]);
+          return;
+        case 'error':
+          channels.error.publish(args[1]);
+          return;
+        case 'action':
+          channels.action.publish(args[1]);
+          return;
       }
     },
-    subscribe<T extends Topic>(topic: T, fn: (p: TopicPayloads[T]) => void): () => void {
-      const sub: Sub<T> = {
-        fn,
-        queue: new BoundedQueue<TopicPayloads[T]>(capacity, COALESCIBLE.has(topic)),
-        topic,
-        scheduled: false,
-        live: true,
-      };
-      const set = setFor(topic);
-      set.add(sub as unknown as Sub<Topic>);
-      return () => {
-        sub.live = false;
-        set.delete(sub as unknown as Sub<Topic>);
-      };
+    subscribe<T extends Topic>(topic: T, fn: (payload: TopicPayloads[T]) => void): () => void {
+      return channels[topic].subscribe(fn);
     },
   };
 }

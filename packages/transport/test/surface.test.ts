@@ -20,8 +20,7 @@ function barrelExports(): string[] {
     .sort();
 }
 
-// FROZEN, INLINE-committed public surface (NOT an auto-written snapshot —
-// §Z32 vacuous-golden trap; §Z102 declaration-surface gate). This is the seam
+// Frozen, inline public surface rather than an auto-written snapshot. This is the seam
 // every downstream layer reads state and events through: the agent-port swap
 // seam, the normalization chokepoint, the canonical store, the bounded bus,
 // the channels, and the two contract-only seam ports. Surface SHRINK and

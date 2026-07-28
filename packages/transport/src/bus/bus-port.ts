@@ -8,7 +8,7 @@ import type { Topic, TopicPayloads } from './topics.js';
 // no member. `subscribe` stays generic: the same widening forces the listener to accept the payload
 // UNION (contravariance), which is already type-safe at runtime, and the tuple form would break the
 // contextual typing of every `(p) => …` callback.
-type PublishArgs = { [K in Topic]: [topic: K, payload: TopicPayloads[K]] }[Topic];
+export type PublishArgs = { [K in Topic]: [topic: K, payload: TopicPayloads[K]] }[Topic];
 
 export interface BusPort {
   publish(...args: PublishArgs): void;

@@ -1,19 +1,22 @@
 import fastJsonPatch, { type Operation } from 'fast-json-patch';
-import { type JsonValue, isArrayValue, isObject } from './json-pointer.js';
-import type { JsonPatch } from '@minitui/types';
+import { JsonPatchArraySchema, JsonValueSchema, type JsonPatch } from '@minitui/types';
+import { formatUnknown } from '../format-unknown.js';
+import {
+  assertCanonicalStateValue,
+  isArrayValue,
+  isObject,
+  parseArrayIndexToken,
+  parseStatePointer,
+  type JsonValue,
+} from './json-pointer.js';
 
-// fast-json-patch ships CJS whose named exports are built via `Object.assign(exports, …)`
-// (index.js), which Node's cjs-module-lexer cannot statically detect — a named ESM import
-// crashes at runtime for a real ESM consumer of the built dist. The default export carries the
-// same surface and IS lexer-safe, so the values are destructured from it.
 const { applyOperation, deepClone } = fastJsonPatch;
 
-// Canonical RFC-6902 op is owned by @minitui/types (§Z11). `Operation` stays only
-// as the cast at the fast-json-patch apply boundary below (adopt-library seam).
 export type JsonPatchOp = JsonPatch;
 
 export class PatchError extends Error {
   readonly opIndex: number;
+
   constructor(message: string, opIndex: number) {
     super(message);
     this.name = 'PatchError';
@@ -21,90 +24,158 @@ export class PatchError extends Error {
   }
 }
 
-// A copy/move op READS its `from` pointer. fast-json-patch's banPrototypeModifications guards
-// WRITE paths only, so `from: '/constructor'` (or any inherited member — '/toString', '/valueOf',
-// an array's '/map') resolves to a live host function that gets injected into JsonValue-typed
-// canonical state. We resolve `from` over OWN members only and reject anything that would read an
-// inherited or absent member — defense-in-depth alongside the DataStore's fail-closed re-parse.
-function fromReadsOwnMember(doc: JsonValue, from: unknown): boolean {
-  if (typeof from !== 'string') return false;
-  if (from === '') return true; // whole-document reference is own by definition
-  if (from[0] !== '/') return false;
-  let cur: JsonValue = doc;
-  for (const raw of from.slice(1).split('/')) {
-    const token = raw.replace(/~1/g, '/').replace(/~0/g, '~');
-    if (isArrayValue(cur)) {
-      if (!/^(0|[1-9]\d*)$/.test(token)) return false; // non-canonical index (rejects 'map'/'length')
-      const el = cur[Number(token)];
-      if (el === undefined) return false; // out of bounds
-      cur = el;
-    } else if (isObject(cur)) {
-      if (!Object.prototype.hasOwnProperty.call(cur, token)) return false; // inherited or absent
-      const el = cur[token];
-      if (el === undefined) return false;
-      cur = el;
+function issueIndex(error: {
+  readonly issues: readonly { readonly path: PropertyKey[] }[];
+}): number {
+  for (const issue of error.issues) {
+    for (const segment of issue.path) if (typeof segment === 'number') return segment;
+  }
+  return -1;
+}
+
+function resolveExisting(doc: JsonValue, tokens: readonly string[]): JsonValue {
+  let current = doc;
+  for (const token of tokens) {
+    if (isArrayValue(current)) {
+      const index = parseArrayIndexToken(token);
+      if (index === undefined || index === '-' || index >= current.length) {
+        throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
+      }
+      current = current[index]!;
+    } else if (isObject(current)) {
+      if (!Object.hasOwn(current, token)) throw new Error(`object member does not exist: ${token}`);
+      current = current[token]!;
     } else {
-      return false; // cannot descend into a primitive
+      throw new Error('patch path traverses a primitive');
     }
   }
-  return true;
+  return current;
 }
 
-function readsInheritedFrom(op: unknown, doc: JsonValue): boolean {
-  if (typeof op !== 'object' || op === null) return false;
-  const { op: kind, from } = op as { op?: unknown; from?: unknown };
-  if (kind !== 'copy' && kind !== 'move') return false;
-  return !fromReadsOwnMember(doc, from);
+function resolveParent(
+  doc: JsonValue,
+  tokens: readonly string[],
+): { readonly parent: JsonValue; readonly token: string } {
+  const token = tokens.at(-1);
+  if (token === undefined) throw new Error('root pointer has no parent');
+  return { parent: resolveExisting(doc, tokens.slice(0, -1)), token };
 }
 
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * Apply an RFC-6902 delta from an UNTRUSTED source (agent STATE_DELTA).
- * AG-UI's exact call shape: validateOperation=true, banPrototypeModifications=true.
- * Applied one op at a time against a private up-front clone of the document, so that:
- *  - the caller's `state` is never mutated (the clone is);
- *  - each op is cloned before it is applied, so a later op can never reach back into the
- *    caller's own operand objects (fast-json-patch inserts `value` by reference);
- *  - the reported failing-op index is the real one (fast-json-patch hardcodes 0 into its
- *    internal validator calls, so its `err.index` is unreliable — we track our own).
- * Malformed, prototype-polluting, or inherited-member-reading ops throw a PatchError
- * (never after partial corruption).
- */
-export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
-  if (!Array.isArray(delta)) {
-    throw new PatchError('invalid state delta: patch is not an array', -1);
+function assertAddTarget(doc: JsonValue, tokens: readonly string[]): void {
+  if (tokens.length === 0) return;
+  const { parent, token } = resolveParent(doc, tokens);
+  if (isArrayValue(parent)) {
+    const index = parseArrayIndexToken(token);
+    if (index === undefined || (index !== '-' && index > parent.length)) {
+      throw new Error(`invalid add array index: ${JSON.stringify(token)}`);
+    }
+  } else if (!isObject(parent)) {
+    throw new Error('patch target parent is a primitive');
   }
+}
+
+function assertExistingTarget(doc: JsonValue, tokens: readonly string[], allowRoot = true): void {
+  if (tokens.length === 0) {
+    if (!allowRoot) throw new Error('operation cannot remove the document root');
+    return;
+  }
+  const { parent, token } = resolveParent(doc, tokens);
+  if (isArrayValue(parent)) {
+    const index = parseArrayIndexToken(token);
+    if (index === undefined || index === '-' || index >= parent.length) {
+      throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
+    }
+  } else if (isObject(parent)) {
+    if (!Object.hasOwn(parent, token)) throw new Error(`object member does not exist: ${token}`);
+  } else {
+    throw new Error('patch target parent is a primitive');
+  }
+}
+
+function isStrictPrefix(prefix: readonly string[], value: readonly string[]): boolean {
+  return prefix.length < value.length && prefix.every((token, index) => value[index] === token);
+}
+
+function preflight(doc: JsonValue, operation: JsonPatch): void {
+  const path = parseStatePointer(operation.path);
+  if ('value' in operation) assertCanonicalStateValue(operation.value);
+  switch (operation.op) {
+    case 'add':
+      assertAddTarget(doc, path);
+      return;
+    case 'replace':
+    case 'test':
+      assertExistingTarget(doc, path);
+      return;
+    case 'remove':
+      assertExistingTarget(doc, path, false);
+      return;
+    case 'copy': {
+      const from = parseStatePointer(operation.from);
+      resolveExisting(doc, from);
+      assertAddTarget(doc, path);
+      return;
+    }
+    case 'move': {
+      const from = parseStatePointer(operation.from);
+      resolveExisting(doc, from);
+      if (isStrictPrefix(from, path)) throw new Error('move source cannot contain its destination');
+      assertAddTarget(doc, path);
+    }
+  }
+}
+
+export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
+  const parsedPatch = JsonPatchArraySchema.safeParse(delta);
+  if (!parsedPatch.success) {
+    throw new PatchError(
+      'invalid state delta: patch schema rejected',
+      issueIndex(parsedPatch.error),
+    );
+  }
+  const parsedState = JsonValueSchema.safeParse(state);
+  if (!parsedState.success)
+    throw new PatchError('invalid state delta: state is not canonical JSON', -1);
+
   let doc: JsonValue;
   try {
-    // Clone the document ONCE; each op then mutates this private clone in place.
-    // PIN-DEPTH (fold): bounded fail-closed, not RangeError — a stack-exhausting document is
-    // caught here and surfaced as a PatchError, never an uncaught crash.
-    doc = deepClone(state) as JsonValue;
-  } catch (err) {
-    throw new PatchError(`invalid state delta: ${errText(err)}`, -1);
+    assertCanonicalStateValue(parsedState.data);
+    doc = deepClone(parsedState.data) as JsonValue;
+  } catch (error) {
+    throw new PatchError(`invalid state delta: ${formatUnknown(error)}`, -1);
   }
-  for (let i = 0; i < delta.length; i++) {
-    const op: unknown = delta[i];
-    if (readsInheritedFrom(op, doc)) {
-      throw new PatchError('invalid state delta: `from` must reference an own member', i);
-    }
+
+  for (let index = 0; index < parsedPatch.data.length; index++) {
+    const operation = parsedPatch.data[index]!;
     try {
-      const result = applyOperation(
+      preflight(doc, operation);
+      doc = applyOperation(
         doc,
-        deepClone(op) as Operation, // clone the whole op so applying it can't mutate the operand
-        /* validateOperation */ true,
-        /* mutateDocument */ true, // `doc` is already our private clone
-        /* banPrototypeModifications */ true,
-        i,
-      );
-      doc = result.newDocument;
-    } catch (err) {
-      // Our loop counter `i` is the true failing-op index (not the library's `err.index`).
-      throw new PatchError(`invalid state delta: ${errText(err)}`, i);
+        deepClone(operation) as Operation,
+        true,
+        true,
+        true,
+        index,
+      ).newDocument;
+    } catch (error) {
+      throw new PatchError(`invalid state delta: ${formatUnknown(error)}`, index);
     }
   }
-  return doc;
+
+  const result = JsonValueSchema.safeParse(doc);
+  if (!result.success) {
+    throw new PatchError(
+      'invalid state delta: result is not canonical JSON',
+      parsedPatch.data.length - 1,
+    );
+  }
+  try {
+    assertCanonicalStateValue(result.data);
+  } catch (error) {
+    throw new PatchError(
+      `invalid state delta: ${formatUnknown(error)}`,
+      parsedPatch.data.length - 1,
+    );
+  }
+  return result.data;
 }

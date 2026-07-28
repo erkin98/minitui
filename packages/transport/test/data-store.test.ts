@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createDataStore } from '../src/state/data-store.js';
 import type { JsonValue } from '@minitui/types';
 
-const ESC = '\u001b'; // real ESC byte — sanitize (imported directly by snapshot-delta, §Z11) strips CSI at the store ingress
+const ESC = '\u001b'; // Real ESC byte; the store strips CSI at ingress.
 
 describe('DataStore (canonical immutable state seam)', () => {
   it('seeds from initial and reads via getIn', () => {
@@ -13,7 +13,7 @@ describe('DataStore (canonical immutable state seam)', () => {
   it('applySnapshot strips model ANSI and replaces state', () => {
     const store = createDataStore();
     store.applySnapshot({ title: `a${ESC}[0mb` });
-    expect(store.getState()).toEqual({ title: 'ab' }); // CSI stripped on ingress (Task 6 covers deep/immutable)
+    expect(store.getState()).toEqual({ title: 'ab' }); // CSI stripped on ingress (deep/immutable covered below)
   });
 
   it('applyDelta folds an RFC-6902 patch and notifies subscribers', () => {
@@ -35,7 +35,7 @@ describe('DataStore (canonical immutable state seam)', () => {
     expect(store.getState()).not.toBe(before);
   });
 
-  it('setLocal suppresses a same-value write: no notify, same doc (§Z30)', () => {
+  it('setLocal suppresses a same-value write with no notification', () => {
     const store = createDataStore({ initial: { codec: 'h264' } });
     let notifications = 0;
     store.subscribe(() => {
@@ -51,7 +51,7 @@ describe('DataStore (canonical immutable state seam)', () => {
   });
 });
 
-// A pathological nesting far past MAX_DEPTH (256): the pre-fold recursive walks
+// A pathological nesting far past MAX_DEPTH (256): plain recursive walks
 // (JsonValueSchema.safeParse, sanitizeStrings) RangeError on this without a guard.
 function deepNest(depth: number): JsonValue {
   let node: JsonValue = 1;
@@ -77,15 +77,15 @@ function capturingDiagnostics(): {
   };
 }
 
-describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPTH)', () => {
-  it('clones opts.initial on ingress: a later caller mutation cannot reach canonical state (C03)', () => {
+describe('DataStore ownership and delivery', () => {
+  it('clones opts.initial on ingress so later caller mutation cannot reach canonical state', () => {
     const initial = { counter: { value: 1 } };
     const store = createDataStore({ initial });
     initial.counter.value = 2; // caller mutates their OWN retained reference after construction
     expect(store.getState()).toEqual({ counter: { value: 1 } });
   });
 
-  it('clones a setLocal value on ingress: a later caller mutation cannot reach canonical state (C03)', () => {
+  it('clones a setLocal value on ingress so later caller mutation cannot reach canonical state', () => {
     const store = createDataStore({ initial: {} });
     const value = { label: 'one' };
     store.setLocal('/item', value);
@@ -93,7 +93,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(store.getState()).toEqual({ item: { label: 'one' } });
   });
 
-  it('getState returns a deeply-frozen snapshot; a post-getState mutation cannot corrupt a later delivery (state-05)', () => {
+  it('getState returns a deeply frozen snapshot that cannot corrupt a later delivery', () => {
     const store = createDataStore({ initial: { a: { x: 1 } } });
     const leaked = store.getState();
     expect(Object.isFrozen(leaked)).toBe(true); // top-level frozen
@@ -108,7 +108,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(store.getState()).not.toBe(leaked); // and a fresh tree, sharing nothing with the leaked ref
   });
 
-  it('isolates a throwing subscriber and never mislabels a committed delta as dropped (C04)', () => {
+  it('isolates a throwing subscriber and never mislabels a committed delta as dropped', () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: { p: 0 }, diagnostics });
     const secondSeen: JsonValue[] = [];
@@ -124,7 +124,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(warnings).not.toContain('dropped invalid state delta'); // and was NOT mislabeled
   });
 
-  it('serializes reentrant commits so every subscriber sees snapshots in commit order (C04)', () => {
+  it('serializes reentrant commits so every subscriber sees snapshots in commit order', () => {
     const store = createDataStore({ initial: { n: 0 } });
     const bSnapshots: JsonValue[] = [];
     let reentered = false;
@@ -143,7 +143,82 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(bSnapshots).toEqual([{ n: 1 }, { n: 2 }]);
   });
 
-  it('applySnapshot fails closed (no RangeError) on pathologically deep input (PIN-DEPTH)', () => {
+  it('keeps getState coherent with the snapshot currently being delivered', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const coherence: Array<readonly [JsonValue, JsonValue]> = [];
+    let reentered = false;
+    store.subscribe((snapshot) => {
+      if (!reentered) {
+        reentered = true;
+        store.setLocal('/n', 2);
+      }
+      coherence.push([snapshot, store.getState()]);
+    });
+    store.setLocal('/n', 1);
+    expect(coherence).toEqual([
+      [{ n: 1 }, { n: 1 }],
+      [{ n: 2 }, { n: 2 }],
+    ]);
+  });
+
+  it('derives independent reentrant writes from the newest staged snapshot', () => {
+    const store = createDataStore({ initial: { trigger: false } });
+    let wrote = false;
+    store.subscribe(() => {
+      if (wrote) return;
+      wrote = true;
+      store.setLocal('/left', 1);
+      store.setLocal('/right', 2);
+    });
+    store.setLocal('/trigger', true);
+    expect(store.getState()).toEqual({ trigger: true, left: 1, right: 2 });
+  });
+
+  it('suppresses equivalent snapshots, empty deltas, and missing removals', () => {
+    const store = createDataStore({ initial: { value: 1 } });
+    let notifications = 0;
+    store.subscribe(() => {
+      notifications++;
+    });
+    store.applySnapshot({ value: 1 });
+    store.applyDelta([]);
+    store.removeLocal('/missing');
+    expect(notifications).toBe(0);
+  });
+
+  it('isolates asynchronous subscriber rejection and continues sibling delivery', async () => {
+    const { warnings, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: {}, diagnostics });
+    const seen: JsonValue[] = [];
+    store.subscribe(async () => {
+      throw new Error('async subscriber boom');
+    });
+    store.subscribe((snapshot) => {
+      seen.push(snapshot);
+    });
+    store.setLocal('/ok', true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual([{ ok: true }]);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('formats hostile thrown values without breaking sibling delivery', () => {
+    const { warnings, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: {}, diagnostics });
+    let siblingCalls = 0;
+    store.subscribe(() => {
+      throw Object.create(null);
+    });
+    store.subscribe(() => {
+      siblingCalls++;
+    });
+    expect(() => store.setLocal('/ok', true)).not.toThrow();
+    expect(siblingCalls).toBe(1);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('applySnapshot fails closed without a RangeError on pathologically deep input', () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: { ok: true }, diagnostics });
     expect(() => store.applySnapshot(deepNest(6000))).not.toThrow(); // no uncaught RangeError
@@ -151,7 +226,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(warnings.length).toBeGreaterThan(0); // a diagnostic was surfaced
   });
 
-  it('setLocal fails closed (no RangeError) on a pathologically deep value (PIN-DEPTH)', () => {
+  it('setLocal fails closed without a RangeError on a pathologically deep value', () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: {}, diagnostics });
     expect(() => store.setLocal('/deep', deepNest(6000))).not.toThrow();
@@ -159,7 +234,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(warnings.length).toBeGreaterThan(0);
   });
 
-  it('re-parse on commit drops a copy-from-/constructor that injects the live Object ctor (patch-01)', () => {
+  it('re-parses on commit and drops a copy from constructor that injects Object', () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: { safe: 1 }, diagnostics });
     store.applyDelta([{ op: 'copy', from: '/constructor', path: '/x' }]);
@@ -168,7 +243,7 @@ describe('DataStore fold hardening (C03/C04/state-05 · PIN-STATE-OWNERSHIP/DEPT
     expect(warnings.length).toBeGreaterThan(0);
   });
 
-  it('re-parse on commit drops a setLocal writing a reserved key (C05 non-JSON/reserved writes)', () => {
+  it('re-parses on commit and drops a setLocal write with a reserved key', () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: { safe: 1 }, diagnostics });
     store.setLocal('/constructor', 'evil');

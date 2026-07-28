@@ -8,11 +8,6 @@ import {
 } from '@ag-ui/core';
 import { buildActionUplink } from '../src/channels/action-uplink.js';
 
-// C19: the old impl cast `{ …, args }` / `{ …, toolName, isError }` to BaseEvent,
-// satisfying NEITHER wire — minitui's schema silently stripped the params and the
-// AG-UI result was rejected for a missing messageId. These tests do a REAL schema
-// parse (the gap the original duck-typed test never caught).
-
 describe('action-uplink', () => {
   it('emits a schema-valid AG-UI tool-call lifecycle in canonical order', () => {
     const events = buildActionUplink({
@@ -33,7 +28,6 @@ describe('action-uplink', () => {
     expect(ToolCallStartEventSchema.safeParse(start).success).toBe(true);
     expect(ToolCallArgsEventSchema.safeParse(argsEvent).success).toBe(true);
     expect(ToolCallEndEventSchema.safeParse(end).success).toBe(true);
-    // The result event failed AG-UI's own schema before the fix (missing messageId).
     expect(ToolCallResultEventSchema.safeParse(result).success).toBe(true);
   });
 
@@ -103,5 +97,34 @@ describe('action-uplink', () => {
     });
     const result = events[3];
     expect((result as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('preserves tool name, error, and denial provenance on the result', () => {
+    const events = buildActionUplink({
+      actionName: 'merge',
+      params: {},
+      result: { content: '', isError: true, error: 'denied', denied: true },
+      toolCallId: 'tc-1',
+    });
+    expect(events[3]).toMatchObject({
+      toolName: 'merge',
+      isError: true,
+      error: 'denied',
+      denied: true,
+    });
+  });
+
+  it('rejects non-JSON params before constructing a lifecycle', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const params of [{ value: 1n }, { missing: undefined }, { fn: () => 1 }, cyclic]) {
+      expect(() =>
+        buildActionUplink({
+          actionName: 'x',
+          params,
+          result: { content: 'never', isError: false },
+        }),
+      ).toThrow();
+    }
   });
 });
