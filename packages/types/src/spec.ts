@@ -20,7 +20,7 @@ const BindingOrListSchema = z.union([ActionBindingSchema, z.array(ActionBindingS
 // One node of the flat KEYED element map — json-render's keyed-map element
 // vocabulary (its `UIElement`): identity IS the map key, so no `key` field
 // lives inside the element (json-render's key/parentKey belong only to the
-// array-form FlatElement). Actions bind under on[event]/watch (ledger F2);
+// array-form FlatElement). Actions bind under on[event]/watch;
 // there is NO flat `action` field, and no permission text rides on the spec —
 // PermissionDescriptor stays on the trusted catalog's MinituiActionDef.
 // `visible` is a json-render VisibilityCondition (boolean or condition object,
@@ -40,12 +40,10 @@ export const SpecElementSchema = z
 export type SpecElement = z.infer<typeof SpecElementSchema>;
 
 // The declarative mini-app wire view: a flat key->element map (NOT a nested
-// tree). root names the entry element. STATE-FREE (ledger §B7/v7) — the JSON-
-// Pointer data model lives on MiniAppSpec, owned by @minitui/spec (plan 07:
-// brands json-render's Spec + requires state, ledger G7), and its field is
-// `state`, never `data`.
+// tree). root names the entry element. This wire view is state-free; the JSON
+// Pointer data model lives on MiniAppSpec in @minitui/spec under `state`.
 //
-// STRIP-BY-DESIGN (ledger §Z105): ActionBinding is the SOLE `.strict()` wire
+// ActionBinding is the sole strict wire
 // schema — an unmodeled key there (`confirm`/`onSuccess`) would dodge the frozen
 // catalog allowlist. SpecElement / AppSpec / AgentEvent are ordinary z.object and
 // STRIP unknown keys by design (forward-compat wire vocab; dispatch reads only the

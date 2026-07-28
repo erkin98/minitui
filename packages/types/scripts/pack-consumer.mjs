@@ -1,7 +1,7 @@
 // Published-artifact gate: pack → assert tar (4 files) + manifest → install into a
 // throwaway strict consumer → tsc (types:[] skipLibCheck:false) + one ESM import.
 // Proves the SHIPPED tarball, not just source. Permanent (run by the package gate
-// + the pre-publish CI lane), not review-only. §Z102.
+// + the pre-publish CI lane).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -46,8 +46,12 @@ try {
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
   );
-  if (!/^\d+\.\d+\.\d+/.test(m.dependencies?.zod ?? ''))
-    die('zod not published concrete: ' + m.dependencies?.zod);
+  // Every packed dependency must resolve to a concrete semver (catalog:/workspace:
+  // rewritten on pack) — not only zod, so a future dep (e.g. @types/node) cannot
+  // ship an unresolved range unnoticed.
+  for (const [name, range] of Object.entries(m.dependencies ?? {})) {
+    if (!/^\d+\.\d+\.\d+/.test(range)) die(name + ' not published concrete: ' + range);
+  }
   // Engines floor checked by VALUE against the repo floor (not mere presence): a
   // weakened '*'/'>=18' or a dropped range reds instead of silently passing.
   if (m.engines?.node !== nodeFloor)
@@ -66,7 +70,7 @@ try {
     JSON.stringify({
       // lib ES2023 (NO dom — mirrors the package's own tsconfig.base) so an ambient
       // Node global like AbortSignal CANNOT resolve from lib.dom; types:[] excludes
-      // ambient @types/*. Without these two the gate is VACUOUS (§Z32): lib.dom would
+      // ambient @types/*. Without these two the gate is vacuous: lib.dom would
       // supply AbortSignal and hide the closure gap.
       compilerOptions: {
         module: 'NodeNext',

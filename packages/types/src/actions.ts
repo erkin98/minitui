@@ -22,8 +22,7 @@ export const ActionRequestSchema = z
     elementKey: z.string(),
     // Renderer-emitted params: values stay `unknown` (runtime widget emission,
     // not the agent-authored JsonValue subset), but the KEY routes through the
-    // reserved-key guard (ledger §Z100 AMEND) so a hostile container key is
-    // rejected at this trust boundary just like the spec containers.
+    // reserved-key guard so hostile container keys are rejected here.
     params: guardedRecord(z.unknown()),
   })
   .readonly();
@@ -39,8 +38,8 @@ export const ActionResultSchema = z
   .readonly();
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 
-// The ONE canonical fault shape for ActionOutcome { status: 'failed'; fault }
-// (structure doc §4 line 486). actionKey identifies the element that ran;
+// The canonical fault shape for ActionOutcome { status: 'failed'; fault }.
+// actionKey identifies the element that ran;
 // stderrExcerpt is the sanitized tail of the child's stderr. Sole owner — no
 // sibling plan redefines this under {code,detail} or {code,message}.
 export const RuntimeFaultSchema = z

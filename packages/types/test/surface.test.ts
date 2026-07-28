@@ -20,8 +20,7 @@ function barrelExports(): string[] {
     .sort();
 }
 
-// FROZEN, INLINE-committed public surface (NOT an auto-written snapshot —
-// §Z32 vacuous-golden trap). Materialized once from the green barrel:
+// Frozen, inline public surface rather than an auto-written snapshot. Materialized from:
 // `console.log(JSON.stringify(barrelExports()))`, then pasted here sorted.
 // Includes the seven port names the runtime barrel test cannot see
 // (ExecEvent, McpBridgePort, McpCallOptions, McpCallResult, McpProgress,

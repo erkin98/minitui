@@ -10,12 +10,30 @@ describe('ActionKind', () => {
     expect(k).toBe('exec-local');
     expect(ActionKindSchema.safeParse('exec-remote').success).toBe(false);
   });
-  it('assertNever throws the exact context-tagged message (§Z44/§Z47 exhaustiveness guard)', () => {
-    // `as never` is REQUIRED here (not gap-masking): assertNever's param is typed `never` by
-    // design, so exercising its runtime throw forces an impossible value in — the canonical test.
-    // Exact message locked (was a loose /unhandled/) so any format drift from the shipped shape
-    // is gate-visible (C25). NOTE: ledger §Z44's illustrative literal (`unhandled: ${context}...`)
-    // differs from this shipped+plan-02 format and needs a main-thread reconcile.
+  it('keeps action dispatch exhaustive through assertNever', () => {
+    const route = (kind: ActionKind): string => {
+      switch (kind) {
+        case 'render-local':
+          return 'render';
+        case 'exec-local':
+          return 'local';
+        case 'exec-mcp':
+          return 'mcp';
+        case 'agent-callback':
+          return 'callback';
+        default:
+          return assertNever(kind, 'ActionKind');
+      }
+    };
+
+    expect(ACTION_KINDS.map(route)).toEqual(['render', 'local', 'mcp', 'callback']);
+  });
+  it('assertNever throws the exact context-tagged message', () => {
+    // `as never` is required, not gap-masking: assertNever's param is typed `never`
+    // by design, so exercising its runtime throw forces an impossible value in. The
+    // message is locked so any drift from the shipped format is gate-visible.
+    // The exhaustive-route test above never reaches the default branch, so this is
+    // the only coverage of assertNever's runtime throw path.
     expect(() => assertNever('surprise' as never, 'ActionKind')).toThrow(
       /^unhandled ActionKind: "surprise"$/,
     );

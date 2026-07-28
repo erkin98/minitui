@@ -13,7 +13,7 @@ export const CommandRootSchema = z
 export type CommandRoot = z.infer<typeof CommandRootSchema>;
 
 // Output of the host shell parser. parseError:true is returned, never thrown.
-// FAIL-CLOSED (ledger §Z70): parseError:true or hasSubstitution:true means
+// Fail closed: parseError:true or hasSubstitution:true means
 // parser-uncertain -> the engine DENIES, non-YOLO-upgradable (never ask/allow).
 // roots is an array of CommandRoot OBJECTS (not bare strings) so per-root gating
 // can see each root's name/argv — this is what defeats `ls && rm -rf /`.
@@ -68,13 +68,12 @@ export const PermissionRuleSchema = z
     pattern: z.string(),
     effect: z.enum(['allow', 'ask', 'deny']),
     layer: z.enum(['managed', 'user', 'project']),
-    // §Z90: resolved absolute executable path the grant was approved for;
+    // Resolved absolute executable path the grant was approved for;
     // undefined for operator config rules + legacy grants (name-only match).
     identity: z.string().optional(),
   })
   .readonly();
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;
 
-// Structure doc §2 line 66 names this type `Rule` (shorthand); the canonical
-// export is PermissionRule (matches exec's rules.ts). Alias so both resolve.
+// Compatibility alias for consumers that use the shorter rule name.
 export type Rule = PermissionRule;

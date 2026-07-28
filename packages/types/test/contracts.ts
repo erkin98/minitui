@@ -1,6 +1,6 @@
 // Compile-time shape contracts for the public surface. surface.test.ts locks the
 // export NAMES; this file locks the SHAPES of load-bearing exported types so a
-// silent field/discriminant drift reds `tsc -p tsconfig.test.json` (finding C15).
+// silent field/discriminant drift reds `tsc -p tsconfig.test.json`.
 // Type-only: vitest ignores it (no `.test` suffix); tsc typechecks it under the
 // package's strict flags (tsconfig.test includes test/**/*.ts). No runtime code.
 import type { Pointer } from '../src/pointer.js';
