@@ -3,6 +3,15 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
+import { policyPlugin } from './config/eslint-policy.js';
+
+const noDynamicFunctionGlobal = [
+  'error',
+  {
+    name: 'Function',
+    message: 'Dynamic Function construction cannot hide a dependency or capability.',
+  },
+];
 
 // Local-only ignores (untracked working-copy trees). This checkout can double as a
 // multi-project workspace, so `eslint .` would otherwise walk many non-repo trees
@@ -25,7 +34,12 @@ export default tseslint.config(
       '**/dist-types/**',
       '**/node_modules/**',
       '**/*.tsbuildinfo',
+      // Hand-written ambient declarations (e.g. the runtime-leaf predicate types) are
+      // not part of any tsc project, so the type-aware project service can't lint them.
+      '**/*.d.mts',
+      '**/*.d.cts',
       'test/eslint-boundary-fixture/**',
+      'apps/eslint-policy-fixture/**',
       // Any local-only working-copy trees (absent in a clean clone) come from the
       // best-effort loader above; the rule set is untouched.
       ...localIgnores,
@@ -40,7 +54,7 @@ export default tseslint.config(
   ...tseslint.configs.recommendedTypeChecked,
   {
     files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
-    plugins: { import: importPlugin },
+    plugins: { import: importPlugin, minitui: policyPlugin },
     languageOptions: {
       parserOptions: {
         // Type-aware rules need the TS program. projectService (not `project`) is the
@@ -113,15 +127,21 @@ export default tseslint.config(
     },
   },
   {
-    // Exec-moat capability wall (AGENTS.md security invariant): ONLY packages/exec may
-    // import the subprocess / OS-sandbox / MCP-client specifiers. Enforced repo-wide on
-    // shipped SOURCE so a capability-wall breach reds at lint today — the plan-17 dist
-    // bundle-leak gate scans the built bundle (the stronger, later backstop); this is the
-    // cheap source-level companion. Scope is packages/*/src (the ship surface) only:
-    // tooling scripts (scripts/*.mjs) legitimately shell out and are intentionally out of
-    // scope. The three specifiers below are exec-ONLY across the whole product — no other
-    // package ever needs them — so an except-exec ban is correct for every future package.
-    files: ['packages/*/src/**/*.{ts,tsx,mts}'],
+    // The exec capability wall covers every shipped package and app source. Tooling scripts
+    // remain out of scope because repository maintenance commands may launch subprocesses.
+    files: [
+      'packages/*/src/**/*.{ts,tsx,mts}',
+      'apps/*/src/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/illegal-dynamic-capability.ts',
+      'test/eslint-boundary-fixture/illegal-nonliteral-load.ts',
+      'test/eslint-boundary-fixture/illegal-create-require-capability.ts',
+      'test/eslint-boundary-fixture/illegal-get-builtin-module.ts',
+      'test/eslint-boundary-fixture/illegal-module-export-capability.ts',
+      'test/eslint-boundary-fixture/illegal-process-export-capability.ts',
+      'test/eslint-boundary-fixture/illegal-computed-process-capability.ts',
+      'test/eslint-boundary-fixture/illegal-eval-capability.ts',
+      'test/eslint-boundary-fixture/illegal-implied-eval-capability.ts',
+    ],
     ignores: ['packages/exec/**'],
     rules: {
       'no-restricted-imports': [
@@ -153,6 +173,33 @@ export default tseslint.config(
           ],
         },
       ],
+      'minitui/no-restricted-capability-load': 'error',
+      'no-eval': 'error',
+      'no-implied-eval': 'error',
+      'no-restricted-globals': noDynamicFunctionGlobal,
+    },
+  },
+  {
+    files: [
+      'packages/sanitizer/src/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
+    ],
+    rules: {
+      'minitui/sanitizer-local-imports-only': 'error',
+    },
+  },
+  {
+    files: [
+      '**/*.test.{ts,tsx}',
+      '**/*.spec.{ts,tsx}',
+      '**/test/**/*.{ts,tsx}',
+      '**/__tests__/**/*.{ts,tsx}',
+    ],
+    rules: {
+      'minitui/no-vitest-replacement-api': 'error',
+      'no-eval': 'error',
+      'no-implied-eval': 'error',
+      'no-restricted-globals': noDynamicFunctionGlobal,
     },
   },
   {
