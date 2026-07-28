@@ -1,5 +1,6 @@
 import type { JsonValue } from '../state/json-pointer.js';
 import type { JsonPatchOp } from '../state/patch-apply.js';
+import type { AppSpec } from '@minitui/types';
 
 /** The internal event contract — one union, three consumers (feed / store / channels). */
 export type AppEvent =
@@ -19,11 +20,12 @@ export type AppEvent =
       content: string;
       isError: boolean;
       error?: string | undefined;
+      denied?: boolean | undefined;
     }
   | { kind: 'state-snapshot'; snapshot: JsonValue }
   | { kind: 'state-delta'; delta: readonly JsonPatchOp[] }
   | { kind: 'visibility'; note: string; visClass: 'modelVisible' | 'modelOnly' | 'localOnly' }
-  | { kind: 'activity-snapshot'; spec: JsonValue }
+  | { kind: 'activity-snapshot'; spec: AppSpec }
   | { kind: 'passthrough'; rawType: string };
 
 export type AppEventKind = AppEvent['kind'];

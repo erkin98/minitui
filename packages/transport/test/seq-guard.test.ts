@@ -34,10 +34,9 @@ describe('seq-guard', () => {
     expect(g.checkDelta(1)).toEqual({ ok: false, reason: 'missed-baseline' });
   });
 
-  // D03: a non-finite seq (NaN/±Infinity) must be rejected, never stored as the
-  // watermark — NaN <= last is always false, so the old code passed it AND poisoned
-  // `last`, silently DISABLING every subsequent ordering check.
-  it('rejects a non-finite delta seq without poisoning the watermark (D03)', () => {
+  // A non-finite sequence must never become the watermark because every later
+  // finite comparison would be false and bypass the guard.
+  it('rejects a non-finite delta sequence without poisoning the watermark', () => {
     const g = createSeqGuard();
     g.onSnapshot(1);
     expect(g.checkDelta(NaN)).toEqual({ ok: false, reason: 'out-of-order' });

@@ -25,7 +25,7 @@ describe('applyStatePatch', () => {
   });
 
   it('rejects a copy/move whose `from` reads a non-own (inherited) member', () => {
-    // patch-01: banPrototypeModifications only bans WRITES; a copy/move `from` READS the pointer,
+    // banPrototypeModifications only bans writes; a copy/move `from` reads the pointer,
     // so `/constructor` (or any inherited member) would return a live host function and inject it
     // into JsonValue-typed canonical state. Reject before applying.
     for (const from of ['/constructor', '/toString', '/valueOf']) {
@@ -54,7 +54,7 @@ describe('applyStatePatch', () => {
   });
 
   it('does not mutate a patch op value object even when the patch fails', () => {
-    // C16: fast-json-patch inserts op.value BY REFERENCE, so a later op mutating that path reaches
+    // fast-json-patch inserts op.value by reference, so a later op mutating that path reaches
     // back into the caller-owned operand. applyStatePatch must clone each op before applying.
     const operandValue = { n: 1 };
     expect(() =>
@@ -68,8 +68,7 @@ describe('applyStatePatch', () => {
   });
 
   it('reports the failing op index in PatchError.opIndex', () => {
-    // C16: fast-json-patch hardcodes 0 into its internal validator() calls, so err.index is wrong.
-    // applyStatePatch tracks the real per-op index itself. This 3-op patch fails at index 2.
+    // fast-json-patch reports the wrong internal index, so this wrapper tracks each operation.
     let caught: unknown;
     try {
       applyStatePatch({ base: 1 }, [
@@ -92,5 +91,67 @@ describe('applyStatePatch', () => {
 
   it('rejects a non-array delta with PatchError', () => {
     expect(() => applyStatePatch({}, 'not-an-array')).toThrow(PatchError);
+  });
+
+  it('parses the complete patch schema before cloning or applying and reports its issue index', () => {
+    let caught: unknown;
+    try {
+      applyStatePatch({}, [
+        { op: 'add', path: '/ok', value: 1 },
+        { op: 'add', path: '/bad', value: 1n },
+      ]);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PatchError);
+    expect((caught as PatchError).opIndex).toBe(1);
+    expect(() => applyStatePatch({}, [{ op: 'replace', path: '/x', value: undefined }])).toThrow(
+      PatchError,
+    );
+  });
+
+  it('rejects non-canonical and unsafe array indices for every target operation', () => {
+    for (const path of ['/items/01', '/items/+1', '/items/9007199254740992']) {
+      expect(() => applyStatePatch({ items: [1, 2] }, [{ op: 'add', path, value: 3 }])).toThrow(
+        PatchError,
+      );
+      expect(() => applyStatePatch({ items: [1, 2] }, [{ op: 'remove', path }])).toThrow(
+        PatchError,
+      );
+    }
+  });
+
+  it('rejects inherited or missing replace targets instead of treating them as members', () => {
+    expect(() => applyStatePatch({}, [{ op: 'replace', path: '/toString', value: 1 }])).toThrow(
+      PatchError,
+    );
+    expect(() => applyStatePatch({}, [{ op: 'replace', path: '/missing', value: 1 }])).toThrow(
+      PatchError,
+    );
+  });
+
+  it('rejects a move from an ancestor into its strict descendant, including the root', () => {
+    expect(() =>
+      applyStatePatch({ a: { b: 1 } }, [{ op: 'move', from: '/a', path: '/a/new' }]),
+    ).toThrow(PatchError);
+    expect(() => applyStatePatch({ a: 1 }, [{ op: 'move', from: '', path: '/child' }])).toThrow(
+      PatchError,
+    );
+  });
+
+  it('rejects dirty or reserved path tokens even beyond a missing ancestor', () => {
+    for (const path of ['/missing/__proto__', '/safe/na\u001b[31mme']) {
+      expect(() => applyStatePatch({}, [{ op: 'add', path, value: 1 }])).toThrow(PatchError);
+    }
+  });
+
+  it('preflights each operation against the evolving private document', () => {
+    expect(
+      applyStatePatch({}, [
+        { op: 'add', path: '/node', value: {} },
+        { op: 'add', path: '/node/value', value: 1 },
+        { op: 'replace', path: '/node/value', value: 2 },
+      ]),
+    ).toEqual({ node: { value: 2 } });
   });
 });

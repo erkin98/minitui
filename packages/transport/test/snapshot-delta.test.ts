@@ -8,7 +8,7 @@ function nested(n: number): JsonValue {
   return v;
 }
 
-// snapshot-delta imports @minitui/sanitizer DIRECTLY (§Z11) — the chokepoint is
+// snapshot-delta imports @minitui/sanitizer directly so the chokepoint is
 // machine-checkable, not an injected closure. These tests drive the REAL sanitizer:
 // raw model ANSI/CSI bytes must never survive the transport state-seam.
 const ESC = '\u001b'; // real ESC byte (0x1b), the CSI introducer the sanitizer strips
@@ -37,17 +37,23 @@ describe('snapshot-delta sanitize ingress', () => {
     expect(next).toEqual({ progress: 73 });
   });
 
-  it('builds own data properties so a JSON-parsed __proto__ key cannot pollute the clone prototype (§Z100)', () => {
-    // Positive control for the defense-in-depth safe clone: a raw model object carrying an own
-    // `__proto__` key must clone into OWN data properties, never through the prototype setter.
-    const out = foldSnapshot(JSON.parse('{"__proto__":{"x":1},"a":2}')) as Record<string, unknown>;
-    const proto: unknown = Object.getPrototypeOf(out);
-    expect(proto === Object.prototype || proto === null).toBe(true); // prototype not swapped
-    expect(out.x).toBeUndefined(); // no inherited pollution on the clone
-    expect(({} as Record<string, unknown>).x).toBeUndefined(); // global Object.prototype clean
+  it('rejects reserved state keys rather than copying or rewriting identity', () => {
+    expect(() => foldSnapshot(JSON.parse('{"__proto__":{"x":1},"a":2}'))).toThrow(/key/i);
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
   });
 
-  it('fails closed with a typed error (never a bare RangeError) past the depth ceiling (PIN-DEPTH)', () => {
+  it('rejects state keys that sanitization would rewrite', () => {
+    expect(() => foldSnapshot({ [`na${ESC}[31mme`]: 'value' })).toThrow(/canonical/i);
+  });
+
+  it('exports a one-argument boundary that ignores attempted depth injection', () => {
+    expect(sanitizeStrings.length).toBe(1);
+    expect(() => Reflect.apply(sanitizeStrings, undefined, [nested(400), -1000])).toThrow(
+      /nesting depth/,
+    );
+  });
+
+  it('fails closed with a typed error past the depth ceiling', () => {
     // within the 256-level ceiling: a normal deep document is cleaned without complaint
     expect(() => foldSnapshot(nested(200))).not.toThrow();
     // beyond it: a clean typed rejection the store can catch and drop, not an uncaught stack crash
@@ -65,7 +71,7 @@ describe('snapshot-delta sanitize ingress', () => {
     }
   });
 
-  it('sanitizes a `test`-op value on the same footing as stored state so a precondition still matches (by design, patch-03)', () => {
+  it('sanitizes a `test`-op value on the same footing as stored state so a precondition still matches', () => {
     // Canonical state is always stored sanitized. A `test` precondition carrying the same raw wire
     // bytes must therefore be sanitized too, or it could never match its own (already-stripped)
     // state — the RFC-6902 comparison stays consistent, and the guarded `replace` proceeds.

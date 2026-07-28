@@ -7,6 +7,7 @@ import {
   type ToolCallResultEvent,
   type ToolCallStartEvent,
 } from '@ag-ui/core';
+import { JsonObjectSchema } from '@minitui/types';
 
 /**
  * The AG-UI tool-call lifecycle for one uplinked UI action, in emission order:
@@ -19,11 +20,19 @@ export type UplinkEvents = readonly BaseEvent[];
 /** A UI action becomes a synthetic tool-call lifecycle keyed to one toolCallId. */
 export function buildActionUplink(args: {
   actionName: string;
-  params: Record<string, unknown>;
-  result: { content: string; isError: boolean };
+  params: unknown;
+  result: {
+    content: string;
+    isError: boolean;
+    error?: string | undefined;
+    denied?: boolean | undefined;
+  };
   toolCallId?: string;
   messageId?: string;
 }): UplinkEvents {
+  const params = JsonObjectSchema.parse(args.params);
+  const paramsJson = JSON.stringify(params);
+  if (typeof paramsJson !== 'string') throw new TypeError('action params are not JSON');
   // No module-level mutable counter (immutability constraint): a per-call UUID is
   // unique without shared state. randomUUID is sync and dep-free on Node 22.
   const toolCallId = args.toolCallId ?? `uplink-${randomUUID()}`;
@@ -34,12 +43,11 @@ export function buildActionUplink(args: {
     toolCallId,
     toolCallName: args.actionName,
   };
-  // Params ride the ARGS delta (the AG-UI wire for tool arguments) — the minitui
-  // TOOL_CALL_START has no args field, so the old `args` key was silently stripped.
+  // Params ride the ARGS delta because TOOL_CALL_START has no arguments field.
   const argsEvent: ToolCallArgsEvent = {
     type: EventType.TOOL_CALL_ARGS,
     toolCallId,
-    delta: JSON.stringify(args.params),
+    delta: paramsJson,
   };
   const end: ToolCallEndEvent = {
     type: EventType.TOOL_CALL_END,
@@ -47,16 +55,16 @@ export function buildActionUplink(args: {
   };
   const result: ToolCallResultEvent = {
     type: EventType.TOOL_CALL_RESULT,
-    // messageId is REQUIRED by AG-UI's ToolCallResultEventSchema; the old result
-    // omitted it and failed the parse. Caller-supplied when the message context is
-    // known, else synthesized.
+    // AG-UI requires messageId; callers may supply the surrounding message identity.
     messageId,
     toolCallId,
     content: args.result.content,
-    // ponytail: isError rides as a passthrough extra — AG-UI's ToolCallResultEvent
-    // has no structured error field, and its schema is .passthrough() so the flag
-    // survives a real parse without a cross-package schema change.
+    // AG-UI has no structured error field, so minitui error metadata uses the
+    // schema's passthrough extension surface.
     isError: args.result.isError,
+    toolName: args.actionName,
+    ...(args.result.error === undefined ? {} : { error: args.result.error }),
+    ...(args.result.denied === undefined ? {} : { denied: args.result.denied }),
   };
 
   return [start, argsEvent, end, result];

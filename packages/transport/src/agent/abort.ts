@@ -5,8 +5,14 @@ export function createAbort(parent?: AbortSignal): {
 } {
   const controller = new AbortController();
   if (parent) {
-    if (parent.aborted) controller.abort();
-    else parent.addEventListener('abort', () => controller.abort(), { once: true });
+    if (parent.aborted) {
+      controller.abort(parent.reason);
+    } else {
+      const forwardAbort = () => controller.abort(parent.reason);
+      const detachParent = () => parent.removeEventListener('abort', forwardAbort);
+      parent.addEventListener('abort', forwardAbort, { once: true });
+      controller.signal.addEventListener('abort', detachParent, { once: true });
+    }
   }
   return { controller, signal: controller.signal };
 }

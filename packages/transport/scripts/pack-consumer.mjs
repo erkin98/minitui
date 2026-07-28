@@ -4,7 +4,7 @@
 // source. Transport is the first package with internal workspace deps, so the two
 // leaf tarballs (@minitui/types, @minitui/sanitizer) are packed alongside and pinned
 // via pnpm overrides — their 0.0.0 versions are not on any registry. Permanent (run
-// by the package gate + the pre-publish CI lane), not review-only. §Z102.
+// by the package gate + the pre-publish CI lane).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -18,6 +18,17 @@ const die = (m) => {
   throw new Error(m);
 };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const concreteSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const assertConcreteDependencies = (dependencies, label) => {
+  if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) {
+    die(label + ' dependencies are not an object');
+  }
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (typeof version !== 'string' || !concreteSemver.test(version)) {
+      die(label + ' dependency ' + name + ' is not concrete: ' + String(version));
+    }
+  }
+};
 const pkgDir = fileURLToPath(new URL('..', import.meta.url));
 const packagesDir = resolve(pkgDir, '..');
 // Repo root is the single source of truth for the Node floor + the pinned pnpm — read
@@ -39,6 +50,14 @@ const pack = (dir) => {
 };
 
 try {
+  let positiveControlRejected = false;
+  try {
+    assertConcreteDependencies({ '@minitui/sanitizer': 'workspace:*' }, 'positive control');
+  } catch {
+    positiveControlRejected = true;
+  }
+  if (!positiveControlRejected) die('concrete-dependency positive control did not bite');
+
   // 1. Pack transport + its two internal leaf deps (workspace: rewritten to concrete on pack).
   const tgz = pack(pkgDir);
   const typesTgz = pack(join(packagesDir, 'types'));
@@ -55,10 +74,7 @@ try {
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
   );
-  if (!/^\d+\.\d+\.\d+/.test(m.dependencies?.rxjs ?? ''))
-    die('rxjs not published concrete: ' + m.dependencies?.rxjs);
-  if (!/^\d+\.\d+\.\d+/.test(m.dependencies?.['@minitui/types'] ?? ''))
-    die('@minitui/types not rewritten concrete: ' + m.dependencies?.['@minitui/types']);
+  assertConcreteDependencies(m.dependencies, 'packed manifest');
   // Engines floor checked by VALUE against the repo floor (not mere presence): a
   // weakened '*'/'>=18' or a dropped range reds instead of silently passing.
   if (m.engines?.node !== nodeFloor)
@@ -98,7 +114,7 @@ try {
     JSON.stringify({
       // lib ES2023 (NO dom — mirrors the package's own tsconfig.base) so an ambient
       // Node global like AbortSignal CANNOT resolve from lib.dom; types:[] excludes
-      // ambient @types/*. Without these two the gate is VACUOUS (§Z32): lib.dom would
+      // ambient @types/*. Without these two the gate is vacuous: lib.dom would
       // supply AbortSignal and hide the closure gap.
       compilerOptions: {
         module: 'NodeNext',

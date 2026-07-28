@@ -5,15 +5,15 @@ import { toAppEvent } from '../events/to-app-event.js';
 import type { AppEvent } from '../events/app-event.js';
 import { subscribeToObservable } from './subscribe.js';
 import { createAbort } from './abort.js';
+import { formatUnknown } from '../format-unknown.js';
 import type { AgentPort, RunHandle } from './agent-port.js';
 
-/** §Z30: ceiling for the remote Observable->AsyncGenerator buffer — a fast remote producer plus a slow
- *  consumer must not grow the AppEvent[] backlog unboundedly. Mirrors the agent-core queue mark. */
+/** Ceiling for the remote Observable-to-AsyncGenerator buffer. */
 const REMOTE_PUMP_HIGH_WATER_MARK = 1024;
 
 /**
  * AgentPort over @ag-ui/client HttpAgent (POST + SSE). Reserved for a genuinely-remote BFF.
- * Restores the AbstractAgent.runAgent() pipeline stages a bare run() skips (ledger G12):
+ * Restores the AbstractAgent.runAgent() pipeline stages a bare run() skips:
  * transformChunks reassembles TEXT_MESSAGE_CHUNK/TOOL_CALL_CHUNK into *_START/*_CONTENT/
  * *_ARGS/*_END, and verifyEvents enforces protocol order — a violation ERRORS the stream,
  * surfacing here as a retriable run-error. Then routes through the SAME toAppEvent
@@ -37,7 +37,7 @@ export function createAgUiAgentPort(
           w({ value: e, done: false });
           return;
         }
-        // §Z30: BOUND the buffer — a fast remote producer + a slow consumer must not grow AppEvent[]
+        // Bound the buffer so a fast producer and slow consumer cannot grow AppEvent[]
         // unboundedly. Drop OLDEST past the ceiling and surface it through diagnostics; on the remote
         // path a dropped STATE_DELTA forces full resync — no seq-guard runs on this pump in Slice 1
         // (only local-agent has one); Slice-2 must add seq metadata + a seq-guard here before this
@@ -74,7 +74,7 @@ export function createAgUiAgentPort(
         onError: (e) => {
           emit({
             kind: 'run-error',
-            message: e instanceof Error ? e.message : String(e),
+            message: formatUnknown(e),
             retriable: true,
           });
           finish();

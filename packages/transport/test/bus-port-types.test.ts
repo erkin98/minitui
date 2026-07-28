@@ -3,13 +3,13 @@ import { createAppBus } from '../src/bus/app-bus.js';
 import type { BusPort } from '../src/bus/bus-port.js';
 import type { Topic } from '../src/bus/topics.js';
 
-// C17: BusPort.publish must correlate a topic with its payload even when the caller holds the topic
-// in a widened `Topic` variable rather than a literal. The pre-fix generic signature
+// BusPort.publish must correlate a topic with its payload even when the caller holds the topic
+// in a widened `Topic` variable rather than a literal. A generic signature
 // `<T extends Topic>(topic: T, payload: TopicPayloads[T])` inferred `T = Topic` for a widened topic,
 // collapsing `payload` to the union of every payload type (which includes `string`), so a raw
 // string was accepted for 'error'. This is a compile-time proof — the value assert keeps vitest
 // happy; the real gate is `tsc -p tsconfig.test.json` (part of `pnpm typecheck`).
-describe('BusPort topic/payload correlation (C17)', () => {
+describe('BusPort topic/payload correlation', () => {
   it('rejects a mismatched payload for a widened topic (publish)', () => {
     type PublishParams = Parameters<BusPort['publish']>;
     // A widened topic paired with a raw-string payload.
