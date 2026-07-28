@@ -29,7 +29,7 @@ export const ExecSurfaceSchema = z
   .readonly();
 export type ExecSurface = z.infer<typeof ExecSurfaceSchema>;
 
-// The on-disk manifest.json (design §10) — discovery index + relaunch metadata.
+// The on-disk manifest.json discovery index and relaunch metadata.
 export const ManifestSchema = z
   .object({
     title: z.string(),

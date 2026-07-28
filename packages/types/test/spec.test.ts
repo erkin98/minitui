@@ -43,7 +43,7 @@ describe('AppSpec', () => {
   it('rejects an element whose props value is undefined', () => {
     expect(SpecElementSchema.safeParse({ type: 'T', props: { a: undefined } }).success).toBe(false);
   });
-  it('strips an unknown top-level key from AppSpec and SpecElement (§Z105 strip-by-design, C15)', () => {
+  it('strips an unknown top-level key from AppSpec and SpecElement', () => {
     const spec = AppSpecSchema.parse({
       root: 'a',
       elements: { a: { type: 'Box', props: {} } },
@@ -55,7 +55,7 @@ describe('AppSpec', () => {
   });
 });
 
-describe('dynamic-key containers reject reserved keys (ledger §Z100 AMEND)', () => {
+describe('dynamic-key containers reject reserved keys', () => {
   const reserved = ['__proto__', 'constructor', 'prototype'];
   it('ActionBinding.params rejects a reserved param key and names it in issue.path', () => {
     for (const k of reserved) {
@@ -100,7 +100,7 @@ describe('dynamic-key containers reject reserved keys (ledger §Z100 AMEND)', ()
       AppSpecSchema.safeParse({ root: 'a', elements: { a: { type: 'Box', props: {} } } }).success,
     ).toBe(true);
   });
-  it('SpecElement.on and .watch reject a reserved binding key (same guardedRecord factory, C15)', () => {
+  it('SpecElement.on and .watch reject a reserved binding key', () => {
     for (const field of ['on', 'watch']) {
       for (const k of reserved) {
         const r = SpecElementSchema.safeParse(
@@ -121,18 +121,24 @@ describe('dynamic-key containers reject reserved keys (ledger §Z100 AMEND)', ()
   });
 });
 
-// PIN-C14 (fold): the guarded dynamic containers are shallow-READONLY — the
-// `guardedRecord(...).readonly()` shape (pointer.ts) freezes the top container,
-// consistent with the codebase's immutability principle. Lock Object.isFrozen so
-// dropping `.readonly()` reds this gate (C14 decision, ratified in the ledger).
-describe('dynamic-key containers are shallow-frozen (PIN-C14)', () => {
-  it('ActionBinding.params / SpecElement.props / AppSpec.elements parse to frozen containers', () => {
+// Guarded dynamic containers are shallow-readonly: their top container is
+// frozen while values retain the mutability defined by their own schema.
+describe('dynamic-key containers are shallow-frozen', () => {
+  it('ActionBinding.params / SpecElement props/on/watch / AppSpec.elements parse to frozen containers', () => {
     expect(
       Object.isFrozen(ActionBindingSchema.parse({ action: 'm', params: { codec: 'h264' } }).params),
     ).toBe(true);
     expect(
       Object.isFrozen(SpecElementSchema.parse({ type: 'T', props: { label: 'ok' } }).props),
     ).toBe(true);
+    const element = SpecElementSchema.parse({
+      type: 'T',
+      props: {},
+      on: { press: { action: 'x' } },
+      watch: { '/state': { action: 'x' } },
+    });
+    expect(Object.isFrozen(element.on)).toBe(true);
+    expect(Object.isFrozen(element.watch)).toBe(true);
     expect(
       Object.isFrozen(
         AppSpecSchema.parse({ root: 'a', elements: { a: { type: 'Box', props: {} } } }).elements,

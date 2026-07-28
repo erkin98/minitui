@@ -86,11 +86,11 @@ describe('ApprovalMode / Reply / Rule', () => {
       layer: 'user',
     });
     expect(rule.layer).toBe('user');
-    // Rule is an alias of PermissionRule (structure doc §2 line 66 shorthand)
+    // Rule is the compatibility alias of PermissionRule.
     const aliased: Rule = rule;
     expect(aliased.effect).toBe('allow');
   });
-  it('round-trips the optional §Z90 identity path and omits it when absent (C15)', () => {
+  it('round-trips the optional executable identity and omits it when absent', () => {
     const withId = PermissionRuleSchema.parse({
       pattern: '/opt/bin/ffmpeg',
       effect: 'allow',

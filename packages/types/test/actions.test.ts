@@ -38,7 +38,7 @@ describe('ActionRequest', () => {
     };
     expect(ActionRequestSchema.parse(req)).toEqual(req);
   });
-  it('rejects a reserved params key at the guardedRecord boundary (ledger §Z100 AMEND, C15)', () => {
+  it('rejects a reserved params key at the guardedRecord boundary', () => {
     for (const k of ['__proto__', 'constructor', 'prototype']) {
       const r = ActionRequestSchema.safeParse(
         JSON.parse(`{"actionName":"m","elementKey":"e","params":{${JSON.stringify(k)}:1}}`),
@@ -50,6 +50,17 @@ describe('ActionRequest', () => {
       ActionRequestSchema.safeParse({ actionName: 'm', elementKey: 'e', params: { codec: 1 } })
         .success,
     ).toBe(true);
+  });
+  it('parses params to a shallow-frozen top container', () => {
+    const nested = { mutable: true };
+    const parsed = ActionRequestSchema.parse({
+      actionName: 'm',
+      elementKey: 'e',
+      params: { nested },
+    });
+    expect(Object.isFrozen(parsed.params)).toBe(true);
+    expect(parsed.params.nested).toBe(nested);
+    expect(Object.isFrozen(nested)).toBe(false);
   });
 });
 

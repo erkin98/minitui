@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import {
+  guardedRecord,
   JsonValueSchema,
   PointerSchema,
   JsonPatchSchema,
@@ -18,7 +20,7 @@ describe('JsonValue', () => {
     expect(JsonValueSchema.safeParse(undefined).success).toBe(false);
     expect(JsonValueSchema.safeParse(() => 1).success).toBe(false);
   });
-  it('rejects an own __proto__/constructor/prototype member — enumerable or not — and names it in issue.path (ledger §Z100 AMEND)', () => {
+  it('rejects reserved own members, enumerable or not, and reports their path', () => {
     const hostile = JSON.parse('{"__proto__":{"polluted":1},"safe":2}');
     const r = JsonValueSchema.safeParse(hostile);
     expect(r.success).toBe(false);
@@ -39,19 +41,113 @@ describe('JsonValue', () => {
     // Positive control: a legit dynamic key is accepted (the guard doesn't over-reject).
     expect(JsonValueSchema.safeParse({ safe: 1, click: 'ok' }).success).toBe(true);
   });
-  it('JsonValueSchema deep-freezes nested containers (ledger §Z100)', () => {
+  it('deep-freezes nested JsonValue containers', () => {
     const deepFrozen = (x: unknown): boolean =>
       typeof x !== 'object' || x === null
         ? true
         : Object.isFrozen(x) && Object.values(x).every(deepFrozen);
     expect(deepFrozen(JsonValueSchema.parse({ a: { b: [1, 2] }, c: ['x'] }))).toBe(true);
   });
+
+  it('is total for unsupported and hostile object shapes without invoking accessors', () => {
+    let getterCalls = 0;
+    const accessor = {};
+    Object.defineProperty(accessor, 'value', {
+      enumerable: true,
+      get() {
+        getterCalls++;
+        return 1;
+      },
+    });
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('reflection denied');
+        },
+      },
+    );
+    class RecordLike {
+      readonly value = 1;
+    }
+    const candidates: readonly unknown[] = [
+      new Uint8Array([1]),
+      Promise.resolve(1),
+      new Date(0),
+      new RecordLike(),
+      accessor,
+      hostile,
+    ];
+    for (const candidate of candidates) {
+      expect(() => JsonValueSchema.safeParse(candidate)).not.toThrow();
+      expect(JsonValueSchema.safeParse(candidate).success).toBe(false);
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it('accepts only dense, data-property JSON trees and rejects repeated identity', () => {
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    const symbolMember = { ok: 1 };
+    Object.defineProperty(symbolMember, Symbol('hidden'), { value: 2, enumerable: true });
+    const hiddenMember = { ok: 1 };
+    Object.defineProperty(hiddenMember, 'hidden', { value: 2, enumerable: false });
+    const shared = { leaf: 1 };
+    const aliased = { left: shared, right: shared };
+    for (const candidate of [sparse, symbolMember, hiddenMember, aliased]) {
+      expect(() => JsonValueSchema.safeParse(candidate)).not.toThrow();
+      expect(JsonValueSchema.safeParse(candidate).success).toBe(false);
+    }
+    const nullPrototype = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(nullPrototype, 'safe', { value: [1, 2], enumerable: true });
+    expect(JsonValueSchema.parse(nullPrototype)).toEqual({ safe: [1, 2] });
+  });
+
+  it('rejects non-finite numbers as non-JSON scalars', () => {
+    expect(JsonValueSchema.safeParse(Number.NaN).success).toBe(false);
+    expect(JsonValueSchema.safeParse(Number.POSITIVE_INFINITY).success).toBe(false);
+  });
 });
 
-// PIN-DEPTH (fold): a JSON value nested past the 256 ceiling — or cyclic — must
-// fail CLOSED with a validation issue at the boundary, NEVER an uncaught
-// RangeError through the declared-total safeParse contract (finding C07).
-describe('JsonValue depth ceiling (PIN-DEPTH)', () => {
+describe('guardedRecord shallow-readonly contract', () => {
+  it('freezes the parsed top record while preserving unknown value identity and mutability', () => {
+    const nested = { mutable: true };
+    const parsed = guardedRecord(z.unknown()).parse({ nested });
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(parsed.nested).toBe(nested);
+    expect(Object.isFrozen(nested)).toBe(false);
+  });
+
+  it('is total and descriptor-safe for hostile record inputs', () => {
+    let getterCalls = 0;
+    const accessor = {};
+    Object.defineProperty(accessor, 'value', {
+      enumerable: true,
+      get() {
+        getterCalls++;
+        return 1;
+      },
+    });
+    const throwingProxy = new Proxy(
+      { value: 1 },
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error('descriptor denied');
+        },
+      },
+    );
+    const schema = guardedRecord(z.unknown());
+    for (const candidate of [accessor, throwingProxy, new Uint8Array([1]), Promise.resolve(1)]) {
+      expect(() => schema.safeParse(candidate)).not.toThrow();
+      expect(schema.safeParse(candidate).success).toBe(false);
+    }
+    expect(getterCalls).toBe(0);
+  });
+});
+
+// Values beyond the nesting ceiling and cyclic graphs fail with validation
+// issues rather than leaking RangeError through safeParse.
+describe('JsonValue depth ceiling', () => {
   const nest = (depth: number): unknown => {
     let v: unknown = 0;
     for (let i = 0; i < depth; i++) v = { a: v };
@@ -94,9 +190,9 @@ describe('Pointer', () => {
     const p: Pointer = PointerSchema.parse('/merge/progress');
     expect(p).toBe('/merge/progress');
   });
-  it('accepts a malformed ~ escape by design (loose partial brand, ledger §Z11)', () => {
+  it('accepts a malformed ~ escape by design under the loose partial brand', () => {
     // RFC-6901's ~0/~1 escape grammar is intentionally NOT enforced — locking the
-    // loose acceptance so it reads as a settled decision, not an oversight (C25).
+    // Loose acceptance is part of this boundary's compatibility contract.
     expect(PointerSchema.safeParse('/bad~2escape').success).toBe(true);
     expect(PointerSchema.safeParse('/trailing~').success).toBe(true);
   });

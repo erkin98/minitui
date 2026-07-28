@@ -8,7 +8,7 @@ import {
 } from '../src/events.js';
 
 describe('EventType', () => {
-  it('is EXACTLY the active AG-UI families minitui consumes, in order (C15)', () => {
+  it('is exactly the active AG-UI families minitui consumes, in order', () => {
     // Exact-equality (not containment): a dropped or reordered family reds this,
     // and it locks the vocabulary the AgentEvent discriminants must mirror.
     expect(EVENT_TYPES).toEqual([
@@ -35,7 +35,7 @@ describe('AgentEvent', () => {
       false,
     );
   });
-  it('parses a RUN_FINISHED with optional usage token counts (minitui-owned, ledger §Z57-A)', () => {
+  it('parses a RUN_FINISHED with optional minitui-owned usage token counts', () => {
     expect(AgentEventSchema.parse({ type: 'RUN_FINISHED', threadId: 't1', runId: 'r1' }).type).toBe(
       'RUN_FINISHED',
     );
@@ -47,7 +47,7 @@ describe('AgentEvent', () => {
     };
     expect(AgentEventSchema.parse(ev)).toEqual(ev);
   });
-  it('rejects negative, fractional, and unsafe-integer usage token counts (ledger §Z57-A)', () => {
+  it('rejects negative, fractional, and unsafe-integer usage token counts', () => {
     const base = { type: 'RUN_FINISHED', threadId: 't1', runId: 'r1' } as const;
     expect(
       AgentEventSchema.safeParse({ ...base, usage: { inputTokens: -1, outputTokens: 0 } }).success,
@@ -65,7 +65,7 @@ describe('AgentEvent', () => {
       AgentEventSchema.safeParse({ ...base, usage: { inputTokens: 0, outputTokens: 12 } }).success,
     ).toBe(true);
   });
-  it('TokenUsageSchema itself rejects negative/fractional counts and accepts valid ones (ledger §Z103 positive control)', () => {
+  it('TokenUsageSchema rejects invalid counts and accepts valid ones', () => {
     expect(TokenUsageSchema.safeParse({ inputTokens: -1, outputTokens: 0 }).success).toBe(false);
     expect(TokenUsageSchema.safeParse({ inputTokens: 1.5, outputTokens: 0 }).success).toBe(false);
     expect(TokenUsageSchema.safeParse({ inputTokens: 12, outputTokens: 34 }).success).toBe(true);
@@ -77,7 +77,7 @@ describe('AgentEvent', () => {
     };
     expect(AgentEventSchema.parse(ev)).toEqual(ev);
   });
-  it('parses TOOL_CALL_START via toolCallName; rejects a MISSING name; DROPS a stray toolName alias (ledger §Z105)', () => {
+  it('parses TOOL_CALL_START via toolCallName and strips a stray toolName alias', () => {
     const ev: AgentEvent = {
       type: 'TOOL_CALL_START',
       toolCallId: 'c1',
@@ -114,8 +114,8 @@ describe('AgentEvent', () => {
       AgentEventSchema.parse({ type: 'RUN_ERROR', message: 'overflow', code: 'CTX_OVERFLOW' }).type,
     ).toBe('RUN_ERROR');
   });
-  it('preserves the tool observation shape incl. the optional denied bit (ledger §Z28/§N)', () => {
-    // The model-facing observation (agentObservation, plan 11) rides TOOL_CALL_RESULT — its
+  it('preserves the tool observation shape including the optional denied bit', () => {
+    // The model-facing observation (agentObservation) rides TOOL_CALL_RESULT — its
     // toolName/error/denied extensions must SURVIVE parse so a host permission-gate refusal stays
     // distinguishable from an execution failure (not flattened into error text).
     const ev: AgentEvent = {

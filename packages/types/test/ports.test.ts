@@ -53,7 +53,7 @@ describe('executor ports', () => {
     await mcp.teardown();
   });
 
-  it('ExecEvent covers the four streamed variants at value level (C15 shape witness)', () => {
+  it('ExecEvent covers the four streamed variants at value level', () => {
     // Constructing each variant proves the exported shape at value level — a drift
     // in ExecEvent's discriminants or fields reds tsc here (surface golden sees names only).
     const evs: ExecEvent[] = [
