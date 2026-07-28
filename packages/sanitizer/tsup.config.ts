@@ -3,9 +3,9 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
-  // composite:false — under the composite base, dts:true reds TS6307 and silently
-  // emits no .d.ts (§Z97). The banner closes the published declaration graph
-  // (§Z80 addendum): sanitizeStream's public return type names the ambient
+  // composite:false avoids TS6307 and guarantees declaration emission under the
+  // composite source project. The banner closes the published declaration graph:
+  // sanitizeStream's public return type names the ambient
   // TransformStream, and a strict consumer (types:[] lib:[ES2023]
   // skipLibCheck:false) has no automatic @types inclusion — the reference
   // resolves @types/node from THIS package's own dependencies (why @types/node
@@ -17,5 +17,6 @@ export default defineConfig({
     banner: '/// <reference types="node" />',
   },
   clean: true,
+  metafile: true,
   target: 'node22',
 });

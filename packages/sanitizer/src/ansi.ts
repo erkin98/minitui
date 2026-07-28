@@ -1,35 +1,13 @@
-// ANSI / control-character strip. Built once at module scope (strip-ansi pattern):
-// the RegExp is compiled a single time, and a cheap ESC/C1/control pre-check
-// (hasEscape) skips the replace entirely for the common all-printable case.
+import { stripControlStrings } from './osc.js';
+
+// ANSI / control-character strip. A cheap ESC/C1/control pre-check skips the
+// scan entirely for the common all-printable case.
 // Grammar mirrors ink's reference tokenizer (repos/ink/src/ansi-tokenizer.ts):
 // string sequences have ESC-form AND C1-form introducers, ST is ESC \ or the
 // C1 ST 0x9c, and BEL (0x07) terminates OSC ONLY — in DCS/PM/APC/SOS it is data.
 
 // C0 controls that are layout-safe and must survive: TAB, LF, CR.
 export const PRESERVE_C0: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
-
-// String Terminator: ESC \ or the 8-bit C1 ST (0x9c).
-const ST = '(?:\\x1b\\\\|\\x9c)';
-
-// String-parameter sequences, both introducer forms:
-//   OSC  ESC ] / 0x9d   — terminated by ST or BEL
-//   DCS  ESC P / 0x90, PM ESC ^ / 0x9e, APC ESC _ / 0x9f, SOS ESC X / 0x98
-//                       — terminated by ST ONLY (a BEL in the payload is data)
-// osc.ts runs FIRST and resolves the dangerous ones fail-closed; anything that
-// survives to here (e.g. an allowed OSC 8 link in the default path) must be
-// removed as a WHOLE span — never matched as `ESC] + final byte`, which would
-// orphan the `8;;` tail. This is why `]`, `_`, `P`, `^`, `X` are all excluded
-// from ANSI_SEQUENCE's 2-byte-escape alternative below.
-// A doubled ESC (ESC ESC) inside a control-string payload is a tmux-escaped
-// literal ESC, not the start of the ST — the pair is consumed as one unit so the
-// terminator search does not stop one byte early (mirrors ink's doubled-ESC
-// skip). `BODY` replaces the old `[\s\S]*?`.
-const BODY = '(?:\\x1b\\x1b|[\\s\\S])*?';
-const STRING_SEQUENCE = new RegExp(
-  `(?:\\x1b\\]|\\x9d)${BODY}(?:${ST}|\\x07)` +
-    `|(?:\\x1b[_P^X]|[\\x90\\x98\\x9e\\x9f])${BODY}${ST}`,
-  'g',
-);
 
 // CSI/SGR and other ESC-introduced escape sequences, three ordered alternatives.
 // Uses ink's ECMA-48 byte classes (repos/ink/src/ansi-tokenizer.ts) for what
@@ -75,10 +53,7 @@ export function caretEncode(code: number): string {
 
 export function stripAnsi(text: string): string {
   if (!hasEscape(text)) return text; // fast path: nothing to strip
-  // 1. Remove well-formed escape sequences wholesale — string-parameter spans
-  //    (OSC/APC/DCS/PM/SOS, both introducer forms) first, then CSI/SGR and
-  //    the simple 2-byte escapes.
-  const withoutSequences = text.replace(STRING_SEQUENCE, '').replace(ANSI_SEQUENCE, '');
+  const withoutSequences = stripControlStrings(text).replace(ANSI_SEQUENCE, '');
   // 2. Caret-encode any control byte left over (lone ESC, BEL, DEL, C1, ...),
   //    preserving TAB/LF/CR so layout is not destroyed.
   let out = '';
