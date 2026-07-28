@@ -1,7 +1,7 @@
 // Published-artifact gate: pack → assert tar (3 files) + manifest → install into a
 // throwaway strict consumer → tsc (types:[] skipLibCheck:false) + one ESM import.
 // Proves the SHIPPED tarball, not just source. Permanent (run by the package gate
-// + the pre-publish CI lane), not review-only. §Z102.
+// + the pre-publish CI lane).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -45,7 +45,7 @@ try {
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog: rewritten, engines present, and the
   //    ONLY runtime dependency is @types/node (type declarations, zero runtime
-  //    code — the §Z80-addendum declaration-closure dep; anything else would
+  //    code; anything else would
   //    break the zero-runtime-dependency chokepoint invariant).
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
@@ -73,7 +73,7 @@ try {
     JSON.stringify({
       // lib ES2023 (NO dom — mirrors the package's own tsconfig.base) so an ambient
       // web-stream global like TransformStream CANNOT resolve from lib.dom; types:[]
-      // excludes ambient @types/*. Without these two the gate is VACUOUS (§Z32):
+      // excludes ambient @types/*. Without these two the gate is vacuous:
       // lib.dom would supply TransformStream and hide the closure gap.
       compilerOptions: {
         module: 'NodeNext',
@@ -90,7 +90,7 @@ try {
   // types:[] + lib:[ES2023] + skipLibCheck:false forces a check of the WHOLE
   // dist/index.d.ts with no ambient fallback — the undeclared TransformStream in
   // sanitizeStream's return type reds TS2304 unless the dts banner + published
-  // @types/node dependency close the declaration graph (§Z80 addendum).
+  // @types/node dependency close the declaration graph.
   writeFileSync(
     join(tmp, 'probe.ts'),
     "import { sanitize, sanitizeStream, type SanitizeOptions } from '@minitui/sanitizer';\n" +

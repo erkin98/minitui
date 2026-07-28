@@ -20,10 +20,9 @@ function barrelExports(): string[] {
     .sort();
 }
 
-// FROZEN, INLINE-committed public surface (NOT an auto-written snapshot —
-// §Z32 vacuous-golden trap; §Z102 declaration-surface gate). The chokepoint's
-// surface is deliberately tiny: the §4 trio, the options bag, the OSC 8
-// allowlist constant, and the §X4 width helper. Surface SHRINK and GROWTH
+// Frozen, inline public surface rather than an auto-written snapshot. The
+// chokepoint's surface is deliberately tiny: three entry points, the options bag, the OSC 8
+// allowlist constant, and the width helper. Surface SHRINK and GROWTH
 // both red — a strip entry point silently vanishing from (or leaking into)
 // the public seam is a security-surface change, not a refactor.
 const PUBLIC_SURFACE = [

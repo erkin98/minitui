@@ -4,6 +4,7 @@ import { caretEncode, hasEscape, stripAnsi } from './ansi.js';
 import {
   stripDangerousOsc,
   ALLOWED_OSC8_SCHEMES,
+  readControlString,
   stripHyperlinks,
   type OscLinkState,
 } from './osc.js';
@@ -40,9 +41,8 @@ function matchAt(re: RegExp, text: string, index: number): string | undefined {
   return m ? m[0] : undefined;
 }
 
-// Irreducible left-to-right control-byte scanner (SGR / kept-OSC-8 / CSI /
-// caret-encode dispatch): a targeted complexity exception per §Z81 — a scan
-// over a closed set of byte kinds is exhaustive, not "too complex".
+// Left-to-right control-byte scanner for SGR, kept OSC-8, CSI, and fallback
+// caret encoding. The closed byte-kind dispatch is intentionally explicit.
 // eslint-disable-next-line complexity
 function sgrPassClean(text: string): string {
   if (!hasEscape(text)) return text; // fast path: no controls at all
@@ -92,22 +92,21 @@ function sgrPassClean(text: string): string {
   return out;
 }
 
-// Perf ceiling: the OSC/string-sequence regexes are O(n^2) worst case on
-// adversarial multi-megabyte input with many unterminated introducers (each
-// one triggers a fresh forward rescan). sanitizeStream() below is bounded by
-// MAX_CARRY — callers with a large one-shot capture should prefer it over a
-// single sanitize() call on the whole buffer.
 export function sanitize(text: string, opts: SanitizeOptions = {}): string {
-  // One-shot: a fresh OSC 8 link-pairing state per call keeps sanitize() pure.
-  return sanitizeWith(text, opts, { keeping: false });
+  return sanitizeWith(text, opts, { pending: undefined }, true);
 }
 
 // Shared body of sanitize(): strip dangerous OSC (threading the OSC 8 open/close
 // pairing state so a stream can pair an open in one chunk with its close in the
 // next — a fresh state cannot, which dropped the close and left an unmatched
 // open that swallowed later text), then apply the mode's residual strip.
-function sanitizeWith(text: string, opts: SanitizeOptions, oscState: OscLinkState): string {
-  const oscStripped = stripDangerousOsc(text, oscState);
+function sanitizeWith(
+  text: string,
+  opts: SanitizeOptions,
+  oscState: OscLinkState,
+  final: boolean,
+): string {
+  const oscStripped = stripDangerousOsc(text, oscState, final);
   if (opts.allow === 'renderer-sgr') return sgrPassClean(oscStripped);
   return stripAnsi(oscStripped);
 }
@@ -132,7 +131,7 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
   // OSC 8 open/close pairing state, PERSISTENT across chunks: an open emitted in
   // one chunk and its close in the next now pair correctly (a per-chunk fresh
   // state dropped the close, leaving an unmatched open that swallowed later text).
-  const oscState: OscLinkState = { keeping: false };
+  const oscState: OscLinkState = { pending: undefined };
 
   // Sequence completeness mirrors the osc.ts/ansi.ts grammar per family:
   //   - OSC (ESC ] / 0x9d): complete at ST (ESC \ or 0x9c) or BEL;
@@ -147,14 +146,14 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
   // eslint-disable-next-line complexity
   function sequenceEnd(buf: string, start: number): number {
     const first = buf.charCodeAt(start);
+    const controlString = readControlString(buf, start);
+    if (controlString !== undefined) return controlString.terminated ? controlString.end : -1;
     let kind: 'osc' | 'string' | 'csi';
     let bodyStart = start + 1;
     if (first === 0x1b) {
       const intro = buf[start + 1];
       if (intro === undefined) return -1; // lone trailing ESC
-      if (intro === ']') kind = 'osc';
-      else if (intro === '_' || intro === 'P' || intro === '^' || intro === 'X') kind = 'string';
-      else if (intro === '[') kind = 'csi';
+      if (intro === '[') kind = 'csi';
       else {
         // ESC escape (ECMA-48): zero-or-more intermediates 0x20-0x2f then one
         // final 0x30-0x7e. Hold (-1) if intermediates are seen but the final has
@@ -162,15 +161,19 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
         // grammar (the old `return start + 2` assumed every non-CSI escape was
         // 2 bytes, splitting `ESC ( B` and diverging from one-shot output).
         const code = buf.charCodeAt(start + 1);
+        if (code === 0x1b) return start + 1; // overlap: reconsider the second ESC
+        // A C1 control after ESC (0x80-0x9f) is its OWN introducer (OSC/CSI/APC/
+        // DCS/PM/SOS), not the final of a 2-byte ESC escape: hold the ESC and
+        // reconsider the C1 so a chunk split between them matches one-shot output.
+        if (code >= 0x80 && code <= 0x9f) return start + 1;
         if (code < 0x20 || code > 0x2f) return start + 2; // complete 2-byte escape
         let i = start + 2;
         while (i < buf.length && buf.charCodeAt(i) >= 0x20 && buf.charCodeAt(i) <= 0x2f) i++;
         return i >= buf.length ? -1 : i + 1;
       }
       bodyStart = start + 2;
-    } else if (first === 0x9d) kind = 'osc';
-    else if (first === 0x9b) kind = 'csi';
-    else kind = 'string'; // 0x90 / 0x98 / 0x9e / 0x9f
+    } else if (first === 0x9b) kind = 'csi';
+    else return start + 1;
     if (kind === 'csi') {
       for (let i = bodyStart; i < buf.length; i++) {
         const c = buf.charCodeAt(i);
@@ -178,16 +181,6 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
         if (c < 0x20 || c > 0x7e) return i; // malformed CSI: stop holding here
       }
       return -1;
-    }
-    for (let i = bodyStart; i < buf.length; i++) {
-      const c = buf.charCodeAt(i);
-      if (c === 0x9c) return i + 1; // C1 ST
-      if (c === 0x07 && kind === 'osc') return i + 1; // BEL terminates OSC only
-      if (c === 0x1b && buf.charCodeAt(i + 1) === 0x1b) {
-        i++; // doubled ESC: tmux-escaped literal in the payload, not the ST
-        continue;
-      }
-      if (c === 0x1b && buf[i + 1] === '\\') return i + 2; // ESC \
     }
     return -1;
   }
@@ -222,51 +215,46 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
       const { emit, hold } = splitTail(buf);
       if (hold.length > MAX_CARRY) {
         carry = '';
-        const cleaned = sanitizeWith(buf, opts, oscState); // unterminated span drops fail-closed
+        const cleaned = sanitizeWith(buf, opts, oscState, false); // unterminated span drops fail-closed
         if (cleaned) controller.enqueue(cleaned);
         return;
       }
       carry = hold;
-      if (emit) controller.enqueue(sanitizeWith(emit, opts, oscState));
+      if (emit) {
+        const cleaned = sanitizeWith(emit, opts, oscState, false);
+        if (cleaned) controller.enqueue(cleaned);
+      }
     },
     flush(controller) {
-      if (carry) controller.enqueue(sanitizeWith(carry, opts, oscState));
+      const cleaned = sanitizeWith(carry, opts, oscState, true);
+      if (cleaned) controller.enqueue(cleaned);
       carry = '';
     },
   });
 }
 
-// PIN-DEPTH (fold): bounded fail-closed, not RangeError. A spec/state nested
-// past MAX_DEPTH is adversarial — a real AppSpec nests far shallower (its depth
-// is bounded by the catalog's element tree) — so the over-deep subtree is
-// dropped to an inert null rather than recursing until the stack overflows. 256
-// is far above any real spec and far below stack exhaustion (~1000s of frames).
+// A spec/state nested past MAX_DEPTH is dropped to an inert null rather than
+// recursing until stack exhaustion. Real catalog specs are far shallower.
 const MAX_DEPTH = 256;
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Deep, immutable string-prop clean for a spec object. The leaf cannot import
 // AppSpec (zero-dep DAG rule), so this is generic over the runtime shape; the
 // renderer/catalog call sites pass their concrete AppSpec and get it back.
 function cleanValue(value: unknown, depth: number): unknown {
+  if (depth > MAX_DEPTH) return null;
   if (typeof value === 'string') return sanitize(value); // allow:'none'
   if (value !== null && typeof value === 'object') {
-    // PIN-DEPTH (fold): bounded fail-closed, not RangeError
-    if (depth > MAX_DEPTH) return null;
     if (Array.isArray(value)) return value.map((item) => cleanValue(item, depth + 1));
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>)) {
-      // PIN-SANITIZE-KEYS (fold): sanitize object KEYS too, not only string
-      // values. An ANSI/control-bearing key would otherwise survive while a
-      // `root`/child string VALUE that references it gets sanitized, dangling
-      // the reference. Two keys that collide after sanitize resolve
-      // last-writer-wins in Object.keys order (defineProperty configurable
-      // redefines the earlier one).
       const cleanKey = sanitize(key); // allow:'none'
-      // defineProperty, not `out[cleanKey] =`: a JSON-parse-produced own
-      // "__proto__" key — or one a sanitize strip collapses down to "__proto__"
-      // — must be copied as DATA; plain assignment would invoke the
-      // Object.prototype.__proto__ setter and swap the new object's prototype
-      // instead of copying the key (§Z100 pattern: never write untrusted keys
-      // into a fresh object through the prototype chain).
+      if (RESERVED_KEYS.has(key) || RESERVED_KEYS.has(cleanKey)) {
+        throw new TypeError('sanitized object contains a reserved key');
+      }
+      if (Object.hasOwn(out, cleanKey)) {
+        throw new TypeError('sanitized object keys collide');
+      }
       Object.defineProperty(out, cleanKey, {
         value: cleanValue((value as Record<string, unknown>)[key], depth + 1),
         enumerable: true,
@@ -281,19 +269,13 @@ function cleanValue(value: unknown, depth: number): unknown {
 
 /**
  * Deep-clean a JSON-shaped value: every string value AND dynamic object key is
- * sanitized, arrays/objects are rebuilt immutably. Depth-bounded (fail-closed at
- * the ceiling, never a RangeError). Contract (C13): the input MUST be a JSON value
- * — the generic `<S>` is a caller convenience (the zero-dep leaf cannot import
- * `JsonValue` per §Z11), NOT a promise to preserve non-JSON runtime capabilities.
- * A non-JSON member (a class instance, a function/symbol value) is NOT preserved:
- * an object is rebuilt as a plain object (prototype/methods dropped) and a
- * function/symbol/bigint value passes through untouched but uncleaned. Real callers
- * pass an `AppSpec` (pure JSON), for which the returned `S` is faithful.
+ * sanitized, arrays/objects are rebuilt immutably, and ambiguous or reserved
+ * sanitized keys are rejected. Values beyond the nesting ceiling become null.
+ * Callers pass validated JSON-shaped specs; the generic preserves that type
+ * without introducing a dependency on the shared types package.
  */
 export function sanitizeSpecStrings<S>(spec: S): S {
   return cleanValue(spec, 0) as S;
 }
 
-// stripHyperlinks re-exported for @minitui/renderer-ink (plan 13): strip the
-// zero-width kept-OSC-8 frames before any manual column/wrap math (§X4).
 export { ALLOWED_OSC8_SCHEMES, stripHyperlinks };

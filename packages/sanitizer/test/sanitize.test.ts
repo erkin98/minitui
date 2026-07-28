@@ -44,15 +44,12 @@ describe('stripAnsi', () => {
     expect(stripAnsi('a\x7fb')).toBe('a^?b');
   });
 
-  it('caret-encodes a lone ESC before an OSC introducer instead of consuming it', () => {
-    // Regression: the 2-byte-escape alternative must NOT swallow `ESC]` —
-    // an unterminated OSC that reaches this mop-up layer degrades to a
-    // visible `^[` marker plus its inert text, never a half-eaten introducer.
-    expect(stripAnsi(`a${ESC}]b`)).toBe('a^[]b');
+  it('fails closed on an unterminated OSC introducer', () => {
+    expect(stripAnsi(`a${ESC}]b`)).toBe('a');
   });
 
-  it('caret-encodes a lone ESC before an APC introducer instead of consuming it', () => {
-    expect(stripAnsi(`a${ESC}_b`)).toBe('a^[_b');
+  it('fails closed on an unterminated APC introducer', () => {
+    expect(stripAnsi(`a${ESC}_b`)).toBe('a');
   });
 
   it('removes an ST-terminated SOS string as a whole span', () => {
@@ -373,7 +370,7 @@ describe('sanitizeSpecStrings', () => {
   });
 
   it('sanitizes object keys as well as values (a clean key is unchanged)', () => {
-    // PIN-SANITIZE-KEYS: keys are sanitized with the same strip so an
+    // Keys are sanitized with the same strip so an
     // ANSI-bearing key cannot dangle a `root`/child reference. A clean key like
     // an RFC-6901 pointer has nothing to strip and passes through unchanged.
     const spec = { '/inputs/0': `${ESC}[31mv${ESC}[0m` };
@@ -382,23 +379,12 @@ describe('sanitizeSpecStrings', () => {
     expect(out['/inputs/0']).toBe('v');
   });
 
-  it('copies a JSON-parse-produced own __proto__ key as data, never as a prototype set', () => {
-    // JSON.parse creates an OWN "__proto__" property (it does not invoke the
-    // Object.prototype accessor). The walk must copy it the same way — a plain
-    // `out[key] = v` assignment would instead SET the new object's prototype
-    // (§Z100 pattern: walking untrusted keys into a fresh object).
+  it('rejects a JSON-parse-produced own __proto__ key', () => {
     const spec = JSON.parse(`{"__proto__":{"polluted":"${'\\u001b'}[31mx"},"ok":"v"}`) as Record<
       string,
       unknown
     >;
-    const out = sanitizeSpecStrings(spec);
-    expect(Object.getPrototypeOf(out)).toBe(Object.prototype); // prototype NOT swapped
-    expect(Object.prototype).not.toHaveProperty('polluted'); // global prototype clean
-    expect(Object.keys(out).sort()).toEqual(['__proto__', 'ok'].sort()); // key kept as data
-    const protoVal = Object.getOwnPropertyDescriptor(out, '__proto__')?.value as Record<
-      string,
-      unknown
-    >;
-    expect(protoVal).toEqual({ polluted: 'x' }); // value cleaned, carried as data
+    expect(() => sanitizeSpecStrings(spec)).toThrow(TypeError);
+    expect(Object.prototype).not.toHaveProperty('polluted');
   });
 });
