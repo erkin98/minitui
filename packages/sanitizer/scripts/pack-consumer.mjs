@@ -14,6 +14,7 @@ import {
   assertConcreteDependencies,
   assertConcreteSemverControl,
   assertRootToolchain,
+  assertRootToolchainControl,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -27,6 +28,9 @@ const pkgDir = fileURLToPath(new URL('..', import.meta.url));
 // them (no second hardcoded copy) so the throwaway consumer install uses the repo's
 // pinned pnpm, not an ambient one, and the packed engines floor is checked by value.
 const rootPkg = JSON.parse(readFileSync(resolve(pkgDir, '..', '..', 'package.json'), 'utf8'));
+// Control first: it is pure and costs nothing, so a broken checker fails in
+// milliseconds instead of after a full mkdtemp + pack.
+assertRootToolchainControl(die);
 assertRootToolchain(rootPkg, die);
 const tmp = mkdtempSync(join(tmpdir(), 'minitui-sanitizer-pack-'));
 try {

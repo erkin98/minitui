@@ -22,6 +22,37 @@ export function assertRootToolchain(rootPackage, die) {
   }
 }
 
+// Positive control for the checker above: without it, a regression that stopped
+// checking the Node floor or the pinned pnpm would be invisible in all three pack
+// consumers, since a correct root manifest passes either way. The invalid list
+// covers each half independently — three manifests where only engines.node is
+// wrong or absent, two where only packageManager is — so neutering either check
+// reds here.
+export function assertRootToolchainControl(die) {
+  const valid = {
+    engines: { node: EXPECTED_NODE_FLOOR },
+    packageManager: EXPECTED_PACKAGE_MANAGER,
+  };
+  const invalid = [
+    {},
+    { packageManager: EXPECTED_PACKAGE_MANAGER },
+    { engines: {}, packageManager: EXPECTED_PACKAGE_MANAGER },
+    { engines: { node: '>=22' }, packageManager: EXPECTED_PACKAGE_MANAGER },
+    { engines: { node: EXPECTED_NODE_FLOOR } },
+    { engines: { node: EXPECTED_NODE_FLOOR }, packageManager: 'pnpm@11.8.1' },
+  ];
+  for (const rootPackage of invalid) {
+    let rejected = false;
+    try {
+      assertRootToolchain(rootPackage, die);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) die('root-toolchain positive control accepted ' + JSON.stringify(rootPackage));
+  }
+  assertRootToolchain(valid, die);
+}
+
 export function assertConcreteDependencies(dependencies, label, die) {
   const values = dependencies === undefined ? {} : dependencies;
   if (values === null || typeof values !== 'object' || Array.isArray(values)) {

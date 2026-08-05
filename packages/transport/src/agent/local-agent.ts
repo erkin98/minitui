@@ -6,6 +6,10 @@ import { createSeqGuard } from '../sequencing/seq-guard.js';
 import { createAbort } from './abort.js';
 import type { AgentPort, RunHandle } from './agent-port.js';
 
+// `error.name` is attacker-reachable: the rejected value can be any object, including one
+// whose `name` is a throwing getter or a Proxy trap. This runs on the cancellation path,
+// where an escaping throw would turn a clean abort into a leaked failure — so the read is
+// contained rather than trusted. Not defensive bloat; the containment is the point.
 function isAbortError(error: unknown): boolean {
   try {
     return (
@@ -104,6 +108,11 @@ export function createLocalAgentPort(
         }
       };
 
+      // next() calls are serialized: each read chains onto the previous one's settlement,
+      // and onto BOTH arms so one rejection does not poison the chain. Concurrent next()
+      // calls would otherwise pull the injected source in parallel — which a real
+      // AsyncGenerator rejects outright — and race the closed/aborted checks that straddle
+      // the await inside readNext.
       let readTail = Promise.resolve();
       const events: AsyncGenerator<AppEvent> = {
         next() {

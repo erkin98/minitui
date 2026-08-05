@@ -204,6 +204,30 @@ describe('DataStore ownership and delivery', () => {
     expect(notifications).toBe(0);
   });
 
+  it('stops delivering to a subscriber once its returned unsubscribe is called', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const seen: JsonValue[] = [];
+    const unsubscribe = store.subscribe((snapshot) => {
+      seen.push(snapshot);
+    });
+    store.setLocal('/n', 1);
+    unsubscribe();
+    store.setLocal('/n', 2);
+    expect(seen).toEqual([{ n: 1 }]); // the post-unsubscribe commit is NOT delivered
+    expect(store.getState()).toEqual({ n: 2 }); // ...though it still committed
+  });
+
+  it('removeLocal drops an EXISTING key and notifies once', () => {
+    const store = createDataStore({ initial: { keep: 1, drop: 2 } });
+    const seen: JsonValue[] = [];
+    store.subscribe((snapshot) => {
+      seen.push(snapshot);
+    });
+    store.removeLocal('/drop');
+    expect(store.getState()).toEqual({ keep: 1 }); // the sibling key survives
+    expect(seen).toEqual([{ keep: 1 }]); // exactly one delivery, carrying the new state
+  });
+
   it('isolates asynchronous subscriber rejection and continues sibling delivery', async () => {
     const { warnings, diagnostics } = capturingDiagnostics();
     const store = createDataStore({ initial: {}, diagnostics });

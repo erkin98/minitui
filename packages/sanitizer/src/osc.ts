@@ -282,22 +282,22 @@ export function stripDangerousOscSegments(
   return out;
 }
 
-export function stripDangerousOsc(
-  text: string,
-  state: OscLinkState = { pending: undefined },
-  final = true,
-): string {
-  return stripDangerousOscSegments(text, state, final)
-    .map((segment) => segment.value)
-    .join('');
-}
-
-// Canonical OSC 8 frames occupy zero display columns, but naive counters include
-// their ASCII URL payload. Remove only the frame emitted by renderer-sgr before
-// measuring width; leave SGR and all other sanitized text untouched.
 // eslint-disable-next-line no-control-regex
 const OSC8_LINK = /\x1b\]8;[\x20-\x7e]*\x1b\\/g;
 
+/**
+ * Remove OSC 8 hyperlink frames so a column counter measures only visible text.
+ *
+ * A sibling **width** helper, not part of the strip pipeline: canonical OSC 8
+ * frames occupy zero display columns, but a naive counter includes their ASCII
+ * URL payload, so wrap/truncate/alignment math silently breaks unless the frames
+ * come off first. Removes only the frames `renderer-sgr` mode emits; SGR and all
+ * other sanitized text are returned untouched (SGR is zero-width and every width
+ * counter already drops it).
+ *
+ * @param text Already-sanitized text, about to be measured or wrapped.
+ * @returns The same text with every canonical OSC 8 frame removed.
+ */
 export function stripHyperlinks(text: string): string {
   if (!text.includes('\x1b')) return text; // fast path: no escape frames
   return text.replace(OSC8_LINK, '');

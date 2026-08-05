@@ -27,6 +27,29 @@ async function* scripted(): AsyncGenerator<AgentEvent> {
   yield { type: 'RUN_FINISHED', threadId: 't', runId: 'r' };
 }
 
+type Source = AsyncGenerator<AgentEvent>;
+
+/** A REAL AsyncGenerator port double — never a vi.* replacement — injected through the
+ *  production genFactory seam. The fixtures below differ only in what next() does and
+ *  whether return() is counted, so those are the only two knobs. throw() rejects with the
+ *  value verbatim: coercing it would hide the identity the port contract promises. */
+function makeSource(next: Source['next'], onReturn: () => void = () => undefined): Source {
+  const source: Source = {
+    next,
+    return() {
+      onReturn();
+      return Promise.resolve({ value: undefined, done: true });
+    },
+    throw(error?: unknown) {
+      return Promise.reject(error);
+    },
+    [Symbol.asyncIterator]() {
+      return source;
+    },
+  };
+  return source;
+}
+
 describe('createLocalAgentPort', () => {
   it('feeds injected minitui wire events straight into toAppEvent without an AG-UI adapter', async () => {
     const port = createLocalAgentPort(() => scripted());
@@ -63,10 +86,11 @@ describe('createLocalAgentPort', () => {
     expect(handle.signal.aborted).toBe(true);
   });
 
-  it('breaking out of the stream without an explicit abort still aborts the signal (finally parity)', async () => {
+  it('breaking out of the stream without an explicit abort still aborts the signal (close() parity)', async () => {
     // A consumer that stops iterating WITHOUT calling handle.abort() must still tear down: the
-    // generator's finally fires controller.abort(), matching the remote ag-ui return(). Positive
-    // control that anything the genFactory keyed on `signal` is cleaned up on break-out.
+    // outer return() routes through the same idempotent close() latch, whose controller.abort()
+    // fires, matching the remote ag-ui return(). Positive control that anything the genFactory
+    // keyed on `signal` is cleaned up on break-out.
     async function* forever(_i: RunAgentInput, signal: AbortSignal): AsyncGenerator<AgentEvent> {
       let i = 0;
       while (!signal.aborted) yield { type: 'TEXT_MESSAGE_CONTENT', delta: String(i++) };
@@ -99,8 +123,8 @@ describe('createLocalAgentPort', () => {
 
   it('aborts the run signal when the injected genFactory throws synchronously', async () => {
     // A genFactory that validates synchronously and throws BEFORE returning its generator must
-    // still tear the run down — the finally's controller.abort() has to fire, not be skipped
-    // because the factory call sat outside the try.
+    // still tear the run down: the factory call sits INSIDE readNext's try, so the catch reaches
+    // close() and its controller.abort() fires. Hoisting that call outside the try would skip it.
     const port = createLocalAgentPort(() => {
       throw new Error('sync boom');
     });
@@ -115,29 +139,19 @@ describe('createLocalAgentPort', () => {
     // return() — a double release for a source that closes a handle/lock on cleanup. Driven
     // through a REAL AsyncGenerator port implementation (no vi.* double), a counting return().
     let returnCalls = 0;
-    const makeSource = (): AsyncGenerator<AgentEvent> => {
+    const port = createLocalAgentPort(() => {
       let i = 0;
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.resolve({
+      return makeSource(
+        () =>
+          Promise.resolve({
             value: { type: 'TEXT_MESSAGE_CONTENT', delta: String(i++) },
             done: false,
-          });
-        },
-        return() {
+          }),
+        () => {
           returnCalls++;
-          return Promise.resolve({ value: undefined, done: true });
         },
-        throw(e?: unknown) {
-          return Promise.reject(e instanceof Error ? e : new Error(String(e)));
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    };
-    const port = createLocalAgentPort(makeSource);
+      );
+    });
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
     const it = handle.events[Symbol.asyncIterator]();
     await it.next(); // suspend inside the loop, past one yield
@@ -150,25 +164,13 @@ describe('createLocalAgentPort', () => {
     let nextCalls = 0;
     const port = createLocalAgentPort(() => {
       factoryCalls++;
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          nextCalls++;
-          return Promise.resolve({
-            value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'late' },
-            done: false,
-          });
-        },
-        return() {
-          return Promise.resolve({ value: undefined, done: true });
-        },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
+      return makeSource(() => {
+        nextCalls++;
+        return Promise.resolve({
+          value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'late' },
+          done: false,
+        });
+      });
     });
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
 
@@ -181,28 +183,19 @@ describe('createLocalAgentPort', () => {
 
   it('turns an abort-induced pending-pull AbortError into clean completion', async () => {
     let returnCalls = 0;
-    const port = createLocalAgentPort((_input, signal) => {
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return new Promise((_resolve, reject) => {
+    const port = createLocalAgentPort((_input, signal) =>
+      makeSource(
+        () =>
+          new Promise((_resolve, reject) => {
             const rejectAbort = () => reject(new DOMException('run cancelled', 'AbortError'));
             if (signal.aborted) rejectAbort();
             else signal.addEventListener('abort', rejectAbort, { once: true });
-          });
-        },
-        return() {
+          }),
+        () => {
           returnCalls++;
-          return Promise.resolve({ value: undefined, done: true });
         },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    });
+      ),
+    );
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
     const pending = handle.events.next();
     await Promise.resolve();
@@ -215,27 +208,15 @@ describe('createLocalAgentPort', () => {
 
   it('closes an idle source immediately and exactly once when abort is repeated', async () => {
     let returnCalls = 0;
-    const port = createLocalAgentPort(() => {
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.resolve({
-            value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' },
-            done: false,
-          });
-        },
-        return() {
+    const port = createLocalAgentPort(() =>
+      makeSource(
+        () =>
+          Promise.resolve({ value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' }, done: false }),
+        () => {
           returnCalls++;
-          return Promise.resolve({ value: undefined, done: true });
         },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    });
+      ),
+    );
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
     await handle.events.next();
 
@@ -249,23 +230,7 @@ describe('createLocalAgentPort', () => {
 
   it('propagates a producer failure that is unrelated to cancellation', async () => {
     const producerError = new Error('producer failed');
-    const port = createLocalAgentPort(() => {
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.reject(producerError);
-        },
-        return() {
-          return Promise.resolve({ value: undefined, done: true });
-        },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    });
+    const port = createLocalAgentPort(() => makeSource(() => Promise.reject(producerError)));
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
 
     await expect(handle.events.next()).rejects.toBe(producerError);
@@ -279,25 +244,16 @@ describe('createLocalAgentPort', () => {
     const port = createLocalAgentPort(() => {
       const index = sourceIndex++;
       let value = 0;
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.resolve({
+      return makeSource(
+        () =>
+          Promise.resolve({
             value: { type: 'TEXT_MESSAGE_CONTENT', delta: `${index}:${value++}` },
             done: false,
-          });
-        },
-        return() {
+          }),
+        () => {
           returnCalls.set(index, (returnCalls.get(index) ?? 0) + 1);
-          return Promise.resolve({ value: undefined, done: true });
         },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
+      );
     });
     const input = buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' });
     const first = port.run(input);
@@ -321,27 +277,15 @@ describe('createLocalAgentPort', () => {
 
   it('uses the same exactly-once close transition for iterator throw()', async () => {
     let returnCalls = 0;
-    const port = createLocalAgentPort(() => {
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.resolve({
-            value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' },
-            done: false,
-          });
-        },
-        return() {
+    const port = createLocalAgentPort(() =>
+      makeSource(
+        () =>
+          Promise.resolve({ value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' }, done: false }),
+        () => {
           returnCalls++;
-          return Promise.resolve({ value: undefined, done: true });
         },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    });
+      ),
+    );
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
     await handle.events.next();
     const consumerError = new Error('consumer stopped');
@@ -356,26 +300,11 @@ describe('createLocalAgentPort', () => {
     // §Z137-C names BOTH ports as owners of "throw(e) rejects with e verbatim". The sibling
     // above passes an Error, whose identity a `e instanceof Error ? e : new Error(String(e))`
     // coercion preserves — so only a non-Error case can witness the contract on this port.
-    const port = createLocalAgentPort(() => {
-      const source: AsyncGenerator<AgentEvent> = {
-        next() {
-          return Promise.resolve({
-            value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' },
-            done: false,
-          });
-        },
-        return() {
-          return Promise.resolve({ value: undefined, done: true });
-        },
-        throw(error?: unknown) {
-          return Promise.reject(error);
-        },
-        [Symbol.asyncIterator]() {
-          return source;
-        },
-      };
-      return source;
-    });
+    const port = createLocalAgentPort(() =>
+      makeSource(() =>
+        Promise.resolve({ value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' }, done: false }),
+      ),
+    );
     const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
     await handle.events.next();
     const consumerValue = { code: 'boom' }; // not an Error — must round-trip verbatim, no coercion
