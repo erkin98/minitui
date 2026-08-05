@@ -26,13 +26,24 @@ pre-commit:
 pre-push:
   parallel: false
   commands:
+    lint:
+      # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
+      # rule change or a file touched outside the hook can leave the tree reding with
+      # every commit green. No CI backstop exists until plan 17 lands .github/workflows.
+      # First in the sequence because parallel:false makes order execution order, and the
+      # cheapest failure should surface before the multi-minute test/build/pack commands.
+      run: pnpm run lint
+    format:
+      run: pnpm run format:check
     policy-fixtures:
-      # The 48-fixture proof that the capability/replacement-mock AST rules actually
+      # The 52-fixture proof that the capability/replacement-mock AST rules actually
       # bite. Enforced here, not only in the un-hooked `pnpm lint`, so
       # a regressed rule cannot reach the remote green.
       run: pnpm run lint:policy-fixtures
     test:
       run: pnpm run test:all
+    coverage:
+      run: pnpm run test:coverage
     build:
       run: pnpm run build:all
     pack:

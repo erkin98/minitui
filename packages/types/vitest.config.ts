@@ -1,9 +1,13 @@
-import { defineProject } from 'vitest/config';
+import { defineProject, mergeConfig } from 'vitest/config';
+import sharedVitestConfig from '../../vitest.shared.js';
 
-export default defineProject({
-  test: {
-    name: '@minitui/types',
-    environment: 'node',
-    include: ['test/**/*.test.ts'],
-  },
-});
+export default mergeConfig(
+  sharedVitestConfig,
+  defineProject({
+    test: {
+      name: '@minitui/types',
+      environment: 'node',
+      include: ['test/**/*.test.ts'],
+    },
+  }),
+);

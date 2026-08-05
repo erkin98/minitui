@@ -2,7 +2,7 @@ import { stripControlStrings } from './osc.js';
 
 // ANSI / control-character strip. A cheap ESC/C1/control pre-check skips the
 // scan entirely for the common all-printable case.
-// Grammar mirrors ink's reference tokenizer (repos/ink/src/ansi-tokenizer.ts):
+// Grammar mirrors ink's reference tokenizer (its src/ansi-tokenizer.ts):
 // string sequences have ESC-form AND C1-form introducers, ST is ESC \ or the
 // C1 ST 0x9c, and BEL (0x07) terminates OSC ONLY — in DCS/PM/APC/SOS it is data.
 
@@ -10,7 +10,7 @@ import { stripControlStrings } from './osc.js';
 export const PRESERVE_C0: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
 
 // CSI/SGR and other ESC-introduced escape sequences, three ordered alternatives.
-// Uses ink's ECMA-48 byte classes (repos/ink/src/ansi-tokenizer.ts) for what
+// Uses ink's ECMA-48 byte classes (its src/ansi-tokenizer.ts) for what
 // FORMS a sequence, but keeps minitui's stricter fallback: a bare ESC + an
 // UNCURATED single final byte is NOT stripped here — it falls through to the
 // caret-encode loop below (a visible `^[c`), so an unknown escape is neutralized
@@ -30,13 +30,26 @@ export const PRESERVE_C0: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
 //      caret-encoded ESC, never a half-consumed introducer with a dangling
 //      payload. An uncurated final (e.g. RIS `ESC c`, `ESC b`) is left for the
 //      caret-encode loop — safe (no live ESC) and visible, per minitui's posture.
-const ANSI_SEQUENCE =
-  // eslint-disable-next-line no-control-regex
-  /(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\x20-\x2f]+[\x30-\x7e]|\x1b[@-OQ-WYZ\\]/g;
+
+// THE CSI grammar, spelled ONCE. The strip below, index.ts's renderer-sgr
+// scanner and stream-grammar.ts's stream-completeness check all build from this
+// one string, so the three cannot drift apart. Parameters come BEFORE
+// intermediates: a parameter after an intermediate is not a CSI.
+export const CSI_SEQUENCE_SOURCE = '(?:\\x1b\\[|\\x9b)[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]';
+
+const ANSI_SEQUENCE = new RegExp(
+  `${CSI_SEQUENCE_SOURCE}|\\x1b[\\x20-\\x2f]+[\\x30-\\x7e]|\\x1b[@-OQ-WYZ\\\\]`,
+  'g',
+);
 
 // Any byte that is ESC, a C1 control (0x80-0x9f), DEL, or a non-preserved C0.
+// TAB/LF/CR are absent BECAUSE they are in PRESERVE_C0: every slow path below
+// re-emits them unchanged, so a string whose only controls are those three has
+// nothing to strip and must take the fast path. Terminal output is
+// newline-bearing by nature, so including them taxed the common case with a
+// full scan that provably rewrites nothing.
 // eslint-disable-next-line no-control-regex
-const CONTROL_SCAN = /[\x00-\x1f\x7f-\x9f]/;
+const CONTROL_SCAN = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/;
 
 export function hasEscape(text: string): boolean {
   return CONTROL_SCAN.test(text);

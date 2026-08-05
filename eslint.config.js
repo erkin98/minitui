@@ -13,6 +13,45 @@ const noDynamicFunctionGlobal = [
   },
 ];
 
+// Shared by both exec-moat capability blocks below (the widened glob over real code and
+// the narrow list over the boundary-fixture files that exercise this wall) so the two
+// stay identical by construction instead of by manual upkeep.
+const execMoatCapabilityRules = {
+  'no-restricted-imports': [
+    'error',
+    {
+      paths: [
+        {
+          name: 'child_process',
+          message: 'Exec-moat: only @minitui/exec may import child_process.',
+        },
+        {
+          name: 'node:child_process',
+          message: 'Exec-moat: only @minitui/exec may import child_process.',
+        },
+        {
+          name: '@anthropic-ai/sandbox-runtime',
+          message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
+        },
+        {
+          name: '@modelcontextprotocol/client',
+          message: 'Exec-moat: only @minitui/exec may import the MCP client.',
+        },
+      ],
+      patterns: [
+        {
+          group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
+          message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
+        },
+      ],
+    },
+  ],
+  'minitui/no-restricted-capability-load': 'error',
+  'no-eval': 'error',
+  'no-implied-eval': 'error',
+  'no-restricted-globals': noDynamicFunctionGlobal,
+};
+
 // Local-only ignores (untracked working-copy trees). This checkout can double as a
 // multi-project workspace, so `eslint .` would otherwise walk many non-repo trees
 // (ESLint 9 does not read .gitignore). Loaded best-effort — a clean clone has neither
@@ -127,11 +166,29 @@ export default tseslint.config(
     },
   },
   {
-    // The exec capability wall covers every shipped package and app source. Tooling scripts
-    // remain out of scope because repository maintenance commands may launch subprocesses.
+    // The exec capability wall covers every shipped package, app, and test file (not just
+    // src/): the zero-replacement-mock policy pushes test authors toward real
+    // implementations, so a subprocess call is exactly as likely to appear in a test as in
+    // src. The exec package itself (the one package allowed this capability) and
+    // package-local tooling scripts stay out of scope. The boundary-fixture directory is
+    // also excluded here because it plants deliberate violations of OTHER rules (e.g. the
+    // vitest-replacement-api evasion fixtures use the same indirect-loader shapes this wall
+    // watches for) that would otherwise pick up a second, unwanted violation from this wall
+    // once it covers test/** broadly; those specific fixtures are listed in the next block
+    // instead, where only this wall's own rules apply.
+    files: ['packages/**/*.{ts,tsx,mts}', 'apps/**/*.{ts,tsx,mts}', 'test/**/*.{ts,tsx,mts}'],
+    ignores: [
+      'packages/exec/**',
+      'packages/*/scripts/**',
+      'scripts/**',
+      'test/eslint-boundary-fixture/**',
+    ],
+    rules: execMoatCapabilityRules,
+  },
+  {
+    // The boundary-fixture files that specifically exercise the exec capability wall above
+    // (excluded from its glob so sibling fixtures for other rules can't collide with it).
     files: [
-      'packages/*/src/**/*.{ts,tsx,mts}',
-      'apps/*/src/**/*.{ts,tsx,mts}',
       'test/eslint-boundary-fixture/illegal-dynamic-capability.ts',
       'test/eslint-boundary-fixture/illegal-nonliteral-load.ts',
       'test/eslint-boundary-fixture/illegal-create-require-capability.ts',
@@ -141,43 +198,9 @@ export default tseslint.config(
       'test/eslint-boundary-fixture/illegal-computed-process-capability.ts',
       'test/eslint-boundary-fixture/illegal-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-implied-eval-capability.ts',
+      'test/eslint-boundary-fixture/illegal-test-file-capability.test.ts',
     ],
-    ignores: ['packages/exec/**'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          paths: [
-            {
-              name: 'child_process',
-              message: 'Exec-moat: only @minitui/exec may import child_process.',
-            },
-            {
-              name: 'node:child_process',
-              message: 'Exec-moat: only @minitui/exec may import child_process.',
-            },
-            {
-              name: '@anthropic-ai/sandbox-runtime',
-              message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
-            },
-            {
-              name: '@modelcontextprotocol/client',
-              message: 'Exec-moat: only @minitui/exec may import the MCP client.',
-            },
-          ],
-          patterns: [
-            {
-              group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
-              message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
-            },
-          ],
-        },
-      ],
-      'minitui/no-restricted-capability-load': 'error',
-      'no-eval': 'error',
-      'no-implied-eval': 'error',
-      'no-restricted-globals': noDynamicFunctionGlobal,
-    },
+    rules: execMoatCapabilityRules,
   },
   {
     files: [

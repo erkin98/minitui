@@ -1,5 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "paths": { "@minitui/*": ["./packages/*/src/index.ts"] }
+  },
   "include": [],
   "references": [
     { "path": "./packages/types" },

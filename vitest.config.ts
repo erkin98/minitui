@@ -4,7 +4,9 @@ import { sharedVitestConfig } from './vitest.shared';
 
 // Vitest 4: `test.projects` replaces the removed `defineWorkspace` / `vitest.workspace.ts`.
 export default defineConfig({
+  ...sharedVitestConfig,
   test: {
+    ...sharedVitestConfig.test,
     projects: [
       // root determinism test as a proper inline project, sharing the determinism setup
       {

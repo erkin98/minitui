@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { stripAnsi, hasEscape } from '../src/ansi.js';
+import { stripAnsi, hasEscape, PRESERVE_C0 } from '../src/ansi.js';
 import { stripDangerousOsc, stripHyperlinks } from '../src/osc.js';
-import { sanitize, sanitizeStream, sanitizeSpecStrings } from '../src/index.js';
+import { sanitize, sanitizeSpecStrings } from '../src/index.js';
+import { runStream } from './run-stream.js';
 
 const ESC = '\x1b';
 const ST = '\x1b\\'; // String Terminator (ESC \)
@@ -70,9 +71,28 @@ describe('stripAnsi', () => {
     expect(hasEscape('x\x07')).toBe(true);
   });
 
-  it('hasEscape fast-paths plain text without running the strip', () => {
+  it('returns text with no control bytes byte-identical', () => {
+    // The fast path itself is proven by the exhaustive hasEscape sweep below;
+    // this asserts only what it can see — the output equals the input.
     const clean = 'no escapes here at all';
     expect(stripAnsi(clean)).toBe(clean);
+  });
+
+  it('hasEscape fires on exactly the bytes the strip rewrites, and no others', () => {
+    // The predicate and the rewrite rule are locked to each other through the
+    // SAME PRESERVE_C0 constant, not to a second hand-written list: a byte the
+    // slow paths re-emit unchanged (TAB/LF/CR) must not force the slow path.
+    for (let code = 0x00; code <= 0xff; code++) {
+      const rewritten =
+        (code <= 0x1f && !PRESERVE_C0.has(code)) || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+      expect(hasEscape(String.fromCharCode(code)), `code point 0x${code.toString(16)}`).toBe(
+        rewritten,
+      );
+    }
+  });
+
+  it('hasEscape stays true for text carrying BOTH a newline and a live escape', () => {
+    expect(hasEscape(`a\nb${ESC}[0m`)).toBe(true);
   });
 });
 
@@ -185,7 +205,7 @@ describe('stripHyperlinks (OSC 8 width helper)', () => {
     expect(stripHyperlinks(`${ESC}[31mred${ESC}[0m`)).toBe(`${ESC}[31mred${ESC}[0m`);
   });
 
-  it('is a no-op for text with no escape frames (fast path)', () => {
+  it('returns text with no escape frames byte-identical', () => {
     expect(stripHyperlinks('plain columns')).toBe('plain columns');
   });
 });
@@ -261,27 +281,6 @@ describe('sanitize', () => {
   });
 });
 
-async function runStream(
-  chunks: string[],
-  opts?: { allow?: 'none' | 'renderer-sgr' | undefined },
-): Promise<string> {
-  const t = sanitizeStream(opts);
-  const writer = t.writable.getWriter();
-  const reader = t.readable.getReader();
-  const out: string[] = [];
-  const pump = (async () => {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      out.push(value);
-    }
-  })();
-  for (const c of chunks) await writer.write(c);
-  await writer.close();
-  await pump;
-  return out.join('');
-}
-
 describe('sanitizeStream', () => {
   it('sanitizes a single chunk', async () => {
     expect(await runStream([`${ESC}[31mred${ESC}[0m`])).toBe('red');
@@ -336,6 +335,32 @@ describe('sanitizeStream', () => {
   });
 });
 
+// Every string here is built ONLY from bytes no strip path rewrites: printable
+// ASCII, a multi-byte character, an astral character, and the three preserved
+// C0 controls. Narrowing the control-scan predicate changes which of these take
+// the fast path; it must change NONE of their output. This net passes before
+// and after the narrowing — it is the safety proof, not the gate.
+const PRESERVED_BYTE_CORPUS: readonly string[] = (() => {
+  const pieces = ['plain', 'é', '漢', '😀', '\t', '\n', '\r', ' ', '~', '!@#$%'];
+  const out: string[] = [];
+  for (const head of pieces) for (const tail of pieces) out.push(head + tail + head);
+  return out;
+})();
+
+describe('preserved-byte identity across all four strip paths', () => {
+  it('returns every preserved-byte string unchanged one-shot and streamed, in both modes', async () => {
+    for (const text of PRESERVED_BYTE_CORPUS) {
+      const label = JSON.stringify(text);
+      const split = Math.floor(text.length / 2);
+      const chunks = [text.slice(0, split), text.slice(split)];
+      expect(sanitize(text), `one-shot none ${label}`).toBe(text);
+      expect(sanitize(text, { allow: 'renderer-sgr' }), `one-shot sgr ${label}`).toBe(text);
+      expect(await runStream(chunks), `stream none ${label}`).toBe(text);
+      expect(await runStream(chunks, { allow: 'renderer-sgr' }), `stream sgr ${label}`).toBe(text);
+    }
+  });
+});
+
 describe('sanitizeSpecStrings', () => {
   it('cleans every nested string prop and returns a new object', () => {
     const spec = {
@@ -369,15 +394,9 @@ describe('sanitizeSpecStrings', () => {
     expect(out).toEqual({ n: 1, b: true, z: null, s: 'ok' });
   });
 
-  it('sanitizes object keys as well as values (a clean key is unchanged)', () => {
-    // Keys are sanitized with the same strip so an
-    // ANSI-bearing key cannot dangle a `root`/child reference. A clean key like
-    // an RFC-6901 pointer has nothing to strip and passes through unchanged.
-    const spec = { '/inputs/0': `${ESC}[31mv${ESC}[0m` };
-    const out = sanitizeSpecStrings(spec);
-    expect(Object.keys(out)).toEqual(['/inputs/0']);
-    expect(out['/inputs/0']).toBe('v');
-  });
+  // The clean-key case lives in security-regressions.test.ts, next to the
+  // dirty-key witness it is the companion to. It was duplicated here byte for
+  // byte; two copies of one assertion is one assertion.
 
   it('rejects a JSON-parse-produced own __proto__ key', () => {
     const spec = JSON.parse(`{"__proto__":{"polluted":"${'\\u001b'}[31mx"},"ok":"v"}`) as Record<

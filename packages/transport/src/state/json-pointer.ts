@@ -3,6 +3,10 @@ import type { JsonValue, Pointer } from '@minitui/types';
 
 export type { JsonValue, Pointer };
 
+// Deliberately a third copy of this literal. `@minitui/sanitizer` keeps its own
+// because it is a zero-dependency leaf that cannot import anything, and
+// `@minitui/types`' RESERVED_JSON_KEYS is module-private, so consuming it would
+// mean growing that package's public surface. Unifying is not free.
 const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_POINTER_DEPTH = 256;
 
@@ -10,6 +14,13 @@ function unescape(token: string): string {
   return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
+/**
+ * The raw RFC-6901 tokenizer: no depth ceiling, no reserved-key check, no
+ * canonical-key check. It is the barrel's public pointer primitive, for callers
+ * doing pure pointer arithmetic. Every document-touching entry point here
+ * (`getIn`, `setIn`, `removeIn`, and `applyStatePatch` in patch-apply.ts) routes
+ * through the guarded `parseStatePointer` instead — never through this.
+ */
 export function parsePointer(pointer: string): string[] {
   if (pointer === '') return [];
   if (pointer[0] !== '/') throw new Error(`invalid JSON pointer: ${pointer}`);
@@ -38,7 +49,15 @@ export function assertCanonicalStateKey(key: string): void {
   if (sanitize(key) !== key) throw new Error(`state key is not canonical: ${JSON.stringify(key)}`);
 }
 
+/** The guarded parser every document-touching path uses: depth-capped, reserved-key
+ *  and canonical-key checked. Module-private on purpose — see `parsePointer` above. */
 export function parseStatePointer(pointer: string): string[] {
+  let separators = 0;
+  for (let index = 0; index < pointer.length; index++) {
+    if (pointer.charCodeAt(index) === 0x2f && ++separators > MAX_POINTER_DEPTH) {
+      throw new Error(`JSON pointer exceeds max depth ${MAX_POINTER_DEPTH}`);
+    }
+  }
   const tokens = parsePointer(pointer);
   if (tokens.length > MAX_POINTER_DEPTH) {
     throw new Error(`JSON pointer exceeds max depth ${MAX_POINTER_DEPTH}`);
@@ -50,8 +69,7 @@ export function parseStatePointer(pointer: string): string[] {
 export function assertCanonicalStateValue(value: JsonValue): void {
   const pending: JsonValue[] = [value];
   while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === undefined) break;
+    const current = pending.pop()!;
     if (isArrayValue(current)) {
       for (const item of current) pending.push(item);
     } else if (isObject(current)) {

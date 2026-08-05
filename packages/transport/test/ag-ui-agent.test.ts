@@ -3,6 +3,8 @@ import { Subject } from 'rxjs';
 import { EventType, type BaseEvent } from '@ag-ui/core';
 import type { HttpAgent, RunAgentInput } from '@ag-ui/client';
 import { createAgUiAgentPort } from '../src/agent/ag-ui-agent.js';
+import { createLocalAgentPort } from '../src/agent/local-agent.js';
+import type { AgentPort } from '../src/agent/agent-port.js';
 import { buildRunAgentInput } from '../src/agent/run-input.js';
 
 // minimal REAL fake: createAgUiAgentPort only calls run(), so a real object implementing
@@ -98,6 +100,55 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(warnings[0]?.[0]).toContain('dropped');
   });
 
+  it('a throwing diagnostics sink cannot break the remote pump', async () => {
+    // The bare warn() sat BETWEEN the shift() that evicts an event and the push() that stores
+    // the incoming one, so a throwing sink lost both and escaped emit() into the rxjs next
+    // callback. Diagnostics is observational by contract: it cannot break the path it observes.
+    // Same scenario as the ceiling test above, differing only in that this sink throws.
+    const subject = new Subject<BaseEvent>();
+    const diagnostics = {
+      warn: (): void => {
+        throw new Error('diagnostics sink boom');
+      },
+      debug() {},
+    };
+    const handle = createAgUiAgentPort(fakeAgent(subject), { maxQueue: 2, diagnostics }).run(input);
+    subject.next({ type: EventType.RUN_STARTED, threadId: 't', runId: 'r' } as BaseEvent);
+    subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 1 } } as BaseEvent);
+    subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 2 } } as BaseEvent);
+    subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 3 } } as BaseEvent);
+    subject.complete();
+
+    const snapshots: number[] = [];
+    for await (const e of handle.events)
+      if (e.kind === 'state-snapshot') snapshots.push((e.snapshot as { n: number }).n);
+    expect(snapshots).toEqual([2, 3]); // byte-identical to the non-throwing sink's result
+  });
+
+  it('neither AgentPort implementation throws synchronously out of run()', async () => {
+    // Port-swap seam. local-agent defers its generator construction into the async, try-wrapped
+    // readNext(), so a producer that fails synchronously still reaches the consumer through the
+    // handle. The remote port built `agent.run(input).pipe(...)` inline in a non-async run(), so
+    // the same failure escaped the port itself and no handle ever existed to observe it.
+    const boom = new Error('producer exploded');
+    const remote: AgentPort = createAgUiAgentPort({
+      run: () => {
+        throw boom;
+      },
+    });
+    const local: AgentPort = createLocalAgentPort(() => {
+      throw boom;
+    });
+
+    for (const port of [remote, local]) expect(() => port.run(input)).not.toThrow();
+
+    // ...and each surfaces the failure through its own handle rather than losing it.
+    const remoteEvents = [];
+    for await (const e of remote.run(input).events) remoteEvents.push(e);
+    expect(remoteEvents).toMatchObject([{ kind: 'run-error', retriable: true }]);
+    await expect(local.run(input).events.next()).rejects.toBe(boom);
+  });
+
   it('abort() settles a next() parked on an empty queue', async () => {
     const subject = new Subject<BaseEvent>();
     const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
@@ -117,4 +168,23 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(handle.signal.aborted).toBe(true); // throw() must fire the controller too
     expect((await parked).done).toBe(true); // and settle the parked read, not leave it hung
   }, 2000);
+
+  it('throw() rejects with the exact value passed, even when it is not an Error', async () => {
+    const subject = new Subject<BaseEvent>();
+    const handle = createAgUiAgentPort(fakeAgent(subject)).run(input);
+    const it = handle.events[Symbol.asyncIterator]();
+    const parked = it.next();
+    const consumerValue = { code: 'boom' }; // not an Error — must round-trip verbatim, no coercion
+    await expect(it.throw?.(consumerValue)).rejects.toBe(consumerValue);
+    expect(handle.signal.aborted).toBe(true);
+    expect((await parked).done).toBe(true);
+  }, 2000);
+
+  it('rejects a non-finite or non-positive maxQueue at construction', () => {
+    const agent = fakeAgent(new Subject<BaseEvent>());
+    expect(() => createAgUiAgentPort(agent, { maxQueue: 0 })).toThrow();
+    expect(() => createAgUiAgentPort(agent, { maxQueue: -1 })).toThrow();
+    expect(() => createAgUiAgentPort(agent, { maxQueue: NaN })).toThrow();
+    expect(() => createAgUiAgentPort(agent, { maxQueue: Infinity })).toThrow();
+  });
 });

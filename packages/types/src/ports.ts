@@ -25,8 +25,8 @@ export interface McpProgress {
 }
 
 // Mirrors the slice of the real MCP SDK v2 RequestOptions the pool forwards:
-// onprogress/signal/timeout (repos/mcp-sdk2 shared/protocol.ts). Signal-only
-// would strand the pool's progress handler and the per-call timeout.
+// onprogress/signal/timeout (the MCP SDK v2 RequestOptions in shared/protocol.ts).
+// Signal-only would strand the pool's progress handler and the per-call timeout.
 export interface McpCallOptions {
   readonly signal: AbortSignal;
   readonly onProgress?: ((p: McpProgress) => void) | undefined;

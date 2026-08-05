@@ -24,4 +24,37 @@ describe('toAgUiEvent minitui-to-AG-UI field synthesis', () => {
     expect(ev).toMatchObject({ messageId: 'm1', activityType: 'mini-app-spec', content: spec });
     expect(ev).not.toHaveProperty('spec');
   });
+
+  it('fills only the identity fields the event does not carry itself', () => {
+    // This adapter translates minitui's OWN events outbound, so the event is trusted and
+    // any id it carries is real. The context is a fallback for what minitui's vocabulary
+    // omits (messageId), not an override — replacing a genuine threadId/runId here would
+    // rewrite real identity. An event with no ids of its own gets all three from ctx.
+    const withoutIds = toAgUiEvent({ type: EventType.TEXT_MESSAGE_CONTENT, delta: 'hi' }, ctx);
+    expect(withoutIds).toMatchObject({ threadId: 't1', runId: 'r1', messageId: 'm1', delta: 'hi' });
+
+    const withOwnIds = toAgUiEvent(
+      { type: EventType.RUN_FINISHED, threadId: 'own-thread', runId: 'own-run' },
+      ctx,
+    );
+    expect(withOwnIds).toMatchObject({
+      threadId: 'own-thread',
+      runId: 'own-run',
+      messageId: 'm1',
+    });
+  });
+
+  it("lets this adapter's own projection win over a stray key of the same name", () => {
+    const spec = { root: 'r', elements: {} };
+    const ev = toAgUiEvent(
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        spec,
+        messageId: 'attacker-message',
+        activityType: 'attacker-type',
+      },
+      ctx,
+    );
+    expect(ev).toMatchObject({ messageId: 'm1', activityType: 'mini-app-spec', content: spec });
+  });
 });

@@ -1,13 +1,15 @@
 // @minitui/sanitizer — ANSI/control-character chokepoint leaf (zero-dep).
 // The single import every package routes untrusted text through before the screen.
-import { caretEncode, hasEscape, stripAnsi } from './ansi.js';
+import { caretEncode, CSI_SEQUENCE_SOURCE, hasEscape, stripAnsi } from './ansi.js';
 import {
-  stripDangerousOsc,
+  stripDangerousOscSegments,
   ALLOWED_OSC8_SCHEMES,
-  readControlString,
   stripHyperlinks,
   type OscLinkState,
 } from './osc.js';
+// Stream completeness grammar. NOT re-exported from this barrel — test/surface.test.ts
+// freezes the public surface at six names, and both growth and shrink must red.
+import { splitTail } from './stream-grammar.js';
 
 export interface SanitizeOptions {
   /**
@@ -23,17 +25,14 @@ export interface SanitizeOptions {
 //   - strict SGR: `ESC[` + params limited to digits/:/; + final `m` — the
 //     same rule as ink's sanitize-ansi.ts sgrParametersRegex; a private
 //     prefix like `ESC[>4;2m` (modifyOtherKeys) is NOT color, dropped whole;
-//   - a canonical kept OSC 8 span (printable-ASCII body, ESC \ terminator).
 // Every other CSI (ESC-form or C1 0x9b) is dropped WHOLE; any other ESC or
 // control byte is caret-encoded. A bare ESC is NEVER emitted raw — a leaked
 // ESC re-arms the terminal's parser against the text that follows it.
 // Sticky (y) regexes anchor each attempt at the scanner's position.
 // eslint-disable-next-line no-control-regex
 const SGR = /\x1b\[[\d:;]*m/y;
-// eslint-disable-next-line no-control-regex
-const OSC8_KEPT = /\x1b\]8;[\x20-\x7e]*\x1b\\/y;
-// eslint-disable-next-line no-control-regex
-const ANY_CSI = /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/y;
+// Built from ansi.ts's single grammar source, not a second spelling of it.
+const ANY_CSI = new RegExp(CSI_SEQUENCE_SOURCE, 'y');
 
 function matchAt(re: RegExp, text: string, index: number): string | undefined {
   re.lastIndex = index;
@@ -43,7 +42,6 @@ function matchAt(re: RegExp, text: string, index: number): string | undefined {
 
 // Left-to-right control-byte scanner for SGR, kept OSC-8, CSI, and fallback
 // caret encoding. The closed byte-kind dispatch is intentionally explicit.
-// eslint-disable-next-line complexity
 function sgrPassClean(text: string): string {
   if (!hasEscape(text)) return text; // fast path: no controls at all
   let out = '';
@@ -52,7 +50,7 @@ function sgrPassClean(text: string): string {
     const ch = text[i]!;
     const code = ch.charCodeAt(0);
     if (code === 0x1b) {
-      const kept = matchAt(SGR, text, i) ?? matchAt(OSC8_KEPT, text, i);
+      const kept = matchAt(SGR, text, i);
       if (kept !== undefined) {
         out += kept;
         i += kept.length;
@@ -106,13 +104,28 @@ function sanitizeWith(
   oscState: OscLinkState,
   final: boolean,
 ): string {
-  const oscStripped = stripDangerousOsc(text, oscState, final);
-  if (opts.allow === 'renderer-sgr') return sgrPassClean(oscStripped);
-  return stripAnsi(oscStripped);
+  if (oscState.pending === undefined && !hasEscape(text)) return text;
+  const segments = stripDangerousOscSegments(text, oscState, final);
+  if (opts.allow === 'renderer-sgr') {
+    return segments
+      .map((segment) =>
+        segment.kind === 'trusted-osc8' ? segment.value : sgrPassClean(segment.value),
+      )
+      .join('');
+  }
+  return segments
+    .filter((segment) => segment.kind === 'text')
+    .map((segment) => stripAnsi(segment.value))
+    .join('');
 }
 
 // Where a chunk may have cut an escape sequence in half, hold back from the
 // FIRST unterminated sequence in the buffer and prepend it to the next chunk.
+// When sequences are adjacent — one ending exactly on the next introducer — the
+// hold starts at the beginning of the CURRENT adjacency chain, so a cut inside
+// the run carries the whole run. It does NOT start at the first chain in the
+// buffer: a chain that closed on a plain byte is finished, and holding from it
+// would inflate a few-byte tail into a buffer-long hold that trips the cap.
 // Never hold from `lastIndexOf(ESC)`: an unterminated OSC's payload can
 // itself contain later ESC bytes, and holding only from the last one would
 // emit the live introducer ahead of it. At flush, the held tail is sanitized
@@ -132,82 +145,6 @@ export function sanitizeStream(opts: SanitizeOptions = {}): TransformStream<stri
   // one chunk and its close in the next now pair correctly (a per-chunk fresh
   // state dropped the close, leaving an unmatched open that swallowed later text).
   const oscState: OscLinkState = { pending: undefined };
-
-  // Sequence completeness mirrors the osc.ts/ansi.ts grammar per family:
-  //   - OSC (ESC ] / 0x9d): complete at ST (ESC \ or 0x9c) or BEL;
-  //   - APC/DCS/PM/SOS (ESC _ P ^ X / 0x9f 0x90 0x9e 0x98): complete at ST
-  //     ONLY — a BEL (or any letter) in their body is data, so they are held;
-  //   - CSI (ESC [ / 0x9b): complete at a final byte 0x40-0x7e; a byte that
-  //     can never appear in a CSI ends the hold (sanitize() handles the mess);
-  //   - a lone trailing ESC: incomplete — hold it;
-  //   - ESC escape: zero-or-more intermediates 0x20-0x2f then one final
-  //     0x30-0x7e (held until the final arrives; zero intermediates = 2 bytes).
-  // Returns the index just past the sequence, or -1 while incomplete.
-  // eslint-disable-next-line complexity
-  function sequenceEnd(buf: string, start: number): number {
-    const first = buf.charCodeAt(start);
-    const controlString = readControlString(buf, start);
-    if (controlString !== undefined) return controlString.terminated ? controlString.end : -1;
-    let kind: 'osc' | 'string' | 'csi';
-    let bodyStart = start + 1;
-    if (first === 0x1b) {
-      const intro = buf[start + 1];
-      if (intro === undefined) return -1; // lone trailing ESC
-      if (intro === '[') kind = 'csi';
-      else {
-        // ESC escape (ECMA-48): zero-or-more intermediates 0x20-0x2f then one
-        // final 0x30-0x7e. Hold (-1) if intermediates are seen but the final has
-        // not arrived yet, so a chunk split mid-escape matches the one-shot
-        // grammar (the old `return start + 2` assumed every non-CSI escape was
-        // 2 bytes, splitting `ESC ( B` and diverging from one-shot output).
-        const code = buf.charCodeAt(start + 1);
-        if (code === 0x1b) return start + 1; // overlap: reconsider the second ESC
-        // A C1 control after ESC (0x80-0x9f) is its OWN introducer (OSC/CSI/APC/
-        // DCS/PM/SOS), not the final of a 2-byte ESC escape: hold the ESC and
-        // reconsider the C1 so a chunk split between them matches one-shot output.
-        if (code >= 0x80 && code <= 0x9f) return start + 1;
-        if (code < 0x20 || code > 0x2f) return start + 2; // complete 2-byte escape
-        let i = start + 2;
-        while (i < buf.length && buf.charCodeAt(i) >= 0x20 && buf.charCodeAt(i) <= 0x2f) i++;
-        return i >= buf.length ? -1 : i + 1;
-      }
-      bodyStart = start + 2;
-    } else if (first === 0x9b) kind = 'csi';
-    else return start + 1;
-    if (kind === 'csi') {
-      for (let i = bodyStart; i < buf.length; i++) {
-        const c = buf.charCodeAt(i);
-        if (c >= 0x40 && c <= 0x7e) return i + 1; // final byte
-        if (c < 0x20 || c > 0x7e) return i; // malformed CSI: stop holding here
-      }
-      return -1;
-    }
-    return -1;
-  }
-
-  function isIntroducer(code: number): boolean {
-    return (
-      code === 0x1b ||
-      code === 0x90 ||
-      code === 0x98 ||
-      code === 0x9b ||
-      (code >= 0x9d && code <= 0x9f)
-    );
-  }
-
-  function splitTail(buf: string): { emit: string; hold: string } {
-    let i = 0;
-    while (i < buf.length) {
-      if (!isIntroducer(buf.charCodeAt(i))) {
-        i += 1;
-        continue;
-      }
-      const end = sequenceEnd(buf, i);
-      if (end === -1) return { emit: buf.slice(0, i), hold: buf.slice(i) };
-      i = end;
-    }
-    return { emit: buf, hold: '' };
-  }
 
   return new TransformStream<string, string>({
     transform(chunk, controller) {

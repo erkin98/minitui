@@ -1,8 +1,12 @@
 import type { AppEvent } from '../events/app-event.js';
 
-export function toVisibilityNote(e: Extract<AppEvent, { kind: 'visibility' }>): {
+type VisibilityEvent = Extract<AppEvent, { kind: 'visibility' }>;
+
+// `visClass` is derived from the event's own declared type rather than restated,
+// so a change to the variant propagates here instead of silently diverging.
+export function toVisibilityNote(e: VisibilityEvent): {
   note: string;
-  visClass: 'modelVisible' | 'modelOnly' | 'localOnly';
+  visClass: VisibilityEvent['visClass'];
 } {
   return { note: e.note, visClass: e.visClass };
 }

@@ -15,5 +15,3 @@ export const CONSUMED_KINDS: ReadonlySet<EventType> = createReadonlySet([
   EventType.RAW,
   EventType.ACTIVITY_SNAPSHOT,
 ]);
-
-export { EventType };

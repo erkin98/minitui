@@ -70,6 +70,12 @@ describe('AgentEvent', () => {
     expect(TokenUsageSchema.safeParse({ inputTokens: 1.5, outputTokens: 0 }).success).toBe(false);
     expect(TokenUsageSchema.safeParse({ inputTokens: 12, outputTokens: 34 }).success).toBe(true);
   });
+  it('TokenUsageSchema leaves its parsed result mutable for the usage accumulator', () => {
+    // Unlike the other object schemas here this one is intentionally not frozen: the
+    // running-total accumulator that consumes it needs the inferred type to stay mutable.
+    const parsed = TokenUsageSchema.parse({ inputTokens: 1, outputTokens: 2 });
+    expect(Object.isFrozen(parsed)).toBe(false);
+  });
   it('parses a STATE_DELTA carrying RFC-6902 patches', () => {
     const ev: AgentEvent = {
       type: 'STATE_DELTA',
