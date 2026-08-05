@@ -37,10 +37,10 @@ export function createAgUiAgentPort(
       const waiters: Array<(v: IteratorResult<AppEvent, undefined>) => void> = [];
       let done = false;
 
-      const emit = (e: AppEvent): void => {
-        const w = waiters.shift();
-        if (w) {
-          w({ value: e, done: false });
+      const emit = (event: AppEvent): void => {
+        const waiter = waiters.shift();
+        if (waiter) {
+          waiter({ value: event, done: false });
           return;
         }
         // Bound the buffer so a fast producer and slow consumer cannot grow AppEvent[]
@@ -60,14 +60,14 @@ export function createAgUiAgentPort(
             // runs — and escapes emit() into the rxjs subscriber callback.
           }
         }
-        queue.push(e);
+        queue.push(event);
       };
       const finish = (): void => {
         done = true;
-        let w = waiters.shift();
-        while (w) {
-          w({ value: undefined, done: true });
-          w = waiters.shift();
+        let waiter = waiters.shift();
+        while (waiter) {
+          waiter({ value: undefined, done: true });
+          waiter = waiters.shift();
         }
       };
       // One idempotent teardown for every consumer-initiated close (handle.abort / return / throw):
@@ -78,10 +78,10 @@ export function createAgUiAgentPort(
         finish();
       };
 
-      const fail = (e: unknown): void => {
+      const fail = (error: unknown): void => {
         emit({
           kind: 'run-error',
-          message: formatUnknown(e),
+          message: formatUnknown(error),
           retriable: true,
         });
         finish();
@@ -99,8 +99,8 @@ export function createAgUiAgentPort(
           onError: fail,
           onComplete: finish,
         });
-      } catch (e) {
-        fail(e);
+      } catch (error) {
+        fail(error);
       }
 
       const events: AsyncGenerator<AppEvent, undefined> = {
@@ -114,13 +114,13 @@ export function createAgUiAgentPort(
           close();
           return Promise.resolve({ value: undefined, done: true });
         },
-        throw(e: unknown): Promise<IteratorResult<AppEvent, undefined>> {
+        throw(reason: unknown): Promise<IteratorResult<AppEvent, undefined>> {
           close();
           // Reject with the consumer's value verbatim: coercing to Error would run
-          // String(e), which can itself throw, and would break identity with local-agent's
-          // throw(), which rejects with the same value unchanged.
+          // String(reason), which can itself throw, and would break identity with
+          // local-agent's throw(), which rejects with the same value unchanged.
           // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
-          return Promise.reject(e);
+          return Promise.reject(reason);
         },
         [Symbol.asyncIterator]() {
           return this;

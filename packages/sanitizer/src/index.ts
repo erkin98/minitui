@@ -19,7 +19,7 @@ export interface SanitizeOptions {
   readonly allow?: 'none' | 'renderer-sgr' | undefined;
 }
 
-// renderer-sgr mode runs AFTER stripDangerousOsc (which already dropped every
+// renderer-sgr mode runs AFTER stripDangerousOscSegments (which already dropped every
 // dangerous string sequence fail-closed and rebuilt allowed OSC 8 links in
 // the canonical ESC-form frame). A single left-to-right scan then keeps ONLY:
 //   - strict SGR: `ESC[` + params limited to digits/:/; + final `m` — the
@@ -129,7 +129,7 @@ function sanitizeWith(
 // Never hold from `lastIndexOf(ESC)`: an unterminated OSC's payload can
 // itself contain later ESC bytes, and holding only from the last one would
 // emit the live introducer ahead of it. At flush, the held tail is sanitized
-// — stripDangerousOsc drops an unterminated string sequence fail-closed, and
+// — stripDangerousOscSegments drops an unterminated string sequence fail-closed, and
 // a dangling lone ESC is caret-encoded, never silently dropped.
 //
 // The carry is CAPPED so a never-terminating sequence cannot buffer

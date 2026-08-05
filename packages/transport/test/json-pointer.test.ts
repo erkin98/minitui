@@ -148,6 +148,15 @@ describe('json-pointer depth ceiling', () => {
     expect(() => setIn({}, deep(256), 1)).not.toThrow();
   });
 
+  it('counts separators BEFORE tokenizing, so a flood cannot reach the tokenizer', () => {
+    // The depth check runs twice: a raw separator pre-scan, then a token-count check. Both
+    // reject a well-formed over-deep pointer, so neither alone is witnessed by the cases
+    // above. This input has 300 separators but does NOT start with '/', so the tokenizer's
+    // own guard would reject it first with the different /invalid JSON pointer/ — only the
+    // pre-scan can produce a depth error here.
+    expect(() => setIn({}, 'a/'.repeat(300), 1)).toThrow(/exceeds max depth/);
+  });
+
   it('turns a would-be stack overflow into a clean typed throw', () => {
     // 50k tokens would blow the native stack (RangeError) without the ceiling.
     expect(() => setIn({}, deep(50000), 1)).toThrow(/depth/i);

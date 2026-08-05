@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { stripAnsi, hasEscape, PRESERVE_C0 } from '../src/ansi.js';
-import { stripDangerousOsc, stripHyperlinks } from '../src/osc.js';
+import { stripDangerousOscSegments, stripHyperlinks } from '../src/osc.js';
 import { sanitize, sanitizeSpecStrings } from '../src/index.js';
 import { runStream } from './run-stream.js';
 
@@ -34,7 +34,7 @@ describe('stripAnsi', () => {
   });
 
   it('removes a whole OSC span cleanly (no orphaned introducer)', () => {
-    // stripDangerousOsc runs first in the real pipeline; any OSC that survives
+    // stripDangerousOscSegments runs first in the real pipeline; any OSC that survives
     // to stripAnsi (e.g. an allowed OSC 8 link in default mode) must vanish as a
     // WHOLE sequence — never leave a stray `8;;` behind.
     const link = `${ESC}]8;;https://example.com${ESC}\\text${ESC}]8;;${ESC}\\`;
@@ -96,101 +96,164 @@ describe('stripAnsi', () => {
   });
 });
 
-describe('stripDangerousOsc', () => {
+describe('stripDangerousOscSegments', () => {
+  // The production consumer (index.ts sanitizeWith) branches on segment.kind: a
+  // 'trusted-osc8' segment bypasses the residual strip, a 'text' segment does not.
+  // Assert the [kind, value] pairs, never a joined string — joining erases the one
+  // field the pipeline's safety decision reads.
+  const segments = (text: string): ReadonlyArray<readonly [string, string]> =>
+    stripDangerousOscSegments(text).map((s) => [s.kind, s.value] as const);
+
+  const OSC8_CLOSE = `${ESC}]8;;${ST}`;
+
   it('drops an OSC 52 clipboard-write entirely (BEL-terminated)', () => {
-    expect(stripDangerousOsc(`x${ESC}]52;c;ZXZpbA==${BEL}y`)).toBe('xy');
+    expect(segments(`x${ESC}]52;c;ZXZpbA==${BEL}y`)).toEqual([
+      ['text', 'x'],
+      ['text', 'y'],
+    ]);
   });
 
   it('drops an OSC 52 clipboard-write entirely (ST-terminated)', () => {
-    expect(stripDangerousOsc(`x${ESC}]52;c;ZXZpbA==${ST}y`)).toBe('xy');
+    expect(segments(`x${ESC}]52;c;ZXZpbA==${ST}y`)).toEqual([
+      ['text', 'x'],
+      ['text', 'y'],
+    ]);
   });
 
-  it('keeps an OSC 8 hyperlink with an allowed https scheme', () => {
-    const link = `${ESC}]8;;https://example.com${ST}text${ESC}]8;;${ST}`;
-    expect(stripDangerousOsc(`a${link}b`)).toBe(`a${link}b`);
+  it('keeps an OSC 8 hyperlink with an allowed https scheme, framed as trusted', () => {
+    // Only the two frames are trusted; the label between them stays 'text' and so
+    // remains subject to the residual strip.
+    const open = `${ESC}]8;;https://example.com${ST}`;
+    expect(segments(`a${open}text${OSC8_CLOSE}b`)).toEqual([
+      ['text', 'a'],
+      ['trusted-osc8', open],
+      ['text', 'text'],
+      ['trusted-osc8', OSC8_CLOSE],
+      ['text', 'b'],
+    ]);
   });
 
   it('strips the OSC 8 wrapper of a disallowed scheme but keeps the link text', () => {
-    const evil = `${ESC}]8;;javascript:alert(1)${ST}click${ESC}]8;;${ST}`;
-    expect(stripDangerousOsc(`a${evil}b`)).toBe('aclickb');
+    const evil = `${ESC}]8;;javascript:alert(1)${ST}click${OSC8_CLOSE}`;
+    // No trusted-osc8 segment at all — the visible label survives as plain text.
+    expect(segments(`a${evil}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'click'],
+      ['text', 'b'],
+    ]);
   });
 
-  it('strips an OSC 8 file:// link that smuggles a payload but keeps the text', () => {
-    const evil = `${ESC}]8;;file:///etc/passwd${ST}open${ESC}]8;;${ST}`;
-    // file is allowlisted and the input is already canonical ESC-form,
-    // so the rebuilt link is byte-identical to the input
-    expect(stripDangerousOsc(evil)).toBe(evil);
+  it('trusts an OSC 8 file:// link whose body is already canonical', () => {
+    const open = `${ESC}]8;;file:///etc/passwd${ST}`;
+    // file is allowlisted and the input is already canonical ESC-form, so the
+    // rebuilt frames are byte-identical to the input frames.
+    expect(segments(`${open}open${OSC8_CLOSE}`)).toEqual([
+      ['trusted-osc8', open],
+      ['text', 'open'],
+      ['trusted-osc8', OSC8_CLOSE],
+    ]);
   });
 
   it('drops an APC (Kitty graphics) payload entirely', () => {
-    expect(stripDangerousOsc(`a${ESC}_Gf=100,a=T;BASE64DATA${ST}b`)).toBe('ab');
+    expect(segments(`a${ESC}_Gf=100,a=T;BASE64DATA${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('drops a DCS / Sixel payload entirely', () => {
-    expect(stripDangerousOsc(`a${ESC}Pq#0;2;0;0;0${ST}b`)).toBe('ab');
+    expect(segments(`a${ESC}Pq#0;2;0;0;0${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('drops a PM (privacy message) payload entirely', () => {
-    expect(stripDangerousOsc(`a${ESC}^secret${ST}b`)).toBe('ab');
+    expect(segments(`a${ESC}^secret${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('drops an SOS (start of string) payload entirely', () => {
-    expect(stripDangerousOsc(`a${ESC}Xsmuggled${ST}b`)).toBe('ab');
+    expect(segments(`a${ESC}Xsmuggled${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('drops a C1-introduced OSC 52 (0x9d) terminated by BEL', () => {
-    expect(stripDangerousOsc(`x\x9d52;c;ZXZpbA==${BEL}y`)).toBe('xy');
+    expect(segments(`x\x9d52;c;ZXZpbA==${BEL}y`)).toEqual([
+      ['text', 'x'],
+      ['text', 'y'],
+    ]);
   });
 
   it('drops an OSC 52 terminated by the C1 ST (0x9c)', () => {
-    expect(stripDangerousOsc(`x${ESC}]52;c;ZXZpbA==\x9cy`)).toBe('xy');
+    expect(segments(`x${ESC}]52;c;ZXZpbA==\x9cy`)).toEqual([
+      ['text', 'x'],
+      ['text', 'y'],
+    ]);
   });
 
   it('drops a C1-introduced APC (0x9f) payload', () => {
-    expect(stripDangerousOsc(`a\x9fGf=100;DATA${ST}b`)).toBe('ab');
+    expect(segments(`a\x9fGf=100;DATA${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('does NOT let a BEL terminate a DCS payload — BEL is data outside OSC', () => {
     // Early termination at the BEL would leave `more ST` as visible junk.
-    expect(stripDangerousOsc(`a${ESC}Pdata${BEL}more${ST}b`)).toBe('ab');
+    expect(segments(`a${ESC}Pdata${BEL}more${ST}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('FAIL CLOSED: drops an unterminated OSC 52 from its introducer to end of input', () => {
     // Leaking `ESC]52;c;...` raw would leave the real terminal parsing an
     // open OSC and swallowing everything printed after us into its payload.
-    expect(stripDangerousOsc(`steal${ESC}]52;c;ZXZpbA==`)).toBe('steal');
+    expect(segments(`steal${ESC}]52;c;ZXZpbA==`)).toEqual([['text', 'steal']]);
   });
 
   it('FAIL CLOSED: drops an unterminated APC from its introducer to end of input', () => {
-    expect(stripDangerousOsc(`a${ESC}_Gf=100,a=T;BASE64`)).toBe('a');
+    expect(segments(`a${ESC}_Gf=100,a=T;BASE64`)).toEqual([['text', 'a']]);
   });
 
   it('normalizes an allowed OSC 8 link to the canonical ESC-form frame', () => {
     // BEL-terminated allowed open is rebuilt as `ESC]8;body ESC\` — parsed
-    // parts only, never the raw input frame bytes.
+    // parts only, never the raw input frame bytes. The trusted segments are
+    // therefore ST-form even though every frame in the input was BEL-form.
     const belLink = `${ESC}]8;;https://example.com${BEL}text${ESC}]8;;${BEL}`;
-    const canonical = `${ESC}]8;;https://example.com${ST}text${ESC}]8;;${ST}`;
-    expect(stripDangerousOsc(belLink)).toBe(canonical);
+    expect(segments(belLink)).toEqual([
+      ['trusted-osc8', `${ESC}]8;;https://example.com${ST}`],
+      ['text', 'text'],
+      ['trusted-osc8', OSC8_CLOSE],
+    ]);
   });
 
   it('drops the wrapper of an allowed-scheme OSC 8 whose body smuggles control bytes', () => {
-    const evil = `${ESC}]8;;https://a\x9d52;c;evil${BEL}click${ESC}]8;;${ST}`;
-    const out = stripDangerousOsc(evil);
-    expect(out).toContain('click');
-    expect(out).not.toContain('\x9d');
-    expect(out).not.toContain('52;c');
+    const evil = `${ESC}]8;;https://a\x9d52;c;evil${BEL}click${OSC8_CLOSE}`;
+    // The scheme is allowlisted but the body is not printable ASCII, so nothing is
+    // trusted: the smuggled C1 introducer never reaches a segment that bypasses
+    // the residual strip.
+    expect(segments(evil)).toEqual([['text', 'click']]);
   });
 
   it('strips bracketed-paste begin/end markers so the framing bytes cannot survive', () => {
-    expect(stripDangerousOsc(`${ESC}[200~rm -rf /${ESC}[201~`)).toBe('rm -rf /');
+    expect(segments(`${ESC}[200~rm -rf /${ESC}[201~`)).toEqual([['text', 'rm -rf /']]);
   });
 
   it('drops an iTerm2 OSC 1337 file-write directive', () => {
-    expect(stripDangerousOsc(`a${ESC}]1337;File=name=x:ZGF0YQ==${BEL}b`)).toBe('ab');
+    expect(segments(`a${ESC}]1337;File=name=x:ZGF0YQ==${BEL}b`)).toEqual([
+      ['text', 'a'],
+      ['text', 'b'],
+    ]);
   });
 
   it('leaves clean text untouched', () => {
-    expect(stripDangerousOsc('just plain text')).toBe('just plain text');
+    expect(segments('just plain text')).toEqual([['text', 'just plain text']]);
   });
 });
 

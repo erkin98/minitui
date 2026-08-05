@@ -262,6 +262,17 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     expect(ev).toMatchObject({ kind: 'run-error', retriable: false });
   });
 
+  it('is total for a TOP-LEVEL non-object, not just for a malformed event object', () => {
+    // Every other case here hands the boundary an object, so only this one drives the
+    // `raw === null || typeof raw !== 'object'` arm — the single place rawType is derived
+    // from the whole value instead of from its `type` field.
+    expect(toAppEvent(null)).toEqual({ kind: 'passthrough', rawType: 'null' });
+    expect(toAppEvent(undefined)).toEqual({ kind: 'passthrough', rawType: 'undefined' });
+    expect(toAppEvent(42)).toEqual({ kind: 'passthrough', rawType: '42' });
+    // A bare string that LOOKS like a discriminant is still not an event.
+    expect(toAppEvent('RUN_STARTED')).toEqual({ kind: 'passthrough', rawType: 'RUN_STARTED' });
+  });
+
   it('fails closed on a reserved-key ACTIVITY_SNAPSHOT spec', () => {
     const ev = toAppEvent({
       type: EventType.ACTIVITY_SNAPSHOT,
