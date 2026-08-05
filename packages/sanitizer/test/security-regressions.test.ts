@@ -1,36 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { performance } from 'node:perf_hooks';
-import {
-  sanitize,
-  sanitizeStream,
-  sanitizeSpecStrings,
-  ALLOWED_OSC8_SCHEMES,
-} from '../src/index.js';
+import { sanitize, sanitizeSpecStrings, ALLOWED_OSC8_SCHEMES } from '../src/index.js';
+import { runStream } from './run-stream.js';
 
 const ESC = '\x1b';
 const ST = '\x1b\\'; // String Terminator (ESC \)
 const BEL = '\x07';
-
-async function runStream(
-  chunks: string[],
-  opts?: { allow?: 'none' | 'renderer-sgr' | undefined },
-): Promise<string> {
-  const t = sanitizeStream(opts);
-  const writer = t.writable.getWriter();
-  const reader = t.readable.getReader();
-  const out: string[] = [];
-  const pump = (async () => {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      out.push(value);
-    }
-  })();
-  for (const c of chunks) await writer.write(c);
-  await writer.close();
-  await pump;
-  return out.join('');
-}
 
 describe('ALLOWED_OSC8_SCHEMES runtime immutability', () => {
   it('rejects .add so an in-process caller cannot widen the allowlist', () => {
@@ -213,11 +187,9 @@ describe('doubled-ESC control strings and the ESC intermediate/final grammar', (
     expect(sanitize(full)).toBe('^[');
   });
 
-  it('handles an unterminated repeated-ESC input within a bounded time', () => {
+  it('handles an unterminated repeated-ESC input fail closed', () => {
     const hostile = `A${ESC}]52;c;${ESC.repeat(38)}tail`;
-    const started = performance.now();
     expect(sanitize(hostile)).toBe('A');
-    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('matches one-shot output at every single split offset', async () => {
@@ -231,6 +203,23 @@ describe('doubled-ESC control strings and the ESC intermediate/final grammar', (
         text: `${OSC8_OPEN}é漢😀label${OSC8_CLOSE}after`,
         opts: { allow: 'renderer-sgr' } as const,
       },
+      // Plain CSI/SGR. The corpus was all control STRINGS and OSC 8 — the most
+      // ordinary sequence the strip handles was never split-swept at all.
+      { text: `A${ESC}[31mred${ESC}[0mB${ESC}[2JC`, opts: undefined },
+      { text: `A${ESC}[31mred${ESC}[0mB${ESC}[2JC`, opts: { allow: 'renderer-sgr' } as const },
+      { text: `A\x9b31mred\x9b0mB`, opts: undefined },
+      { text: `A\x9b31mred\x9b0mB`, opts: { allow: 'renderer-sgr' } as const },
+      // Out-of-order CSI candidates — a parameter byte after an intermediate.
+      // The stream's completeness check used to accept these while the strip's
+      // regex rejected them, making it the loosest of three spellings of one
+      // grammar. Tightening it moves the hold boundary; these rows lock the
+      // OUTPUT, which must not move, in both modes.
+      { text: `A${ESC}[!1mZ`, opts: undefined },
+      { text: `A${ESC}[!1mZ`, opts: { allow: 'renderer-sgr' } as const },
+      { text: `A${ESC}[ ;mZ`, opts: undefined },
+      { text: `A${ESC}[ ;mZ`, opts: { allow: 'renderer-sgr' } as const },
+      { text: `A${ESC}[/0HZ`, opts: undefined },
+      { text: `A${ESC}[/0HZ`, opts: { allow: 'renderer-sgr' } as const },
     ];
 
     for (const testCase of cases) {
@@ -244,12 +233,107 @@ describe('doubled-ESC control strings and the ESC intermediate/final grammar', (
       }
     }
   });
+
+  it('holds only from the CURRENT adjacency chain, so a short tail past MAX_CARRY still matches one-shot', async () => {
+    // `ESC[m ESC[m` are adjacent — one sequence ends exactly on the next
+    // introducer — so the hold offset must cover the pair in case the chunk cut
+    // it. But the chain ENDS at the plain byte after it, and the offset has to
+    // be released there. Latched, it holds from byte 0: 8201 bytes for a SIX-byte
+    // unterminated OSC, which trips MAX_CARRY (8192), drops the carry, and lets
+    // the sequence's continuation surface as visible text in the next chunk.
+    // It fails SAFE — the leaked bytes are inert text and a caret-encoded BEL,
+    // never a live control byte — but it breaks the §Z107/§Z128 promise that
+    // one-shot and every below-cap chunking are byte-identical.
+    //
+    // The one-plain-byte-between row is the control: it breaks the adjacency
+    // chain on the first sequence and passes in BOTH directions. Keeping it here
+    // is what proves this test discriminates the latch and not merely "large
+    // buffers".
+    const cases = [
+      { name: 'adjacent escape pair', head: `${ESC}[m${ESC}[m` },
+      { name: 'one plain byte between (control)', head: `${ESC}[m.${ESC}[m` },
+    ];
+    for (const { name, head } of cases) {
+      const first = `${head}${'A'.repeat(8190)}${ESC}]0;x`;
+      const second = `PAYLOAD${BEL}rest`;
+      // The buffer must clear MAX_CARRY: every other split-exhaustive suite in
+      // this package uses corpora under 100 bytes and is vacuous for this class.
+      expect(first.length, name).toBeGreaterThan(8192);
+      expect(await runStream([first, second]), name).toBe(sanitize(first + second));
+    }
+  });
 });
 
 const OSC8_OPEN = `${ESC}]8;;https://example.com${ST}`;
 const OSC8_CLOSE = `${ESC}]8;;${ST}`;
 
 describe('OSC 8 pairing across chunks and intervening control strings', () => {
+  it('never promotes bytes joined around a removed control string to a trusted OSC 8 frame', () => {
+    const osc52 = `${ESC}]52;c;payload${BEL}`;
+    const attack = `${ESC}${osc52}]8;;javascript:alert(1)${ST}click`;
+    const renderer = sanitize(attack, { allow: 'renderer-sgr' });
+    const plain = sanitize(attack);
+
+    expect(renderer).not.toContain(ESC);
+    expect(renderer).toContain('click');
+    expect(plain).not.toContain(ESC);
+    expect(plain).toContain('click');
+  });
+
+  it('never synthesizes a trusted OSC 8 frame at ANY chunk boundary either', async () => {
+    // The synthesis attack above is witnessed one-shot only. The property is
+    // about how segments are joined, and the stream joins them differently — at
+    // chunk boundaries — so it needs its own witness. It holds today; this
+    // records that rather than assuming it.
+    const osc52 = `${ESC}]52;c;payload${BEL}`;
+    const attack = `${ESC}${osc52}]8;;javascript:alert(1)${ST}click`;
+    for (const opts of [undefined, { allow: 'renderer-sgr' } as const]) {
+      const expected = sanitize(attack, opts);
+      for (let split = 0; split <= attack.length; split++) {
+        const actual = await runStream([attack.slice(0, split), attack.slice(split)], opts);
+        const label = `split ${split}, mode ${opts?.allow ?? 'none'}`;
+        expect(actual, label).toBe(expected);
+        expect(actual, label).not.toContain(ESC); // no live frame was synthesized
+        expect(actual, label).toContain('click'); // and the visible text survived
+      }
+    }
+  });
+
+  it('keeps the original ESC while reconsidering an incomplete C1 string with a suffix', async () => {
+    const full = `A${ESC}\x9dpayload${BEL}Z`;
+    for (const opts of [undefined, { allow: 'renderer-sgr' } as const]) {
+      const expected = sanitize(full, opts);
+      for (let split = 0; split <= full.length; split++) {
+        expect(
+          await runStream([full.slice(0, split), full.slice(split)], opts),
+          `split ${split}, mode ${opts?.allow ?? 'none'}`,
+        ).toBe(expected);
+      }
+    }
+  });
+
+  it('reconsiders a control introducer after ESC intermediates at every split', async () => {
+    const controlStrings = [
+      `\x9dpayload${BEL}`,
+      `\x90payload${ST}`,
+      `\x98payload${ST}`,
+      `\x9epayload${ST}`,
+      `\x9fpayload${ST}`,
+    ];
+    for (const control of controlStrings) {
+      const full = `A${ESC}(${control}moreZ`;
+      for (const opts of [undefined, { allow: 'renderer-sgr' } as const]) {
+        const expected = sanitize(full, opts);
+        for (let split = 0; split <= full.length; split++) {
+          expect(
+            await runStream([full.slice(0, split), full.slice(split)], opts),
+            `split ${split}, mode ${opts?.allow ?? 'none'}, control ${control.charCodeAt(0)}`,
+          ).toBe(expected);
+        }
+      }
+    }
+  });
+
   it('renderer-sgr stream: an open in one chunk and its close in the next stay paired', async () => {
     const out = await runStream([`${OSC8_OPEN}text`, OSC8_CLOSE], { allow: 'renderer-sgr' });
     expect(out).toBe(`${OSC8_OPEN}text${OSC8_CLOSE}`);

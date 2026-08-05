@@ -17,10 +17,23 @@ export const sharedVitestConfig = defineConfig({
   },
   test: {
     environment: 'node',
+    // surface.test.ts builds a real TypeScript program per test, ~1.5s uninstrumented
+    // but 4-6.4s once V8 coverage instrumentation is attached. The 5000ms vitest
+    // default straddles that range, so coverage runs fail intermittently on slower
+    // machines/CI. 20s gives ~3x headroom over the slowest observed coverage run.
+    testTimeout: 20_000,
     setupFiles: [fromRoot('./vitest.determinism.setup.ts')],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
+      include: [fromRoot('./packages/*/src/**/*.ts')],
+      exclude: [fromRoot('./packages/*/dist/**')],
+      thresholds: {
+        statements: 85,
+        branches: 80,
+        functions: 80,
+        lines: 85,
+      },
     },
   },
 });

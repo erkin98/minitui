@@ -39,4 +39,38 @@ describe('ActionKind', () => {
     );
     expect(() => assertNever('x' as never)).toThrow(/^unhandled: "x"$/);
   });
+  it('stays total for values JSON.stringify cannot render', () => {
+    // JSON.stringify throws on a BigInt and returns undefined for a symbol — assertNever
+    // must still throw ITS OWN descriptive error rather than one of theirs.
+    expect(() => assertNever(10n as never)).toThrow(/^unhandled: 10n$/);
+    expect(() => assertNever(Symbol('x') as never)).toThrow(/^unhandled: Symbol\(x\)$/);
+  });
+  it('reports the unhandled member when the value has a hostile toJSON and toString', () => {
+    // The reporter runs while the process is already reporting a bug. A value that
+    // throws from its own conversion hooks must not replace the diagnostic naming the
+    // bug with its own error. `as never` is required here for the reason documented
+    // above; the hostile value is an ordinary object, no replacement API involved.
+    const hostileObject = {
+      toJSON(): never {
+        throw new Error('toJSON exploded');
+      },
+      toString(): never {
+        throw new Error('toString exploded');
+      },
+    };
+
+    expect(() => assertNever(hostileObject as never, 'ActionKind')).toThrow(
+      /^unhandled ActionKind: /,
+    );
+  });
+  it('reports the unhandled member when a function has a hostile toString', () => {
+    const hostileFunction = (): string => 'never invoked';
+    Object.defineProperty(hostileFunction, 'toString', {
+      value: (): never => {
+        throw new Error('toString exploded');
+      },
+    });
+
+    expect(() => assertNever(hostileFunction as never)).toThrow(/^unhandled: /);
+  });
 });

@@ -55,7 +55,10 @@ describe('toAppEvent (single normalization chokepoint)', () => {
 
   it('honors an explicit wire retriable flag', () => {
     const ev = toAppEvent({ type: EventType.RUN_ERROR, message: 'gate refused', retriable: false });
-    expect(ev).toEqual({
+    // toStrictEqual, not toEqual: the assertion is that `code` is an OWN key holding undefined.
+    // toEqual treats an undefined-valued property as absent, so it passes whether or not the
+    // key is emitted at all — which is exactly the distinction exactOptionalPropertyTypes draws.
+    expect(ev).toStrictEqual({
       kind: 'run-error',
       message: 'gate refused',
       code: undefined,
@@ -69,6 +72,7 @@ describe('toAppEvent (single normalization chokepoint)', () => {
       toolCallId: 't1',
       toolName: 'merge',
       content: 'ok',
+      isError: false,
     });
     expect(ev).toEqual({
       kind: 'tool-result',
@@ -76,6 +80,22 @@ describe('toAppEvent (single normalization chokepoint)', () => {
       toolName: 'merge',
       content: 'ok',
       isError: false,
+    });
+  });
+
+  it('rejects TOOL_CALL_RESULT when toolName or isError is missing', () => {
+    const base = {
+      type: EventType.TOOL_CALL_RESULT,
+      toolCallId: 't1',
+      content: 'ok',
+    };
+    expect(toAppEvent({ ...base, isError: false })).toMatchObject({
+      kind: 'run-error',
+      retriable: false,
+    });
+    expect(toAppEvent({ ...base, toolName: 'merge' })).toMatchObject({
+      kind: 'run-error',
+      retriable: false,
     });
   });
 
@@ -431,5 +451,17 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     expect(() => runtime.clear()).toThrow();
     expect(() => Set.prototype.delete.call(runtime, EventType.STATE_DELTA)).toThrow();
     expect(CONSUMED_KINDS.has(EventType.STATE_DELTA)).toBe(true);
+  });
+
+  it('keeps the consumed kind vocabulary exactly aligned with the normalizer', () => {
+    // Derived from the switch itself, not from a second hand-written list: every kind
+    // normalizeObject has a case for returns a non-passthrough AppEvent even for a bare
+    // {type} event (an unsatisfied case returns malformed(), i.e. kind 'run-error');
+    // every kind that falls to `default` returns kind 'passthrough'. Two literal lists
+    // can only agree with each other, never with the code they claim to describe.
+    const handledByNormalizer = Object.values(EventType).filter(
+      (type) => toAppEvent({ type }).kind !== 'passthrough',
+    );
+    expect([...CONSUMED_KINDS].sort()).toEqual([...handledByNormalizer].sort());
   });
 });

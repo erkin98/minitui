@@ -1,13 +1,20 @@
 // Published-artifact gate: pack → assert tar (3 files) + manifest → install into a
 // throwaway strict consumer → tsc (types:[] skipLibCheck:false) + one ESM import.
 // Proves the SHIPPED tarball, not just source. Permanent (run by the package gate
-// + the pre-publish CI lane).
+// + pre-push).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  EXPECTED_NODE_FLOOR,
+  EXPECTED_PACKAGE_MANAGER,
+  assertConcreteDependencies,
+  assertConcreteSemverControl,
+  assertRootToolchain,
+} from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
 // process.exit() skips finally and would leak the mkdtemp dir on every gate failure.
@@ -20,10 +27,10 @@ const pkgDir = fileURLToPath(new URL('..', import.meta.url));
 // them (no second hardcoded copy) so the throwaway consumer install uses the repo's
 // pinned pnpm, not an ambient one, and the packed engines floor is checked by value.
 const rootPkg = JSON.parse(readFileSync(resolve(pkgDir, '..', '..', 'package.json'), 'utf8'));
-const nodeFloor = rootPkg.engines?.node;
-const pkgMgr = rootPkg.packageManager;
+assertRootToolchain(rootPkg, die);
 const tmp = mkdtempSync(join(tmpdir(), 'minitui-sanitizer-pack-'));
 try {
+  assertConcreteSemverControl(die);
   // 1. Pack the built package to a temp dir (rewrites catalog: → concrete).
   const out = JSON.parse(
     execFileSync('pnpm', ['pack', '--pack-destination', tmp, '--json'], {
@@ -53,20 +60,29 @@ try {
   const depNames = Object.keys(m.dependencies ?? {});
   if (!eq(depNames, ['@types/node']))
     die('runtime dependencies must be exactly [@types/node], got ' + JSON.stringify(depNames));
-  if (!/^\d+\.\d+\.\d+/.test(m.dependencies?.['@types/node'] ?? ''))
-    die('@types/node not published concrete: ' + m.dependencies?.['@types/node']);
+  assertConcreteDependencies(m.dependencies, 'packed manifest', die);
   // Engines floor checked by VALUE against the repo floor (not mere presence): a
   // weakened '*'/'>=18' or a dropped range reds instead of silently passing.
-  if (m.engines?.node !== nodeFloor)
-    die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' ≠ repo floor ' + nodeFloor);
+  if (m.engines?.node !== EXPECTED_NODE_FLOOR)
+    die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' != ' + EXPECTED_NODE_FLOOR);
   // Exports map must ship both the types + import conditions — a deleted/half exports
   // map breaks every consumer's resolution yet would otherwise pass unchecked.
   if (!m.exports?.['.']?.types || !m.exports?.['.']?.import)
     die('packed manifest missing exports map: ' + JSON.stringify(m.exports));
+  // Exports map must be EXACTLY the root subpath. A widened map (a new "./internal"
+  // or "./unstable" entry) is a published-surface change and reds here rather than
+  // shipping unreviewed; presence-only checking cannot see it.
+  if (!eq(Object.keys(m.exports ?? {}), ['.']))
+    die('packed exports subpaths ' + JSON.stringify(Object.keys(m.exports ?? {})) + " ≠ ['.']");
   // 4. Install the tarball into a fresh strict consumer (pinned pnpm, not ambient).
   writeFileSync(
     join(tmp, 'package.json'),
-    JSON.stringify({ name: 'c', private: true, type: 'module', packageManager: pkgMgr }),
+    JSON.stringify({
+      name: 'c',
+      private: true,
+      type: 'module',
+      packageManager: EXPECTED_PACKAGE_MANAGER,
+    }),
   );
   writeFileSync(
     join(tmp, 'tsconfig.json'),
@@ -103,7 +119,7 @@ try {
     "import { sanitize } from '@minitui/sanitizer';\n" +
       "if (sanitize('a\\u001b[31mb') !== 'ab') { throw new Error('ESM import broken'); }\n",
   );
-  execFileSync('pnpm', ['add', tgz], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', ['add', '--offline', tgz], { cwd: tmp, stdio: 'inherit' });
   // 5. Compile (declaration closure) + run one ESM import. tsc comes from the
   // repo toolchain (catalog-pinned) run AGAINST the consumer project — the tmp
   // consumer has no typescript install of its own, and adding one here would

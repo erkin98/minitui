@@ -29,13 +29,20 @@ export function toAgUiEvent(
   // boundary-only enum claim, same pattern as the toAppEvent switch predicate
   if ((raw.type as EventType) === EventType.ACTIVITY_SNAPSHOT) {
     const { spec, ...rest } = raw;
+    // activityType and content are this adapter's own projection of the minitui payload,
+    // so they are assigned last and always win. messageId is synthesis, not translation:
+    // the minitui event has no message identity of its own, so ctx supplies it.
     return {
+      ...rest,
       messageId: ctx.messageId,
       activityType: ACTIVITY_TYPE,
       content: spec,
-      ...rest,
     } as unknown as BaseEvent;
   }
+  // ctx FILLS GAPS, it does not overwrite. A minitui run event carries its own required
+  // threadId/runId; replacing them with the context's would rewrite real identity. Only
+  // fields the event genuinely lacks (messageId, and the ids on events that omit them)
+  // fall back to ctx.
   return {
     threadId: ctx.threadId,
     runId: ctx.runId,

@@ -89,6 +89,26 @@ describe('action-uplink', () => {
     expect([...ids][0]).toBeTruthy();
   });
 
+  it('generates distinct toolCallId and messageId values across lifecycles', () => {
+    const first = buildActionUplink({
+      actionName: 'x',
+      params: {},
+      result: { content: 'ok', isError: false },
+    });
+    const second = buildActionUplink({
+      actionName: 'x',
+      params: {},
+      result: { content: 'ok', isError: false },
+    });
+    const firstStart = ToolCallStartEventSchema.parse(first[0]);
+    const secondStart = ToolCallStartEventSchema.parse(second[0]);
+    const firstResult = ToolCallResultEventSchema.parse(first[3]);
+    const secondResult = ToolCallResultEventSchema.parse(second[3]);
+
+    expect(firstStart.toolCallId).not.toBe(secondStart.toolCallId);
+    expect(firstResult.messageId).not.toBe(secondResult.messageId);
+  });
+
   it('preserves the error flag on the result (passthrough extra)', () => {
     const events = buildActionUplink({
       actionName: 'x',

@@ -27,7 +27,12 @@ export type EventType = z.infer<typeof EventTypeSchema>;
 
 // Per-event token usage is the enforcement point for provider-supplied counts.
 // It is separate from RUN_FINISHED so producers and remote-wire adapters can
-// parse at their boundaries. It stays mutable for accumulation before emission.
+// parse at their boundaries. Parsed results are frozen, matching every other
+// object schema in this package; an accumulator sums into a new object per
+// update rather than mutating a parsed value in place.
+// Deliberately NOT .readonly(): the cumulative usage accumulator downstream needs the
+// inferred type to stay mutable, so freezing here would break it. Callers that need an
+// immutable value freeze at their own boundary.
 export const TokenUsageSchema = z.object({
   inputTokens: z.int().nonnegative(),
   outputTokens: z.int().nonnegative(),
@@ -44,7 +49,7 @@ export const AgentEventSchema = z
     z.object({ type: z.literal('RUN_STARTED'), threadId: z.string(), runId: z.string() }),
     // minitui-owned divergence: usage is optional and not mirrored
     // from AG-UI — RunFinishedEventSchema carries result?/outcome? instead, no
-    // usage field (verified against repos/ag-ui/.../core/src/events.ts:238-247).
+    // usage field (verified against the AG-UI core event schemas, RunFinishedEvent).
     // The status frame accumulates cumulative session tokens from this field;
     // the provider factory populates it from the AI SDK's
     // finish-step totalUsage, and the adapter simply omits it crossing outbound

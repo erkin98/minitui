@@ -59,18 +59,22 @@ function deepNest(depth: number): JsonValue {
   return node;
 }
 
-// A REAL capturing DiagnosticsPort (records warn messages into an owned array),
-// matching the injected-port pattern the app-bus drop-counter test uses — no mock.
+// A REAL capturing DiagnosticsPort (records warn messages + their meta into owned
+// arrays), matching the injected-port pattern the app-bus drop-counter test uses — no mock.
 function capturingDiagnostics(): {
   warnings: string[];
-  diagnostics: { warn(m: string): void; debug(): void };
+  metas: Array<Record<string, unknown> | undefined>;
+  diagnostics: { warn(m: string, meta?: Record<string, unknown>): void; debug(): void };
 } {
   const warnings: string[] = [];
+  const metas: Array<Record<string, unknown> | undefined> = [];
   return {
     warnings,
+    metas,
     diagnostics: {
-      warn: (m: string) => {
+      warn: (m: string, meta?: Record<string, unknown>) => {
         warnings.push(m);
+        metas.push(meta);
       },
       debug() {},
     },
@@ -174,6 +178,20 @@ describe('DataStore ownership and delivery', () => {
     expect(store.getState()).toEqual({ trigger: true, left: 1, right: 2 });
   });
 
+  it('treats a staged null snapshot as authoritative during reentrant writes', () => {
+    const store = createDataStore({ initial: { trigger: false } });
+    let wrote = false;
+    store.subscribe(() => {
+      if (wrote) return;
+      wrote = true;
+      store.applySnapshot(null);
+      store.setLocal('/x', 1);
+    });
+
+    store.setLocal('/trigger', true);
+    expect(store.getState()).toEqual({ x: 1 });
+  });
+
   it('suppresses equivalent snapshots, empty deltas, and missing removals', () => {
     const store = createDataStore({ initial: { value: 1 } });
     let notifications = 0;
@@ -249,5 +267,23 @@ describe('DataStore ownership and delivery', () => {
     store.setLocal('/constructor', 'evil');
     expect(store.getState()).toEqual({ safe: 1 }); // the reserved-key write is DROPPED
     expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('getIn drops with a diagnostic instead of throwing on an invalid pointer', () => {
+    const { warnings, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: { safe: 1 }, diagnostics });
+    // Every other read/write path on this port drops-with-diagnostic; getIn must match.
+    expect(() => store.getIn('/constructor')).not.toThrow();
+    expect(store.getIn('/constructor')).toBeUndefined();
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('reports the original error value, not just its formatted message, through diagnostics', () => {
+    const { metas, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: { safe: 1 }, diagnostics });
+    store.setLocal('/constructor', 'evil');
+    const reported = metas[metas.length - 1]?.cause;
+    expect(reported).toBeInstanceOf(Error); // the raw error, not a flattened string
+    expect((reported as Error).message).toBe('reserved state key not allowed: constructor');
   });
 });

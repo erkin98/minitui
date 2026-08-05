@@ -8,6 +8,13 @@ import {
 import { formatUnknown } from '../format-unknown.js';
 import type { AppEvent } from './app-event.js';
 
+// Two different origins, neither of them the AG-UI protocol. `'non-retriable'` is
+// minitui's own cross-plan vocabulary (ledger §Z79): the agent side emits it and
+// this consumer must never re-feed it. The other three are upstream-agent codes
+// accepted defensively; two trace to repos/opencode
+// (packages/opencode/src/provider/error.ts:111,113 maps `context_length_exceeded`
+// to `context_overflow`, and packages/llm/src/provider-error.ts:26 spells the
+// ContextOverflow family).
 const NON_RETRIABLE_CODES = new Set([
   'non-retriable',
   'ContextOverflow',
@@ -15,6 +22,12 @@ const NON_RETRIABLE_CODES = new Set([
   'context_length_exceeded',
 ]);
 const VIS_CLASSES = new Set(['modelVisible', 'modelOnly', 'localOnly']);
+// Derived from AppEvent's own visibility variant so the accepted set has one
+// source of truth — the field's own declared type, not a second literal union.
+type VisClass = Extract<AppEvent, { kind: 'visibility' }>['visClass'];
+function isVisClass(value: string): value is VisClass {
+  return VIS_CLASSES.has(value);
+}
 
 export type WireEvent = BaseEvent | ({ type: string } & Record<string, unknown>);
 
@@ -46,10 +59,7 @@ function toVisibility(
   return {
     kind: 'visibility',
     note: typeof payload === 'string' ? payload : safeStringify(payload),
-    visClass: (VIS_CLASSES.has(cls) ? cls : 'modelVisible') as
-      | 'modelVisible'
-      | 'modelOnly'
-      | 'localOnly',
+    visClass: isVisClass(cls) ? cls : 'modelVisible',
   };
 }
 
@@ -118,8 +128,8 @@ function normalizeToolResult(event: WireObject): AppEvent {
   if (
     typeof toolCallId !== 'string' ||
     typeof content !== 'string' ||
-    (toolName !== undefined && typeof toolName !== 'string') ||
-    (isError !== undefined && typeof isError !== 'boolean') ||
+    typeof toolName !== 'string' ||
+    typeof isError !== 'boolean' ||
     (error !== undefined && typeof error !== 'string') ||
     (denied !== undefined && typeof denied !== 'boolean')
   ) {
@@ -128,15 +138,15 @@ function normalizeToolResult(event: WireObject): AppEvent {
   return {
     kind: 'tool-result',
     toolCallId,
-    toolName: toolName ?? '',
+    toolName,
     content,
-    isError: isError ?? false,
+    isError,
     ...(error === undefined ? {} : { error }),
     ...(denied === undefined ? {} : { denied }),
   };
 }
 
-function normalizeSnapshot(event: WireObject): AppEvent {
+function normalizeStateSnapshot(event: WireObject): AppEvent {
   const snapshot = event.snapshot;
   const parsed = JsonValueSchema.safeParse(snapshot);
   return parsed.success
@@ -144,7 +154,7 @@ function normalizeSnapshot(event: WireObject): AppEvent {
     : malformed('STATE_SNAPSHOT');
 }
 
-function normalizeDelta(event: WireObject): AppEvent {
+function normalizeStateDelta(event: WireObject): AppEvent {
   const delta = event.delta;
   const parsed = JsonPatchArraySchema.safeParse(delta);
   return parsed.success ? { kind: 'state-delta', delta: parsed.data } : malformed('STATE_DELTA');
@@ -177,6 +187,10 @@ function normalizeActivity(event: WireObject): AppEvent {
 function normalizeObject(event: WireObject): AppEvent {
   const type = event.type;
   if (typeof type !== 'string') return malformed('non-string type discriminant');
+  // The `as EventType` is load-bearing, not decoration: `type` is a plain string
+  // here, and comparing a string predicate against enum-member case labels trips
+  // `@typescript-eslint/no-unsafe-enum-comparison`. The cast gives the predicate
+  // and the labels a shared enum type; `default:` still handles unmodelled values.
   switch (type as EventType) {
     case EventType.RUN_STARTED:
       return normalizeRunStarted(event);
@@ -189,9 +203,9 @@ function normalizeObject(event: WireObject): AppEvent {
     case EventType.TOOL_CALL_RESULT:
       return normalizeToolResult(event);
     case EventType.STATE_SNAPSHOT:
-      return normalizeSnapshot(event);
+      return normalizeStateSnapshot(event);
     case EventType.STATE_DELTA:
-      return normalizeDelta(event);
+      return normalizeStateDelta(event);
     case EventType.CUSTOM:
       return normalizeCustom(event);
     case EventType.RAW:

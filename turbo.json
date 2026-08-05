@@ -1,6 +1,7 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "stream",
+  "globalEnv": ["MINITUI_NODE_RUNTIME"],
   "globalDependencies": [
     "eslint.config.js",
     "config/eslint-boundaries.js",
@@ -22,7 +23,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"],
+      "outputs": [],
       "env": ["CI", "MINITUI_GOLDEN_STRICT", "UPDATE_GOLDEN"]
     },
     "lint": {

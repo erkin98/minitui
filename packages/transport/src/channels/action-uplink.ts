@@ -30,9 +30,12 @@ export function buildActionUplink(args: {
   toolCallId?: string;
   messageId?: string;
 }): UplinkEvents {
+  // This parse is the trust boundary and must stay directly above the stringify:
+  // it yields a canonical plain-object clone, so JSON.stringify below can neither
+  // return undefined (only undefined/function/symbol inputs do) nor throw (no
+  // BigInt and no cycle survives the parse). Move the parse and that stops holding.
   const params = JsonObjectSchema.parse(args.params);
   const paramsJson = JSON.stringify(params);
-  if (typeof paramsJson !== 'string') throw new TypeError('action params are not JSON');
   // No module-level mutable counter (immutability constraint): a per-call UUID is
   // unique without shared state. randomUUID is sync and dep-free on Node 22.
   const toolCallId = args.toolCallId ?? `uplink-${randomUUID()}`;

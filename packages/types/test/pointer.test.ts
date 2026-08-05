@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
+  assertJsonResourceBudget,
   guardedRecord,
+  JSON_RESOURCE_LIMITS,
+  JsonObjectSchema,
   JsonValueSchema,
   PointerSchema,
   JsonPatchSchema,
@@ -178,6 +181,67 @@ describe('JsonValue depth ceiling', () => {
   });
 });
 
+describe('JsonValue resource budgets', () => {
+  it('exports one frozen canonical budget and checks canonical values without freezing them', () => {
+    expect(JSON_RESOURCE_LIMITS).toEqual({
+      maxDepth: 256,
+      maxNodes: 65_536,
+      maxStringCodeUnits: 1_048_576,
+      maxPatchOperations: 256,
+    });
+    expect(Object.isFrozen(JSON_RESOURCE_LIMITS)).toBe(true);
+    const value: JsonValue = { mutable: [1] };
+    assertJsonResourceBudget(value);
+    expect(Object.isFrozen(value)).toBe(false);
+  });
+
+  it('checks exact and over-limit node, string, and depth budgets without freezing input', () => {
+    const exactNodes: JsonValue = Array.from(
+      { length: JSON_RESOURCE_LIMITS.maxNodes - 1 },
+      () => null,
+    );
+    const overNodes: JsonValue = Array.from({ length: JSON_RESOURCE_LIMITS.maxNodes }, () => null);
+    const exactStrings: JsonValue = {
+      value: 'x'.repeat(JSON_RESOURCE_LIMITS.maxStringCodeUnits - 'value'.length),
+    };
+    const overStrings: JsonValue = {
+      value: 'x'.repeat(JSON_RESOURCE_LIMITS.maxStringCodeUnits - 'value'.length + 1),
+    };
+    const nest = (depth: number): JsonValue => {
+      let value: JsonValue = null;
+      for (let index = 0; index < depth; index++) value = [value];
+      return value;
+    };
+    const exactDepth = nest(JSON_RESOURCE_LIMITS.maxDepth);
+    const overDepth = nest(JSON_RESOURCE_LIMITS.maxDepth + 1);
+
+    expect(() => assertJsonResourceBudget(exactNodes)).not.toThrow();
+    expect(() => assertJsonResourceBudget(overNodes)).toThrow(/max node count/i);
+    expect(() => assertJsonResourceBudget(exactStrings)).not.toThrow();
+    expect(() => assertJsonResourceBudget(overStrings)).toThrow(/max string code units/i);
+    expect(() => assertJsonResourceBudget(exactDepth)).not.toThrow();
+    expect(() => assertJsonResourceBudget(overDepth)).toThrow(/max depth/i);
+    expect(Object.isFrozen(exactNodes)).toBe(false);
+    expect(Object.isFrozen(exactStrings)).toBe(false);
+    expect(Object.isFrozen(exactDepth)).toBe(false);
+  });
+
+  it('accepts the exact node ceiling and rejects one additional node', () => {
+    expect(JsonValueSchema.safeParse(Array.from({ length: 65_535 }, () => null)).success).toBe(
+      true,
+    );
+    expect(JsonValueSchema.safeParse(Array.from({ length: 65_536 }, () => null)).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts the exact object string budget and rejects one additional code unit', () => {
+    const exact = 'x'.repeat(JSON_RESOURCE_LIMITS.maxStringCodeUnits - 'value'.length);
+    expect(JsonObjectSchema.safeParse({ value: exact }).success).toBe(true);
+    expect(JsonObjectSchema.safeParse({ value: `${exact}x` }).success).toBe(false);
+  });
+});
+
 describe('Pointer', () => {
   it('accepts the empty pointer and rooted slash paths', () => {
     expect(PointerSchema.parse('')).toBe('');
@@ -213,5 +277,165 @@ describe('JsonPatch (RFC-6902)', () => {
   it('rejects an unknown op and a move without from', () => {
     expect(JsonPatchSchema.safeParse({ op: 'frobnicate', path: '/a' }).success).toBe(false);
     expect(JsonPatchSchema.safeParse({ op: 'move', path: '/b' }).success).toBe(false);
+  });
+
+  it('rejects more than 256 operations before reflecting patch members', () => {
+    let ownKeysCalls = 0;
+    const oversized = new Proxy(
+      Array.from({ length: 257 }, () => ({ op: 'test' as const, path: '', value: null })),
+      {
+        ownKeys() {
+          ownKeysCalls += 1;
+          throw new Error('members must not be reflected');
+        },
+      },
+    );
+
+    const result = JsonPatchArraySchema.safeParse(oversized);
+    expect(result.success).toBe(false);
+    expect(ownKeysCalls).toBe(0);
+    expect(
+      JsonPatchArraySchema.safeParse(
+        Array.from({ length: 256 }, () => ({ op: 'test' as const, path: '', value: null })),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('shares exact string and node budgets across every patch operation', () => {
+    const twoOperationStringOverhead =
+      2 * ('op'.length + 'add'.length + 'path'.length + 'value'.length);
+    const halfStringBudget = 'x'.repeat(
+      (JSON_RESOURCE_LIMITS.maxStringCodeUnits - twoOperationStringOverhead) / 2,
+    );
+    expect(
+      JsonPatchArraySchema.safeParse([
+        { op: 'add', path: '', value: halfStringBudget },
+        { op: 'add', path: '', value: halfStringBudget },
+      ]).success,
+    ).toBe(true);
+    expect(
+      JsonPatchArraySchema.safeParse([
+        { op: 'add', path: '', value: halfStringBudget },
+        { op: 'add', path: '', value: `${halfStringBudget}x` },
+      ]).success,
+    ).toBe(false);
+
+    const left = Array.from({ length: 32_763 }, () => null);
+    const exactRight = Array.from({ length: 32_764 }, () => null);
+    const overRight = Array.from({ length: 32_765 }, () => null);
+    expect(
+      JsonPatchArraySchema.safeParse([
+        { op: 'add', path: '/left', value: left },
+        { op: 'add', path: '/right', value: exactRight },
+      ]).success,
+    ).toBe(true);
+    expect(
+      JsonPatchArraySchema.safeParse([
+        { op: 'add', path: '/left', value: left },
+        { op: 'add', path: '/right', value: overRight },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it('retains the operation index when operation reflection fails', () => {
+    const hostileOperation = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('operation reflection denied');
+        },
+      },
+    );
+    const result = JsonPatchArraySchema.safeParse([hostileOperation]);
+
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues.some((issue) => issue.path[0] === 0)).toBe(true);
+  });
+
+  // The patch cloner's five structural reject branches. Each is reachable from an
+  // ordinary hand-built hostile value, so each is asserted on the message it emits
+  // rather than on a generic failure — a branch asserted only as "rejects somehow"
+  // stays green when a neighbouring branch swallows it.
+  const rejectionMessages = (patch: unknown): readonly string[] => {
+    const result = JsonPatchArraySchema.safeParse(patch);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+  const dataSlot = (value: unknown): PropertyDescriptor => ({
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  const operation = { op: 'test', path: '', value: null };
+
+  it('rejects an operation carrying a reserved or symbol key', () => {
+    const reservedKey = { ...operation };
+    Object.defineProperty(reservedKey, '__proto__', dataSlot(1));
+    expect(rejectionMessages([reservedKey])).toContain('JSON patch operation has an invalid key');
+
+    const symbolKey = { ...operation };
+    Object.defineProperty(symbolKey, Symbol('extra'), dataSlot(1));
+    expect(rejectionMessages([symbolKey])).toContain('JSON patch operation has an invalid key');
+  });
+
+  it('rejects a patch that is not an ordinary array', () => {
+    expect(rejectionMessages({ 0: operation, length: 1 })).toContain(
+      'JSON patch must be an ordinary array',
+    );
+
+    const detachedPrototype = [operation];
+    Object.setPrototypeOf(detachedPrototype, null);
+    expect(rejectionMessages(detachedPrototype)).toContain('JSON patch must be an ordinary array');
+  });
+
+  it('rejects a patch whose length slot is not a non-negative safe integer', () => {
+    const negativeLength = new Proxy([operation], {
+      getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+        if (key === 'length') {
+          return { value: -1, writable: true, enumerable: false, configurable: false };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    expect(rejectionMessages(negativeLength)).toContain('JSON patch array has an invalid length');
+  });
+
+  it('rejects a patch array carrying a member that is not a canonical index', () => {
+    const namedMember = [operation];
+    Object.defineProperty(namedMember, 'extra', dataSlot(operation));
+    expect(rejectionMessages(namedMember)).toContain('JSON patch array has a non-index member');
+
+    const symbolMember = [operation];
+    Object.defineProperty(symbolMember, Symbol('extra'), dataSlot(operation));
+    expect(rejectionMessages(symbolMember)).toContain('JSON patch array has a non-index member');
+  });
+
+  it('rejects a sparse patch array', () => {
+    // Defining index 1 on an empty array raises length to 2 without creating index 0,
+    // so the member count trails the declared length.
+    const sparse: unknown[] = [];
+    Object.defineProperty(sparse, '1', dataSlot(operation));
+
+    expect(rejectionMessages(sparse)).toContain('JSON patch array must be dense');
+  });
+
+  it('retains the array index without invoking an accessor-backed slot', () => {
+    let getterCalls = 0;
+    const hostileSlot: unknown[] = [];
+    Object.defineProperty(hostileSlot, '0', {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error('slot access denied');
+      },
+    });
+    const result = JsonPatchArraySchema.safeParse(hostileSlot);
+
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues.some((issue) => issue.path[0] === 0)).toBe(true);
+    expect(getterCalls).toBe(0);
   });
 });

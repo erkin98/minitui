@@ -25,14 +25,17 @@ export function createDataStore(opts?: {
 }): DataStore {
   const diagnostics = opts?.diagnostics;
   const subscribers = new Set<StoreSubscriber>();
-  const pending: JsonValue[] = [];
+  const pending: Array<JsonValue | undefined> = [];
   let pendingHead = 0;
   let delivering = false;
   let state: JsonValue = JsonValueSchema.parse({});
 
   const report = (message: string, error: unknown): void => {
     try {
-      diagnostics?.warn(message, { error: formatUnknown(error) });
+      // `cause` carries the raw thrown value across the diagnostics boundary
+      // (a ZodError's issues, an Error's stack, ...) so a real sink can inspect
+      // it; `error` keeps the existing formatted-string summary unchanged.
+      diagnostics?.warn(message, { error: formatUnknown(error), cause: error });
     } catch {
       // Diagnostics is observational and cannot break state delivery.
     }
@@ -53,14 +56,18 @@ export function createDataStore(opts?: {
     }
   };
 
-  const stagedState = (): JsonValue => pending.at(-1) ?? state;
+  const stagedState = (): JsonValue =>
+    pendingHead < pending.length ? pending[pending.length - 1]! : state;
 
   const deliver = (): void => {
     if (delivering) return;
     delivering = true;
     try {
       while (pendingHead < pending.length) {
-        const snapshot = pending[pendingHead++]!;
+        const snapshot = pending[pendingHead];
+        pending[pendingHead] = undefined;
+        pendingHead += 1;
+        if (snapshot === undefined) continue;
         state = snapshot;
         for (const subscriber of [...subscribers]) {
           try {
@@ -95,7 +102,14 @@ export function createDataStore(opts?: {
 
   return {
     getState: () => state,
-    getIn: (pointer) => getIn(state, pointer),
+    getIn: (pointer) => {
+      try {
+        return getIn(state, pointer);
+      } catch (error) {
+        report('dropped invalid getIn pointer', error);
+        return undefined;
+      }
+    },
     subscribe(subscriber) {
       subscribers.add(subscriber);
       return () => subscribers.delete(subscriber);

@@ -2,7 +2,7 @@
 // the dangerous side-effecting payloads (clipboard write, file write,
 // graphics), so they are excised as WHOLE spans — ESC-form AND C1-form
 // introducers alike. Grammar mirrors ink's reference tokenizer
-// (repos/ink/src/ansi-tokenizer.ts):
+// (its src/ansi-tokenizer.ts):
 //   - introducers: OSC ESC]/0x9d, DCS ESC P/0x90, PM ESC^/0x9e,
 //     APC ESC_/0x9f, SOS ESC X/0x98;
 //   - String Terminator is ESC \ or the C1 ST 0x9c; BEL (0x07) additionally
@@ -154,31 +154,60 @@ function schemeOf(uri: string): string {
   return colon === -1 ? '' : uri.slice(0, colon).toLowerCase();
 }
 
+interface PendingLabelPart {
+  readonly value: string;
+  readonly previous: PendingLabelPart | undefined;
+}
+
 interface PendingLink {
   readonly frame: string;
-  readonly label: string;
+  readonly label: PendingLabelPart | undefined;
+  readonly labelLength: number;
 }
 
 export interface OscLinkState {
   pending: PendingLink | undefined;
 }
 
-function appendVisible(state: OscLinkState, out: string[], text: string): void {
+export type OscSegment =
+  | { readonly kind: 'text'; readonly value: string }
+  | { readonly kind: 'trusted-osc8'; readonly value: string };
+
+function appendText(out: OscSegment[], text: string): void {
+  if (text.length > 0) out.push({ kind: 'text', value: text });
+}
+
+function appendPendingLabel(out: OscSegment[], pending: PendingLink): void {
+  const reversed: string[] = [];
+  let part = pending.label;
+  while (part !== undefined) {
+    reversed.push(part.value);
+    part = part.previous;
+  }
+  for (let index = reversed.length - 1; index >= 0; index--) appendText(out, reversed[index]!);
+}
+
+function appendVisible(state: OscLinkState, out: OscSegment[], text: string): void {
   if (text.length === 0) return;
   const pending = state.pending;
   if (pending === undefined) {
-    out.push(text);
+    appendText(out, text);
     return;
   }
-  if (pending.label.length + text.length <= MAX_PENDING_LABEL) {
-    state.pending = { ...pending, label: pending.label + text };
+  if (pending.labelLength + text.length <= MAX_PENDING_LABEL) {
+    state.pending = {
+      ...pending,
+      label: { value: text, previous: pending.label },
+      labelLength: pending.labelLength + text.length,
+    };
     return;
   }
-  out.push(pending.label, text);
+  appendPendingLabel(out, pending);
+  appendText(out, text);
   state.pending = undefined;
 }
 
-function handleOsc(body: string, state: OscLinkState, out: string[]): void {
+function handleOsc(body: string, state: OscLinkState, out: OscSegment[]): void {
   const separator = body.indexOf(';');
   if (separator === -1 || body.slice(0, separator) !== '8') return;
   const linkBody = body.slice(separator + 1);
@@ -188,15 +217,23 @@ function handleOsc(body: string, state: OscLinkState, out: string[]): void {
   if (uri === '') {
     const pending = state.pending;
     state.pending = undefined;
-    if (pending !== undefined) out.push(pending.frame, pending.label, OSC8_CLOSE);
+    if (pending !== undefined) {
+      out.push({ kind: 'trusted-osc8', value: pending.frame });
+      appendPendingLabel(out, pending);
+      out.push({ kind: 'trusted-osc8', value: OSC8_CLOSE });
+    }
     return;
   }
   if (!PRINTABLE_ASCII.test(linkBody) || !ALLOWED_OSC8_SCHEMES.has(schemeOf(uri))) {
     return;
   }
   const previous = state.pending;
-  if (previous !== undefined) out.push(previous.label);
-  state.pending = { frame: `\x1b]8;${linkBody}\x1b\\`, label: '' };
+  if (previous !== undefined) appendPendingLabel(out, previous);
+  state.pending = {
+    frame: `\x1b]8;${linkBody}\x1b\\`,
+    label: undefined,
+    labelLength: 0,
+  };
 }
 
 function pasteMarkerLength(text: string, index: number): number {
@@ -205,12 +242,12 @@ function pasteMarkerLength(text: string, index: number): number {
   return 0;
 }
 
-export function stripDangerousOsc(
+export function stripDangerousOscSegments(
   text: string,
   state: OscLinkState = { pending: undefined },
   final = true,
-): string {
-  const out: string[] = [];
+): OscSegment[] {
+  const out: OscSegment[] = [];
   let cursor = 0;
   let i = 0;
   while (i < text.length) {
@@ -239,10 +276,20 @@ export function stripDangerousOsc(
   }
   appendVisible(state, out, text.slice(cursor));
   if (final && state.pending !== undefined) {
-    out.push(state.pending.label);
+    appendPendingLabel(out, state.pending);
     state.pending = undefined;
   }
-  return out.join('');
+  return out;
+}
+
+export function stripDangerousOsc(
+  text: string,
+  state: OscLinkState = { pending: undefined },
+  final = true,
+): string {
+  return stripDangerousOscSegments(text, state, final)
+    .map((segment) => segment.value)
+    .join('');
 }
 
 // Canonical OSC 8 frames occupy zero display columns, but naive counters include

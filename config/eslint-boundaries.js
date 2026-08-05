@@ -61,6 +61,20 @@ export const BOUNDARY_ZONES = [
     message:
       'boundary fixture is treated as a leaf: importing the internal stub is a planted violation.',
   },
+  // The COLD BY-NAME witness. The zone above uses a RELATIVE specifier, so before this one
+  // the DAG gate had no control at all on the shape production code actually writes: every
+  // real cross-package edge is `@minitui/<pkg>`, which resolves through the package exports
+  // map to dist/. With no dist/ on disk (a clean clone, `pnpm lint` standalone, the
+  // pre-commit hook — all cold) that resolution yields nothing, the rule gets no resolved
+  // path, and a forbidden by-name edge passes unflagged. This zone fires only while the
+  // resolver reaches package SOURCE, so it is simultaneously the witness for the `paths`
+  // mapping on the root solution tsconfig that makes cold resolution work.
+  {
+    target: './test/eslint-boundary-fixture/illegal-by-name-import.ts',
+    from: './packages/sanitizer',
+    message:
+      'cold by-name witness: the boundary fixture is a leaf and may not import @minitui/sanitizer by name.',
+  },
   // The 12 restricted-package zones (the 13th package, integration-tests in `test/`,
   // imports ALL — no zone). Each transcribes its DAG allowed-edge set; forward-
   // declared + inert until the package dir lands, then active. `types` and `sanitizer` are the

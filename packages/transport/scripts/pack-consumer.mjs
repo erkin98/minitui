@@ -4,13 +4,20 @@
 // source. Transport is the first package with internal workspace deps, so the two
 // leaf tarballs (@minitui/types, @minitui/sanitizer) are packed alongside and pinned
 // via pnpm overrides — their 0.0.0 versions are not on any registry. Permanent (run
-// by the package gate + the pre-publish CI lane).
+// by the root package gate + pre-push).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  EXPECTED_NODE_FLOOR,
+  EXPECTED_PACKAGE_MANAGER,
+  assertConcreteDependencies,
+  assertConcreteSemverControl,
+  assertRootToolchain,
+} from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
 // process.exit() skips finally and would leak the mkdtemp dir on every gate failure.
@@ -18,25 +25,13 @@ const die = (m) => {
   throw new Error(m);
 };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const concreteSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const assertConcreteDependencies = (dependencies, label) => {
-  if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) {
-    die(label + ' dependencies are not an object');
-  }
-  for (const [name, version] of Object.entries(dependencies)) {
-    if (typeof version !== 'string' || !concreteSemver.test(version)) {
-      die(label + ' dependency ' + name + ' is not concrete: ' + String(version));
-    }
-  }
-};
 const pkgDir = fileURLToPath(new URL('..', import.meta.url));
 const packagesDir = resolve(pkgDir, '..');
 // Repo root is the single source of truth for the Node floor + the pinned pnpm — read
 // them (no second hardcoded copy) so the throwaway consumer install uses the repo's
 // pinned pnpm, not an ambient one, and the packed engines floor is checked by value.
 const rootPkg = JSON.parse(readFileSync(resolve(packagesDir, '..', 'package.json'), 'utf8'));
-const nodeFloor = rootPkg.engines?.node;
-const pkgMgr = rootPkg.packageManager;
+assertRootToolchain(rootPkg, die);
 const tmp = mkdtempSync(join(tmpdir(), 'minitui-transport-pack-'));
 
 const pack = (dir) => {
@@ -50,13 +45,7 @@ const pack = (dir) => {
 };
 
 try {
-  let positiveControlRejected = false;
-  try {
-    assertConcreteDependencies({ '@minitui/sanitizer': 'workspace:*' }, 'positive control');
-  } catch {
-    positiveControlRejected = true;
-  }
-  if (!positiveControlRejected) die('concrete-dependency positive control did not bite');
+  assertConcreteSemverControl(die);
 
   // 1. Pack transport + its two internal leaf deps (workspace: rewritten to concrete on pack).
   const tgz = pack(pkgDir);
@@ -74,15 +63,20 @@ try {
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
   );
-  assertConcreteDependencies(m.dependencies, 'packed manifest');
+  assertConcreteDependencies(m.dependencies, 'packed manifest', die);
   // Engines floor checked by VALUE against the repo floor (not mere presence): a
   // weakened '*'/'>=18' or a dropped range reds instead of silently passing.
-  if (m.engines?.node !== nodeFloor)
-    die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' ≠ repo floor ' + nodeFloor);
+  if (m.engines?.node !== EXPECTED_NODE_FLOOR)
+    die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' != ' + EXPECTED_NODE_FLOOR);
   // Exports map must ship both the types + import conditions — a deleted/half exports
   // map breaks every consumer's resolution yet would otherwise pass unchecked.
   if (!m.exports?.['.']?.types || !m.exports?.['.']?.import)
     die('packed manifest missing exports map: ' + JSON.stringify(m.exports));
+  // Exports map must be EXACTLY the root subpath. A widened map (a new "./internal"
+  // or "./unstable" entry) is a published-surface change and reds here rather than
+  // shipping unreviewed; presence-only checking cannot see it.
+  if (!eq(Object.keys(m.exports ?? {}), ['.']))
+    die('packed exports subpaths ' + JSON.stringify(Object.keys(m.exports ?? {})) + " ≠ ['.']");
   // 4. Install the tarballs into a fresh strict consumer. Overrides pin the two
   // internal deps to the local tarballs (0.0.0 resolves nowhere else). pnpm 11
   // reads overrides from pnpm-workspace.yaml, NOT the package.json `pnpm` key —
@@ -94,7 +88,7 @@ try {
       name: 'c',
       private: true,
       type: 'module',
-      packageManager: pkgMgr,
+      packageManager: EXPECTED_PACKAGE_MANAGER,
       dependencies: { '@minitui/transport': 'file:' + tgz },
     }),
   );
@@ -156,7 +150,7 @@ try {
       "if ({}.polluted !== undefined) throw new Error('Object.prototype polluted');\n" +
       "if (typeof createAppBus !== 'function') throw new Error('ESM import broken');\n",
   );
-  execFileSync('pnpm', ['install'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the
   // repo toolchain (catalog-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {

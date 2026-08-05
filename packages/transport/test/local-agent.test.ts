@@ -352,6 +352,37 @@ describe('createLocalAgentPort', () => {
     expect(returnCalls).toBe(1);
   });
 
+  it('throw() rejects with the exact value passed, even when it is not an Error', async () => {
+    // §Z137-C names BOTH ports as owners of "throw(e) rejects with e verbatim". The sibling
+    // above passes an Error, whose identity a `e instanceof Error ? e : new Error(String(e))`
+    // coercion preserves — so only a non-Error case can witness the contract on this port.
+    const port = createLocalAgentPort(() => {
+      const source: AsyncGenerator<AgentEvent> = {
+        next() {
+          return Promise.resolve({
+            value: { type: 'TEXT_MESSAGE_CONTENT', delta: 'one' },
+            done: false,
+          });
+        },
+        return() {
+          return Promise.resolve({ value: undefined, done: true });
+        },
+        throw(error?: unknown) {
+          return Promise.reject(error);
+        },
+        [Symbol.asyncIterator]() {
+          return source;
+        },
+      };
+      return source;
+    });
+    const handle = port.run(buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'x' }));
+    await handle.events.next();
+    const consumerValue = { code: 'boom' }; // not an Error — must round-trip verbatim, no coercion
+    await expect(handle.events.throw(consumerValue)).rejects.toBe(consumerValue);
+    expect(handle.signal.aborted).toBe(true);
+  });
+
   it('buildRunAgentInput carries only userText as the untrusted field', () => {
     const input = buildRunAgentInput({ threadId: 't', runId: 'r', userText: 'hi' });
     expect(input.threadId).toBe('t');

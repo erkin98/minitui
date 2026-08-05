@@ -89,6 +89,13 @@ function isUnshadowedGlobalObject(context, node) {
   return variable === undefined || variable.defs.length === 0;
 }
 
+function isUnshadowedProcess(context, node) {
+  const target = unwrapExpression(node);
+  if (target?.type !== 'Identifier' || target.name !== 'process') return false;
+  const variable = findVariable(context.sourceCode.getScope(target), target.name);
+  return variable === undefined || variable.defs.length === 0;
+}
+
 function isGlobalFunctionAccess(context, node) {
   return memberName(node) === 'Function' && isUnshadowedGlobalObject(context, node.object);
 }
@@ -103,19 +110,17 @@ function destructuresGlobalFunction(context, pattern, source) {
   );
 }
 
-function isIndirectNodeLoaderAccess(node) {
-  return (
-    memberName(node) === 'getBuiltinModule' ||
-    (node.type === 'MemberExpression' && node.computed && isProcessReference(node.object))
-  );
+function isIndirectNodeLoaderAccess(context, node) {
+  if (node.type !== 'MemberExpression' || !isProcessReference(context, node.object)) return false;
+  const name = memberName(node);
+  return name === 'getBuiltinModule' || (node.computed && name === undefined);
 }
 
-function isProcessReference(node) {
+function isProcessReference(context, node) {
   const target = unwrapExpression(node);
-  if (target?.type === 'Identifier') return target.name === 'process';
+  if (target?.type === 'Identifier') return isUnshadowedProcess(context, target);
   if (target?.type !== 'MemberExpression' || memberName(target) !== 'process') return false;
-  const object = unwrapExpression(target.object);
-  return object?.type === 'Identifier' && object.name === 'globalThis';
+  return isUnshadowedGlobalObject(context, target.object);
 }
 
 function hasIndirectLoaderSource(node) {
@@ -123,9 +128,63 @@ function hasIndirectLoaderSource(node) {
   return name !== undefined && INDIRECT_LOADER_MODULES.has(name);
 }
 
-function destructuresIndirectNodeLoader(node) {
-  return node.parent.type === 'ObjectPattern' && propertyName(node) === 'getBuiltinModule';
+function destructuresIndirectNodeLoader(context, pattern, source) {
+  return (
+    pattern?.type === 'ObjectPattern' &&
+    pattern.properties.some(
+      (property) => property.type === 'Property' && propertyName(property) === 'getBuiltinModule',
+    ) &&
+    isProcessReference(context, source)
+  );
 }
+
+/**
+ * The four capability-escape visitors that `no-restricted-capability-load` and
+ * `no-vitest-replacement-api` share verbatim: the non-import routes to a dynamic
+ * `Function` or an indirect Node loader (member access, and the three destructuring
+ * forms). Single-sourced deliberately — two hand-maintained copies of an escape
+ * detector in a security-policy plugin are two copies that can drift apart, and the
+ * one that drifts stops catching escapes silently.
+ *
+ * Reports go through `messageId`, so each rule keeps its OWN `evaluation` / `indirect`
+ * wording (they differ: "reserved for the exec package" vs "hide a test dependency")
+ * while the detection logic stays one implementation. Each rule's import-shaped
+ * visitors differ and stay in the rule.
+ * @param {import('eslint').Rule.RuleContext} context
+ */
+const capabilityEscapeVisitors = (context) => ({
+  MemberExpression(node) {
+    if (isIndirectNodeLoaderAccess(context, node)) {
+      context.report({ node, messageId: 'indirect' });
+    } else if (isGlobalFunctionAccess(context, node)) {
+      context.report({ node, messageId: 'evaluation' });
+    }
+  },
+  VariableDeclarator(node) {
+    if (destructuresGlobalFunction(context, node.id, node.init)) {
+      context.report({ node, messageId: 'evaluation' });
+    }
+    if (destructuresIndirectNodeLoader(context, node.id, node.init)) {
+      context.report({ node, messageId: 'indirect' });
+    }
+  },
+  AssignmentExpression(node) {
+    if (destructuresGlobalFunction(context, node.left, node.right)) {
+      context.report({ node, messageId: 'evaluation' });
+    }
+    if (destructuresIndirectNodeLoader(context, node.left, node.right)) {
+      context.report({ node, messageId: 'indirect' });
+    }
+  },
+  AssignmentPattern(node) {
+    if (destructuresGlobalFunction(context, node.left, node.right)) {
+      context.report({ node, messageId: 'evaluation' });
+    }
+    if (destructuresIndirectNodeLoader(context, node.left, node.right)) {
+      context.report({ node, messageId: 'indirect' });
+    }
+  },
+});
 
 const noRestrictedCapabilityLoad = {
   meta: {
@@ -177,33 +236,7 @@ const noRestrictedCapabilityLoad = {
           }
         }
       },
-      MemberExpression(node) {
-        if (isIndirectNodeLoaderAccess(node)) {
-          context.report({ node, messageId: 'indirect' });
-        } else if (isGlobalFunctionAccess(context, node)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      VariableDeclarator(node) {
-        if (destructuresGlobalFunction(context, node.id, node.init)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      AssignmentExpression(node) {
-        if (destructuresGlobalFunction(context, node.left, node.right)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      AssignmentPattern(node) {
-        if (destructuresGlobalFunction(context, node.left, node.right)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      Property(node) {
-        if (destructuresIndirectNodeLoader(node)) {
-          context.report({ node, messageId: 'indirect' });
-        }
-      },
+      ...capabilityEscapeVisitors(context),
     };
   },
 };
@@ -313,33 +346,7 @@ const noVitestReplacementApi = {
       CallExpression(node) {
         if (isDirectRequire(node)) checkLoad(node, node.arguments[0]);
       },
-      MemberExpression(node) {
-        if (isIndirectNodeLoaderAccess(node)) {
-          context.report({ node, messageId: 'indirect' });
-        } else if (isGlobalFunctionAccess(context, node)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      VariableDeclarator(node) {
-        if (destructuresGlobalFunction(context, node.id, node.init)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      AssignmentExpression(node) {
-        if (destructuresGlobalFunction(context, node.left, node.right)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      AssignmentPattern(node) {
-        if (destructuresGlobalFunction(context, node.left, node.right)) {
-          context.report({ node, messageId: 'evaluation' });
-        }
-      },
-      Property(node) {
-        if (destructuresIndirectNodeLoader(node)) {
-          context.report({ node, messageId: 'indirect' });
-        }
-      },
+      ...capabilityEscapeVisitors(context),
     };
   },
 };

@@ -12,5 +12,11 @@ export type PublishArgs = { [K in Topic]: [topic: K, payload: TopicPayloads[K]] 
 
 export interface BusPort {
   publish(...args: PublishArgs): void;
+  // TypeScript's void callback rule accepts async implementations while preserving
+  // concise callbacks whose incidental return value is intentionally ignored.
+  // Per-subscriber delivery is capacity-bounded. A topic in `topics.ts`'s `COALESCIBLE` set may
+  // collapse a burst to its latest value; every other topic must deliver every published item —
+  // in particular a topic in `POSITIONAL` (positional patches applying against one evolving
+  // document) may never silently evict a queued item once capacity is reached.
   subscribe<T extends Topic>(topic: T, fn: (p: TopicPayloads[T]) => void): () => void;
 }

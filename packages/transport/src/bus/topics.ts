@@ -27,3 +27,12 @@ export const COALESCIBLE: ReadonlySet<Topic> = createReadonlySet([
   'content',
   'visibility',
 ]);
+
+/**
+ * Topics whose payloads apply positionally against one evolving document (RFC-6902 deltas, in
+ * `state-delta`'s case). Losing any queued item — not just the oldest — corrupts every later
+ * apply, so a queue backing one of these topics must never silently evict; construct its
+ * `BoundedQueue` with `lossy: false`. Contrast `COALESCIBLE`: those payloads supersede one
+ * another, so dropping a stale one is safe.
+ */
+export const POSITIONAL: ReadonlySet<Topic> = createReadonlySet(['state-delta']);
