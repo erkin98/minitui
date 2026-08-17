@@ -1,0 +1,41 @@
+{
+  "name": "@minitui/transport",
+  "version": "0.0.0",
+  "private": false,
+  "dependencies": {
+    "@ag-ui/client": "catalog:",
+    "@ag-ui/core": "catalog:",
+    "@minitui/sanitizer": "workspace:*",
+    "@minitui/types": "workspace:*",
+    "@types/node": "catalog:",
+    "fast-json-patch": "catalog:",
+    "rxjs": "catalog:"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}

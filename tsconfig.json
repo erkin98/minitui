@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "paths": { "@minitui/*": ["./packages/*/src/index.ts"] }
+  },
+  "include": [],
+  "references": [
+    { "path": "./packages/types" },
+    { "path": "./packages/sanitizer" },
+    { "path": "./packages/transport" },
+    { "path": "./packages/renderer-core" }
+  ]
+}

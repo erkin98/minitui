@@ -1,0 +1,53 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      run: pnpm run lint
+    format:
+      glob: '*.{ts,tsx,mts,mjs,js,json,md,yaml,yml}'
+      run: pnpm exec prettier --check {staged_files}
+    typecheck:
+      # Through turbo (^build) so upstream package .d.ts resolve against the built
+      # dist/ (tsup); a raw `tsc -b` fails cold now that tsc emits to dist-types/, not
+      # dist/, so the exports-resolved dist/index.d.ts wouldn't exist pre-build.
+      run: pnpm run typecheck
+    test-policy:
+      # Fire on any staged .test.ts(x) AND any .ts(x) under a test/ or __tests__/
+      # dir (helpers/fixtures/setup the script also scans), so pre-commit covers the same
+      # set as the CI witness. Single-string brace glob with the alternatives inlined —
+      # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).
+      glob: '{*.test.ts,*.test.tsx,**/test/**/*.ts,**/test/**/*.tsx,**/__tests__/**/*.ts,**/__tests__/**/*.tsx}'
+      run: pnpm run lint:test-policy
+    syncpack:
+      glob: '**/package.json'
+      run: pnpm exec syncpack lint
+
+pre-push:
+  parallel: false
+  commands:
+    lint:
+      # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
+      # rule change or a file touched outside the hook can leave the tree reding with
+      # every commit green. No CI backstop exists until plan 17 lands .github/workflows.
+      # First in the sequence because parallel:false makes order execution order, and the
+      # cheapest failure should surface before the multi-minute test/build/pack commands.
+      run: pnpm run lint
+    format:
+      run: pnpm run format:check
+    policy-fixtures:
+      # The 52-fixture proof that the capability/replacement-mock AST rules actually
+      # bite. Enforced here, not only in the un-hooked `pnpm lint`, so
+      # a regressed rule cannot reach the remote green.
+      run: pnpm run lint:policy-fixtures
+    test:
+      run: pnpm run test:all
+    coverage:
+      run: pnpm run test:coverage
+    build:
+      run: pnpm run build:all
+    pack:
+      # Published-artifact gate: pack each publishing package, assert the
+      # tarball's files/manifest/exports/engines, then compile + run a strict consumer
+      # against the SHIPPED tarball. Self-builds via cached turbo, so it is order-safe
+      # against the build command above. Closes the "committed but never invoked" gap.
+      run: pnpm run pack:check

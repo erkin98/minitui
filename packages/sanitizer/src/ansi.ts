@@ -1,0 +1,86 @@
+import { stripControlStrings } from './osc.js';
+
+// ANSI / control-character strip. A cheap ESC/C1/control pre-check skips the
+// scan entirely for the common all-printable case.
+// Grammar mirrors ink's reference tokenizer (its src/ansi-tokenizer.ts):
+// string sequences have ESC-form AND C1-form introducers, ST is ESC \ or the
+// C1 ST 0x9c, and BEL (0x07) terminates OSC ONLY — in DCS/PM/APC/SOS it is data.
+
+// C0 controls that are layout-safe and must survive: TAB, LF, CR.
+export const PRESERVE_C0: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
+
+// CSI/SGR and other ESC-introduced escape sequences, three ordered alternatives.
+// Uses ink's ECMA-48 byte classes (its src/ansi-tokenizer.ts) for what
+// FORMS a sequence, but keeps minitui's stricter fallback: a bare ESC + an
+// UNCURATED single final byte is NOT stripped here — it falls through to the
+// caret-encode loop below (a visible `^[c`), so an unknown escape is neutralized
+// AND made visible, never silently swallowed. Only recognizable structured forms
+// are stripped:
+//   1. CSI — ESC[ or C1 0x9b, params 0x30-0x3f, intermediates 0x20-0x2f, one
+//      final 0x40-0x7e. ONLY `ESC[`/0x9b introduce a CSI. The old grammar also
+//      fired on `ESC( ESC) ESC# ESC; ESC?`, over-consuming the following
+//      character (`ESC ; Z` silently deleted the Z) — the real content-loss bug;
+//   2. ESC + one-or-more intermediates 0x20-0x2f + one final 0x30-0x7e — a
+//      structured multi-byte escape (e.g. `ESC ( B` charset select), stripped as
+//      one unit so a chunk split between the intermediate and its final cannot
+//      diverge from the one-shot output;
+//   3. ESC + one CURATED final byte — the known one-byte-final escapes. The set
+//      deliberately excludes the string-parameter introducers (P X ] ^ _) so an
+//      unterminated string sequence reaching this mop-up layer degrades to a
+//      caret-encoded ESC, never a half-consumed introducer with a dangling
+//      payload. An uncurated final (e.g. RIS `ESC c`, `ESC b`) is left for the
+//      caret-encode loop — safe (no live ESC) and visible, per minitui's posture.
+
+// THE CSI grammar, spelled ONCE. The strip below, index.ts's renderer-sgr
+// scanner and stream-grammar.ts's stream-completeness check all build from this
+// one string, so the three cannot drift apart. Parameters come BEFORE
+// intermediates: a parameter after an intermediate is not a CSI.
+export const CSI_SEQUENCE_SOURCE = '(?:\\x1b\\[|\\x9b)[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]';
+
+const ANSI_SEQUENCE = new RegExp(
+  `${CSI_SEQUENCE_SOURCE}|\\x1b[\\x20-\\x2f]+[\\x30-\\x7e]|\\x1b[@-OQ-WYZ\\\\]`,
+  'g',
+);
+
+// Any byte that is ESC, a C1 control (0x80-0x9f), DEL, or a non-preserved C0.
+// TAB/LF/CR are absent BECAUSE they are in PRESERVE_C0: every slow path below
+// re-emits them unchanged, so a string whose only controls are those three has
+// nothing to strip and must take the fast path. Terminal output is
+// newline-bearing by nature, so including them taxed the common case with a
+// full scan that provably rewrites nothing.
+// eslint-disable-next-line no-control-regex
+const CONTROL_SCAN = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/;
+
+export function hasEscape(text: string): boolean {
+  return CONTROL_SCAN.test(text);
+}
+
+// Exported: index.ts's renderer-sgr scanner reuses the exact same encoding.
+// Caret notation (cat -v style), ASCII-only by design — see Architecture.
+export function caretEncode(code: number): string {
+  if (code === 0x7f) return '^?'; // DEL
+  if (code <= 0x1f) return '^' + String.fromCharCode(code + 0x40); // ^@ .. ^_
+  // C1 (0x80-0x9f): render as ^[ + the 7-bit equivalent letter
+  return '^[' + String.fromCharCode(code - 0x40);
+}
+
+export function stripAnsi(text: string): string {
+  if (!hasEscape(text)) return text; // fast path: nothing to strip
+  const withoutSequences = stripControlStrings(text).replace(ANSI_SEQUENCE, '');
+  // 2. Caret-encode any control byte left over (lone ESC, BEL, DEL, C1, ...),
+  //    preserving TAB/LF/CR so layout is not destroyed.
+  let out = '';
+  for (const ch of withoutSequences) {
+    const code = ch.codePointAt(0)!;
+    if (
+      (code <= 0x1f && !PRESERVE_C0.has(code)) ||
+      code === 0x7f ||
+      (code >= 0x80 && code <= 0x9f)
+    ) {
+      out += caretEncode(code);
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
