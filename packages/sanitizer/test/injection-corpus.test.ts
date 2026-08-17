@@ -162,3 +162,37 @@ describe('Terminal-DiLLMa injection corpus', () => {
     expect(JSON.stringify(out)).not.toMatch(/[\x1b\x80-\x9f]/);
   });
 });
+
+// Default-mode sanitize() strips EVERY OSC 8 frame regardless of scheme, so the
+// two OSC 8 corpus rows above pass no matter what ALLOWED_OSC8_SCHEMES holds —
+// widening it to admit javascript:/data: is invisible there. renderer-sgr mode
+// keeps an ALLOWED-scheme link LIVE, so it is the only path where the scheme
+// decision is observable, and the only path that reds if the allowlist grows.
+describe('OSC 8 scheme allowlist bites in renderer-sgr mode (where the scheme decision shows)', () => {
+  const cases: ReadonlyArray<{
+    name: string;
+    input: string;
+    banned: readonly string[];
+    expected: string;
+  }> = [
+    {
+      name: 'javascript:',
+      input: `${ESC}]8;;javascript:fetch('//evil')${ST}click here${ESC}]8;;${ST}`,
+      banned: ['javascript:', "fetch('//evil')", ESC],
+      expected: 'click here',
+    },
+    {
+      name: 'data:',
+      input: `${ESC}]8;;data:text/html,<script>x</script>${ST}link${ESC}]8;;${ST}`,
+      banned: ['data:text/html', '<script>', ESC],
+      expected: 'link',
+    },
+  ];
+  for (const c of cases) {
+    it(`strips the disallowed ${c.name} OSC 8 wrapper, keeping only the visible label`, () => {
+      const out = sanitize(c.input, { allow: 'renderer-sgr' });
+      expect(out).toBe(c.expected); // wrapper gone, no live frame kept
+      for (const banned of c.banned) expect(out).not.toContain(banned);
+    });
+  }
+});

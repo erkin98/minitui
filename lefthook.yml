@@ -2,8 +2,7 @@ pre-commit:
   parallel: true
   commands:
     lint:
-      glob: '*.{ts,tsx,mts,mjs,js}'
-      run: pnpm exec eslint {staged_files}
+      run: pnpm run lint
     format:
       glob: '*.{ts,tsx,mts,mjs,js,json,md,yaml,yml}'
       run: pnpm exec prettier --check {staged_files}

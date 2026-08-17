@@ -342,6 +342,26 @@ describe('sanitize', () => {
   it('preserves layout whitespace', () => {
     expect(sanitize('a\tb\nc')).toBe('a\tb\nc');
   });
+
+  it('caret-encodes the top C0 byte 0x1f (^_) — the strip boundary is <= 0x1f, not < 0x1f', () => {
+    // 0x1f is the highest C0 control; narrowing the caret-encode test to `< 0x1f`
+    // would leak it raw. caretEncode(0x1f) = '^' + (0x1f + 0x40 = 0x5f = '_').
+    expect(sanitize('a\x1fb')).toBe('a^_b');
+  });
+
+  it('caret-encodes every non-preserved C0 control, leaving TAB/LF/CR alone', () => {
+    // Sweep the whole C0 block: each control except TAB/LF/CR must become its
+    // caret form; the three layout controls must pass through byte-identical.
+    for (let code = 0x00; code <= 0x1f; code++) {
+      const ch = String.fromCharCode(code);
+      if (code === 0x09 || code === 0x0a || code === 0x0d) {
+        expect(sanitize(`a${ch}b`), `0x${code.toString(16)} preserved`).toBe(`a${ch}b`);
+      } else {
+        const caret = `^${String.fromCharCode(code + 0x40)}`;
+        expect(sanitize(`a${ch}b`), `0x${code.toString(16)} caret-encoded`).toBe(`a${caret}b`);
+      }
+    }
+  });
 });
 
 describe('sanitizeStream', () => {

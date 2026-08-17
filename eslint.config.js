@@ -176,6 +176,20 @@ export default tseslint.config(
     // watches for) that would otherwise pick up a second, unwanted violation from this wall
     // once it covers test/** broadly; those specific fixtures are listed in the next block
     // instead, where only this wall's own rules apply.
+    //
+    // Which arm each lint:policy-fixtures witness proves:
+    //   apps/**     — proven by apps/eslint-policy-fixture/src/* (drop this arm and the
+    //                 fixture gate reds: those fixtures match no other arm).
+    //   packages/** — the LIVE moat over real package src + tests. It has no dedicated
+    //                 fixture (fixtures live under apps/ and test/), so it is not witnessed
+    //                 by removing-reds-the-gate; it is instead witnessed by construction —
+    //                 it applies the SAME execMoatCapabilityRules object the apps/ and test/
+    //                 fixtures prove fires. Defense-in-depth, not a vacuous gate.
+    //   test/**     — currently redundant: real package tests match the packages/** arm, and
+    //                 the top-level test/ tree holds only the ignored boundary-fixture dir.
+    //                 Kept as the SOLE no-restricted-imports / no-restricted-capability-load
+    //                 cover for any future top-level test file — the later test-file block
+    //                 carries only eval / globals / vitest-replacement-api, not those two.
     files: ['packages/**/*.{ts,tsx,mts}', 'apps/**/*.{ts,tsx,mts}', 'test/**/*.{ts,tsx,mts}'],
     ignores: [
       'packages/exec/**',

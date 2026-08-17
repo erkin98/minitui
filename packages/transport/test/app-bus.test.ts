@@ -190,6 +190,41 @@ describe('AppBus', () => {
     expect(seen).toEqual(Array.from({ length: 129 }, (_, i) => i));
   });
 
+  it('reports the positional-refuse gap through the DiagnosticsPort (its own message, not a drop)', () => {
+    // When a non-lossy (positional) queue passes its growth ceiling it REFUSES the incoming delta
+    // and latches `gapped`. That is a different fact from a superseding topic evicting a stale
+    // payload, so it carries its own diagnostic — the one a positional consumer resyncs from.
+    // `bus.gapped` (asserted above) is only a poll-able flag; without this the report call could be
+    // deleted and every gap test would stay green. Capture the message through the real
+    // DiagnosticsPort seam so its presence AND its wording are both pinned.
+    const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+    const bus = createAppBus({
+      capacity: 2, // non-lossy ceiling = capacity * 64 = 128
+      diagnostics: {
+        warn(msg: string, meta?: Record<string, unknown>) {
+          warnings.push([msg, meta]);
+        },
+        debug() {},
+      },
+    });
+    let stalled = false;
+    bus.subscribe('state-delta', () => {
+      // First delivery stalls the subscriber in flight forever, so the queue behind it fills and
+      // then refuses past the ceiling — the production `asPromise` seam keeps it pending, no mock.
+      if (stalled) return undefined;
+      stalled = true;
+      return new Promise<void>(() => {});
+    });
+    for (let i = 0; i < 300; i += 1) bus.publish('state-delta', { delta: [i] });
+
+    expect(bus.gapped).toBe(true);
+    const resync = warnings.find(
+      ([msg]) => msg === 'app-bus positional queue lost contiguity (resync required)',
+    );
+    expect(resync).toBeDefined();
+    expect(resync?.[1]).toMatchObject({ topic: 'state-delta' });
+  });
+
   // The drop-behaviour tests below publish on a SUPERSEDING topic. state-delta carries
   // positional RFC-6902 operations and its queue never silently evicts, so it cannot be
   // used to exercise the bounded-queue drop path.
