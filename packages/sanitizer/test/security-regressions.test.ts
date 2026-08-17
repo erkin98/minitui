@@ -73,6 +73,19 @@ describe('sanitizeSpecStrings object-key integrity', () => {
     expect(() => sanitizeSpecStrings(reserved)).toThrow(TypeError);
     expect(() => sanitizeSpecStrings({ [`__${ESC}[31mproto__`]: 1 })).toThrow(TypeError);
   });
+
+  it('rejects the other two reserved names — an own constructor key and an own prototype key', () => {
+    // The __proto__ case above exercises only one of the three reserved names.
+    // JSON.parse yields an OWN enumerable key shadowing the inherited one, so
+    // Object.keys sees it and the guard's RESERVED_KEYS check must fire. A set
+    // shrunk to just __proto__ leaves these two unguarded, so they red here.
+    expect(() => sanitizeSpecStrings(JSON.parse('{"constructor":{"x":1}}'))).toThrow(TypeError);
+    expect(() => sanitizeSpecStrings(JSON.parse('{"prototype":{"x":1}}'))).toThrow(TypeError);
+    // and the sanitize-to-reserved path for each: ANSI stripped out of the key
+    // leaves a reserved name, which must be rejected on the cleaned key too.
+    expect(() => sanitizeSpecStrings({ [`con${ESC}[31mstructor`]: 1 })).toThrow(TypeError);
+    expect(() => sanitizeSpecStrings({ [`pro${ESC}[31mtotype`]: 1 })).toThrow(TypeError);
+  });
 });
 
 function nest(depth: number): Record<string, unknown> {
@@ -262,6 +275,24 @@ describe('doubled-ESC control strings and the ESC intermediate/final grammar', (
       expect(await runStream([first, second]), name).toBe(sanitize(first + second));
     }
   });
+
+  // KNOWN-FAILING witness, installed skipped (fix belongs in src, out of this
+  // test lane). The rows above break their adjacency chain on a plain byte, so
+  // the hold releases to a short tail and stays under MAX_CARRY. This row has NO
+  // gap: a run of adjacent SGR resets longer than MAX_CARRY (8192) is one
+  // unbroken chain, so the stream holds from byte 0, trips the cap, drops the
+  // carry, and the run's continuation surfaces as caret-encoded visible text in
+  // the next chunk — byte-diverging from one-shot. Observed today: the stream
+  // yields '^[[m' where one-shot yields ''. It fails SAFE — '^[[m' carries no
+  // live control byte (a caret-encoded ESC then literal '[m') — but it breaks
+  // the one-shot/stream byte-identity promise. Unskip once the carry cap keeps a
+  // gapless chain byte-identical to one-shot.
+  it.skip('stream matches one-shot for a GAPLESS adjacency chain past MAX_CARRY (known divergence)', async () => {
+    const first = `${ESC}[m`.repeat(2731) + `${ESC}[`; // 8195 bytes, all adjacent, ends mid-CSI
+    const second = 'm'; // completes the final CSI
+    expect(first.length).toBeGreaterThan(8192);
+    expect(await runStream([first, second])).toBe(sanitize(first + second));
+  });
 });
 
 const OSC8_OPEN = `${ESC}]8;;https://example.com${ST}`;
@@ -379,5 +410,23 @@ describe('OSC 8 pairing across chunks and intervening control strings', () => {
     const out = await runStream([OSC8_OPEN, label, OSC8_CLOSE], { allow: 'renderer-sgr' });
     expect(out).toBe(label);
     expect(out).not.toContain(ESC);
+  });
+
+  it('excises a C1-form (0x9b) bracketed-paste marker in the OSC pass, not merely as a residual CSI', () => {
+    // A C1 paste marker `\x9b200~` is ALSO a well-formed C1 CSI, so the residual
+    // strip removes it whether or not the OSC-pass marker branch runs — every
+    // short input is byte-identical either way, which is why deleting that branch
+    // looks free. The one place the OSC-pass strip is observable is the pending
+    // OSC 8 label cap (MAX_PENDING_LABEL = 8192): excised early, the 5 marker
+    // bytes never count toward the label; left for the residual pass they ride
+    // inside the label run, push a cap-length label OVER the ceiling, and drop
+    // the whole link wrapper. A label of exactly 8192 stays live ONLY when the
+    // marker is stripped in the OSC pass.
+    const label = 'A'.repeat(8192);
+    const input = `${OSC8_OPEN}${label}\x9b200~${OSC8_CLOSE}`;
+    const expected = `${OSC8_OPEN}${label}${OSC8_CLOSE}`; // wrapper kept live
+    const out = sanitize(input, { allow: 'renderer-sgr' });
+    expect(out).toBe(expected);
+    expect(out).toContain('https://example.com'); // the live frame survived
   });
 });

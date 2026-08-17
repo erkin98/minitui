@@ -11,7 +11,7 @@ export interface AppBus extends BusPort {
    * so a positional stream is truncated at the tail. Monotone for the life of the bus and it
    * does NOT identify which subscription gapped: the per-subscription resettable signal, and the
    * resync it should trigger (clear local state, request a `state-snapshot`), belong to the first
-   * real positional consumer — plan 10 runtime-host, Slice 2 (§Z138-A). Until that consumer
+   * real positional consumer in the composition root. Until that consumer
    * exists, transport reports the gap; it does not force a resync.
    */
   readonly gapped: boolean;

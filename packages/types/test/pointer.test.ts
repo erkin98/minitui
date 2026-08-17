@@ -226,6 +226,17 @@ describe('JsonValue resource budgets', () => {
     expect(Object.isFrozen(exactDepth)).toBe(false);
   });
 
+  it('throws when an already-parsed tree aliases the same node twice', () => {
+    // A node reachable by two paths is the alias case the cycle guard exists to
+    // catch; assertJsonResourceBudget runs on mutated canonical documents where
+    // that can arise without a self-referential cycle.
+    const shared: JsonValue = { leaf: 1 };
+    const aliased: JsonValue = { left: shared, right: shared };
+    expect(() => assertJsonResourceBudget(aliased)).toThrow(
+      'JsonValue must be a tree without cycles or aliases',
+    );
+  });
+
   it('accepts the exact node ceiling and rejects one additional node', () => {
     expect(JsonValueSchema.safeParse(Array.from({ length: 65_535 }, () => null)).success).toBe(
       true,
@@ -419,6 +430,57 @@ describe('JsonPatch (RFC-6902)', () => {
     Object.defineProperty(sparse, '1', dataSlot(operation));
 
     expect(rejectionMessages(sparse)).toContain('JSON patch array must be dense');
+  });
+
+  // The patch cloner's four remaining reject branches. Two are reachable from an
+  // ordinary hand-built value (a non-enumerable operation slot; an operation with
+  // a non-plain prototype); two only fire when a reflection trap throws mid-clone.
+  // Each asserts its own message, since a branch checked only for generic failure
+  // stays green when a neighbour swallows the parse.
+  it('rejects an operation carrying a non-enumerable data slot', () => {
+    const nonEnumerableSlot = { op: 'test', path: '' };
+    Object.defineProperty(nonEnumerableSlot, 'value', {
+      value: null,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(rejectionMessages([nonEnumerableSlot])).toContain(
+      'JSON patch operation requires enumerable data properties',
+    );
+  });
+
+  it('rejects an operation with a non-plain prototype', () => {
+    class ExoticOperation {
+      op = 'remove';
+      path = '';
+    }
+    expect(rejectionMessages([new ExoticOperation()])).toContain(
+      'JSON patch operation must be a plain record',
+    );
+  });
+
+  it('rejects a patch array whose member descriptor read throws', () => {
+    const memberReflectionThrows = new Proxy([operation], {
+      getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+        if (key === 'length') return Reflect.getOwnPropertyDescriptor(target, key);
+        throw new Error('member descriptor denied');
+      },
+    });
+    expect(rejectionMessages(memberReflectionThrows)).toContain(
+      'JSON patch array member reflection failed',
+    );
+  });
+
+  it('rejects a patch array whose top-level reflection throws', () => {
+    const arrayReflectionThrows = new Proxy([operation], {
+      getPrototypeOf() {
+        throw new Error('array prototype denied');
+      },
+    });
+    expect(rejectionMessages(arrayReflectionThrows)).toContain(
+      'JSON patch array reflection failed',
+    );
   });
 
   it('retains the array index without invoking an accessor-backed slot', () => {
