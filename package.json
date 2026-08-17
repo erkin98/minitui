@@ -1,0 +1,47 @@
+{
+  "name": "minitui-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.8.0",
+  "devDependencies": {
+    "@changesets/cli": "2.27.9",
+    "@eslint/js": "9.13.0",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "4.0.17",
+    "eslint": "catalog:",
+    "eslint-import-resolver-typescript": "3.6.3",
+    "eslint-plugin-import": "catalog:",
+    "lefthook": "1.8.2",
+    "prettier": "3.3.3",
+    "syncpack": "13.0.0",
+    "tsup": "catalog:",
+    "tsx": "catalog:",
+    "turbo": "2.2.3",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "build:all": "turbo run build",
+    "changeset": "changeset",
+    "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path .git/info/exclude",
+    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore --ignore-path .git/info/exclude",
+    "lint": "eslint . && pnpm run lint:policy-fixtures && turbo run lint",
+    "lint:boundary-fixture": "eslint --no-ignore test/eslint-boundary-fixture",
+    "lint:policy-fixtures": "node scripts/check-eslint-policy-fixtures.mjs",
+    "lint:test-policy": "node scripts/lint-test-policy.mjs",
+    "pack:check": "pnpm run build:all && node packages/types/scripts/pack-consumer.mjs && node packages/sanitizer/scripts/pack-consumer.mjs && node packages/transport/scripts/pack-consumer.mjs && node packages/renderer-core/scripts/pack-consumer.mjs",
+    "prepare": "lefthook install || true",
+    "syncpack": "syncpack lint",
+    "test": "turbo run test && pnpm exec vitest run --project root",
+    "test:all": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text",
+    "typecheck": "turbo run typecheck",
+    "typecheck:tsc": "tsc -b"
+  },
+  "type": "module"
+}

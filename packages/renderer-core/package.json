@@ -1,0 +1,38 @@
+{
+  "name": "@minitui/renderer-core",
+  "version": "0.0.0",
+  "private": false,
+  "devDependencies": {
+    "@minitui/types": "workspace:*",
+    "eslint": "catalog:",
+    "eslint-plugin-import": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "peerDependencies": {
+    "@minitui/types": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}

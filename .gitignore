@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# build output (kept out of the tree)
+node_modules/
+.turbo/
+dist-types/
+*.tsbuildinfo
+coverage/

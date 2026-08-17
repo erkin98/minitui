@@ -1,0 +1,34 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "stream",
+  "globalEnv": ["MINITUI_NODE_RUNTIME"],
+  "globalDependencies": [
+    "eslint.config.js",
+    "config/eslint-boundaries.js",
+    "tsconfig.base.json",
+    ".syncpackrc.json",
+    "pnpm-workspace.yaml",
+    "vitest.shared.ts",
+    "vitest.determinism.setup.ts",
+    "vitest.determinism.constants.ts"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist-types/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "env": ["CI", "MINITUI_GOLDEN_STRICT", "UPDATE_GOLDEN"]
+    },
+    "lint": {
+      "dependsOn": [],
+      "outputs": []
+    }
+  }
+}

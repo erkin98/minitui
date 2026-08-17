@@ -1,0 +1,14 @@
+**/dist/**
+**/dist-types/**
+**/*.tsbuildinfo
+pnpm-lock.yaml
+# hand-aligned catalog comments are intentional + load-bearing (single source of truth
+# for versions); prettier would reflow them. eslint does not lint yaml, so this is the
+# only gate that touches it. Ignore, do not reformat.
+pnpm-workspace.yaml
+**/__golden__/**
+**/*.golden
+**/*.ansi
+coverage/**
+node_modules/
+test/eslint-boundary-fixture/
