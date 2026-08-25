@@ -1,0 +1,42 @@
+{
+  "name": "@minitui/catalog",
+  "version": "0.0.0",
+  "private": false,
+  "dependencies": {
+    "@json-render/core": "catalog:",
+    "@json-render/ink": "catalog:",
+    "@minitui/renderer-core": "workspace:*",
+    "@minitui/sanitizer": "workspace:*",
+    "@minitui/types": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "eslint-plugin-import": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}

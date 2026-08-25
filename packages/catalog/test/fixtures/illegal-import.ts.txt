@@ -1,0 +1,5 @@
+// deliberately-planted boundary violation — the gate MUST flag the React root entry.
+import { Renderer } from '@json-render/ink';
+import React from 'react';
+
+export const illegal = () => (Renderer ?? React);
