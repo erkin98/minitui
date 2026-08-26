@@ -9,6 +9,7 @@
     { "path": "./packages/sanitizer" },
     { "path": "./packages/transport" },
     { "path": "./packages/renderer-core" },
-    { "path": "./packages/catalog" }
+    { "path": "./packages/catalog" },
+    { "path": "./packages/spec" }
   ]
 }
