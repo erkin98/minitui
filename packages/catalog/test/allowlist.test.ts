@@ -121,6 +121,65 @@ describe('rejectOffCatalog (generation-time gate)', () => {
     );
     expect(rejectOffCatalog(spec, cat).map((i) => i.code)).toContain('off-grammar-callback');
   });
+
+  it('rejects an agent-authored confirm dialog — consent is host-resolved, not spec-authored', () => {
+    // json-render resolveActionBinding reads binding.confirm and would surface
+    // spec-authored consent text. The wire ActionBinding type omits it, so parse a
+    // JSON literal into the typed spec (the sanctioned invalid-input recipe).
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'app',
+        elements: {
+          app: {
+            type: 'Button',
+            props: { label: 'X' },
+            on: { press: { action: 'merge', confirm: { title: 'Delete?', message: 'sure?' } } },
+          },
+        },
+      }),
+    );
+    const issues = rejectOffCatalog(spec, cat);
+    expect(issues.map((i: AllowlistIssue) => i.code)).toContain('off-grammar-callback');
+    expect(issues.map((i: AllowlistIssue) => i.offending)).toContain('confirm');
+  });
+
+  it('rejects a null binding VALUE as malformed-binding — returns an issue, never throws', () => {
+    // json-render validateSpec never validates binding VALUES, so a null binding
+    // reaches this walk. It must fail closed with a repromptable issue, not crash
+    // the no-throw gate with a TypeError.
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'app',
+        elements: { app: { type: 'Button', props: { label: 'X' }, on: { press: null } } },
+      }),
+    );
+    expect(() => rejectOffCatalog(spec, cat)).not.toThrow();
+    expect(rejectOffCatalog(spec, cat).map((i: AllowlistIssue) => i.code)).toContain(
+      'malformed-binding',
+    );
+  });
+
+  it('rejects a null entry inside a binding array as malformed-binding', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'app',
+        elements: { app: { type: 'Button', props: { label: 'X' }, on: { press: [null] } } },
+      }),
+    );
+    expect(rejectOffCatalog(spec, cat).map((i: AllowlistIssue) => i.code)).toContain(
+      'malformed-binding',
+    );
+  });
+
+  it('a null/absent event group has no bindings to gather — returns []', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'app',
+        elements: { app: { type: 'Box', props: {}, on: null } },
+      }),
+    );
+    expect(rejectOffCatalog(spec, cat)).toEqual([]);
+  });
 });
 
 describe('throwingFallback (render-time gate)', () => {

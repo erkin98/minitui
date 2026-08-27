@@ -100,6 +100,41 @@ describe('fail-closed build guards', () => {
       }),
     ).toThrowError(/catchall|passthrough/);
   });
+  it('rejects a .passthrough() props schema (open member behind the closed surface)', () => {
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'bad',
+        components: {
+          Loose: {
+            props: z.object({ a: z.string() }).passthrough(),
+            slots: [],
+            description: 'x',
+            trustTier: 'display',
+          },
+        },
+        actions: { go: okAction },
+      }),
+    ).toThrowError(/catchall|passthrough/);
+  });
+  it('rejects a UNION props schema whose member is an open record', () => {
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'bad',
+        components: {
+          Split: {
+            props: z.union([
+              z.object({ a: z.string() }).strict(),
+              z.record(z.string(), z.unknown()),
+            ]),
+            slots: [],
+            description: 'x',
+            trustTier: 'display',
+          },
+        },
+        actions: { go: okAction },
+      }),
+    ).toThrowError(/record/);
+  });
   it('rejects an unrecognized action kind — fail closed, no permissive default', () => {
     expect(() =>
       defineMinituiCatalog({
@@ -138,6 +173,27 @@ describe('fail-closed build guards', () => {
             trustTier: 'interactive',
             secret: true,
             visibility: 'remoteOnly',
+          },
+        },
+        actions: { go: okAction },
+      }),
+    ).toThrowError(/secret/);
+  });
+  it('rejects a secret-typed component declared clientOnly (any class wider than localOnly)', () => {
+    // Not only remoteOnly: clientOnly is also wider than the forced localOnly, so
+    // the guard rejects it too. Exercises the branch a `=== remoteOnly` narrowing
+    // would silently pass.
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'bad',
+        components: {
+          Token: {
+            props: z.object({ token: z.string() }).strict(),
+            slots: [],
+            description: 'x',
+            trustTier: 'interactive',
+            secret: true,
+            visibility: 'clientOnly',
           },
         },
         actions: { go: okAction },
