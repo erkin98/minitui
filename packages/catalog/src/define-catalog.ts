@@ -29,8 +29,9 @@ const ACTION_KINDS: ReadonlySet<string> = new Set([
 
 // An OPEN top-level schema (z.record, or an object with a passthrough/catchall
 // escape hatch) is an arbitrary-data hole behind the .strict() surface — reject at
-// build time, fail closed. Top-level only: nested z.unknown() leaves (e.g.
-// setState's `value`) stay legal.
+// build time, fail closed. A union is checked member-by-member: one open member
+// defeats the allowlist just as a top-level open schema would. Nested z.unknown()
+// leaves (e.g. setState's `value`) stay legal — only the OUTER container matters.
 function assertClosedSchema(context: string, schema: ZodType): void {
   if (schema instanceof z.ZodRecord) {
     throw new Error(
@@ -43,6 +44,11 @@ function assertClosedSchema(context: string, schema: ZodType): void {
       throw new Error(
         `${context}: a passthrough/catchall schema defeats the allowlist — use .strict().`,
       );
+    }
+  }
+  if (schema instanceof z.ZodUnion) {
+    for (const member of schema.def.options) {
+      if (member instanceof z.ZodType) assertClosedSchema(context, member);
     }
   }
 }

@@ -116,6 +116,17 @@ describe('checkSemantics', () => {
     expect(checkSemantics(spec, cat, { title: 'Go', inputs: ['/abs/a.mp4'] })).toEqual([]);
   });
 
+  it('rejects an UNKNOWN prop key even when its value is a dynamic marker (blanking keeps the key)', () => {
+    // The dynamic marker blanks the VALUE to undefined but keeps the KEY, so an
+    // off-catalog key carrying a { $state } value is still caught by the strict
+    // schema — the blanking does not smuggle an unknown key past the prop gate.
+    const spec: AppSpec = {
+      root: 'b',
+      elements: { b: { type: 'Button', props: { label: 'Go', evil: { $state: '/x' } } } },
+    };
+    expect(codes(checkSemantics(spec, cat, { x: 1 }))).toContain('bad-props');
+  });
+
   it('flags unknown props the lenient core validator skips', () => {
     const spec: AppSpec = {
       root: 'b',
@@ -153,5 +164,124 @@ describe('checkSemantics', () => {
       elements: { m: { type: 'Meter', props: { progress: 0.5, evil: true } } },
     };
     expect(codes(checkSemantics(spec, stdish, {}))).toContain('bad-props');
+  });
+});
+
+describe('off-grammar prop-value operators', () => {
+  // The renderer resolves prop values recursively and CALLS the function named by
+  // a $computed marker; the no-code moat allows only the taught state/binding/
+  // conditional markers and rejects $computed + any unknown $-operator at any depth.
+  const st = { p: 1, title: 'Go', inputs: ['/abs/a.mp4'] };
+
+  it('(a) rejects a top-level $computed prop expression (it executes a function)', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: { b: { type: 'Button', props: { label: { $computed: 'fn', args: { x: 1 } } } } },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('(b) rejects a $computed nested under a $cond branch (a top-level check is bypassable)', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: {
+          b: {
+            type: 'Button',
+            props: {
+              label: {
+                $cond: { $state: '/p', gt: 0 },
+                $then: { $computed: 'exfil', args: { s: { $state: '/p' } } },
+                $else: 'y',
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('(c) rejects an unknown/custom $-operator', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: { b: { type: 'Button', props: { label: { $danger: 'x' } } } },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('(d) rejects a $computed nested inside an array and inside a plain object', () => {
+    const inArray: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: { b: { type: 'Button', props: { label: [{ $computed: 'fn' }] } } },
+      }),
+    );
+    expect(codes(checkSemantics(inArray, cat, st))).toContain('off-grammar-operator');
+    const inObject: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: { b: { type: 'Button', props: { label: { nested: { $computed: 'fn' } } } } },
+      }),
+    );
+    expect(codes(checkSemantics(inObject, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('passes the taught markers ($state / $item / $template) and a legit $cond branch', () => {
+    const mk = (label: unknown): AppSpec =>
+      JSON.parse(
+        JSON.stringify({ root: 'b', elements: { b: { type: 'Button', props: { label } } } }),
+      );
+    for (const label of [
+      { $state: '/p' },
+      { $item: 'name' },
+      { $template: 'hi ${/title}' },
+      { $cond: { $state: '/p', gt: 0 }, $then: 'a', $else: 'b' },
+    ]) {
+      expect(codes(checkSemantics(mk(label), cat, st))).not.toContain('off-grammar-operator');
+    }
+  });
+});
+
+describe('missing required prop', () => {
+  it('flags a genuinely-required (non-nullable, no-default) prop the spec omits', () => {
+    // Button.label is a required non-nullable string; omitting it is incomplete
+    // content the renderer cannot fill from a default.
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({ root: 'b', elements: { b: { type: 'Button', props: {} } } }),
+    );
+    expect(codes(checkSemantics(spec, cat, {}))).toContain('missing-required-prop');
+  });
+
+  it('does NOT flag a required prop supplied as a { $state } binding (present though blanked)', () => {
+    const spec: AppSpec = {
+      root: 'b',
+      elements: { b: { type: 'Button', props: { label: { $state: '/title' } } } },
+    };
+    expect(codes(checkSemantics(spec, cat, { title: 'Go' }))).not.toContain(
+      'missing-required-prop',
+    );
+  });
+
+  it('does NOT flag a nullable-required prop the spec omits (legitimately omittable)', () => {
+    // A nullable-required styling prop is omittable — the shipped std defs carry many.
+    const nullableCat = defineMinituiCatalog({
+      id: 'nullable',
+      components: {
+        Styled: {
+          props: z.object({ color: z.string().nullable(), size: z.number().default(1) }).strict(),
+          slots: [],
+          description: 'x',
+          trustTier: 'display',
+        },
+      },
+      actions: {},
+    });
+    const spec: AppSpec = { root: 's', elements: { s: { type: 'Styled', props: {} } } };
+    expect(codes(checkSemantics(spec, nullableCat, {}))).not.toContain('missing-required-prop');
   });
 });

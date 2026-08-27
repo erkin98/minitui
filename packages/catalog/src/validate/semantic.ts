@@ -6,7 +6,12 @@ import { applyResourceTemplate, resolvePointer } from '../contract/action-kind.j
 import { collectBindings, actionNamesOf } from '../allowlist.js';
 
 export type SemanticIssue = {
-  readonly code: 'danger-without-confirm' | 'bad-binding' | 'bad-props';
+  readonly code:
+    | 'danger-without-confirm'
+    | 'bad-binding'
+    | 'bad-props'
+    | 'off-grammar-operator'
+    | 'missing-required-prop';
   readonly elementKey: string;
   readonly message: string;
 };
@@ -43,6 +48,109 @@ function collectStateRefs(value: unknown, out: string[] = []): readonly string[]
     for (const v of Object.values(value)) collectStateRefs(v, out);
   }
   return out;
+}
+
+// The prop-value expression operators the agent may emit — the taught marker set
+// the renderer resolves. Everything else is off the no-code grammar; notably
+// $computed, which calls a registered function, is rejected outright.
+const ALLOWED_PROP_OPERATORS: ReadonlySet<string> = new Set([
+  '$state',
+  '$bindState',
+  '$path',
+  '$template',
+  '$item',
+  '$index',
+  '$cond',
+  '$bindItem',
+]);
+// A conditional expression's branch containers — walk into these; they are not operators.
+const COND_BRANCH_KEYS: ReadonlySet<string> = new Set(['$then', '$else']);
+// Single-value markers the renderer reads directly from a scalar payload; it does
+// not resolve nested prop expressions inside them, so their payload is not walked.
+const TERMINAL_MARKERS: ReadonlySet<string> = new Set([
+  '$state',
+  '$bindState',
+  '$path',
+  '$template',
+  '$item',
+  '$index',
+  '$bindItem',
+]);
+
+// True when a prop value carries a function-call operator or any unknown
+// $-operator at ANY depth. Mirrors how the renderer resolves prop values: it
+// recurses into conditional branches, plain objects, and arrays and CALLS the
+// function a $computed names, so the gate fails closed on such an operator
+// wherever it hides. A conditional resolves only its chosen branch (its condition
+// is a separate visibility grammar checked elsewhere), so only the branches are
+// walked; a terminal marker holds a scalar the renderer reads directly, so its
+// payload is not walked.
+function hasOffGrammarOperator(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasOffGrammarOperator);
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const markerKeys = Object.keys(record).filter((k) => k.startsWith('$'));
+  // Any $-key outside the taught set (or a conditional branch container) is
+  // off-grammar. $computed is deliberately excluded from the set so a function-call
+  // operator fails closed here.
+  for (const markerKey of markerKeys) {
+    if (!ALLOWED_PROP_OPERATORS.has(markerKey) && !COND_BRANCH_KEYS.has(markerKey)) return true;
+  }
+  if ('$cond' in record) {
+    return hasOffGrammarOperator(record.$then) || hasOffGrammarOperator(record.$else);
+  }
+  if (markerKeys.some((markerKey) => TERMINAL_MARKERS.has(markerKey))) return false;
+  return Object.values(record).some(hasOffGrammarOperator);
+}
+
+// Reject any prop whose value carries an off-grammar expression operator.
+function collectOffGrammarOperators(
+  props: SpecElement['props'],
+  key: string,
+): readonly SemanticIssue[] {
+  const issues: SemanticIssue[] = [];
+  for (const [propKey, value] of Object.entries(props)) {
+    if (hasOffGrammarOperator(value)) {
+      issues.push({
+        code: 'off-grammar-operator',
+        elementKey: key,
+        message: `Prop "${propKey}" on "${key}" uses an off-grammar expression operator — only the taught state, binding, and conditional markers are allowed.`,
+      });
+    }
+  }
+  return issues;
+}
+
+// A schema key is content-required (must be present in a spec) only when its field
+// accepts neither undefined nor null and carries no default — genuinely required
+// content the renderer cannot fill. isOptional() is true for an optional OR a
+// defaulted field, so a nullable-required or defaulted key is legitimately omittable
+// (the std styling props are all omittable this way) and is never flagged.
+function isContentRequired(field: unknown): boolean {
+  return field instanceof z.ZodType && !field.isOptional() && !(field instanceof z.ZodNullable);
+}
+
+// Flag a content-required prop the spec omits. Presence is read off the RAW props
+// (Object.hasOwn) BEFORE dynamic markers are blanked, so a required prop supplied
+// as a { $state } binding still counts as present.
+function collectMissingRequired(
+  schema: ZodType,
+  props: SpecElement['props'],
+  typeName: string,
+  key: string,
+): readonly SemanticIssue[] {
+  if (!(schema instanceof z.ZodObject)) return [];
+  const issues: SemanticIssue[] = [];
+  for (const [propKey, field] of Object.entries(schema.shape)) {
+    if (isContentRequired(field) && !Object.hasOwn(props, propKey)) {
+      issues.push({
+        code: 'missing-required-prop',
+        elementKey: key,
+        message: `Prop "${propKey}" is required by "${typeName}" but the spec omits it.`,
+      });
+    }
+  }
+  return issues;
 }
 
 // A resourceTemplate still containing a ${/ptr} hole after resolution failed.
@@ -129,13 +237,22 @@ export function checkSemantics(
     // .strict() at ingest, so an unknown/mistyped key still fails here just as on
     // a custom def.
     const compDef = catalog.componentDefs.get(el.type);
-    if (compDef !== undefined && !checkProps(compDef.props, el.props).success) {
-      issues.push({
-        code: 'bad-props',
-        elementKey: key,
-        message: `Props for "${el.type}" failed the component schema (unknown or mistyped prop).`,
-      });
+    if (compDef !== undefined) {
+      if (!checkProps(compDef.props, el.props).success) {
+        issues.push({
+          code: 'bad-props',
+          elementKey: key,
+          message: `Props for "${el.type}" failed the component schema (unknown or mistyped prop).`,
+        });
+      }
+      // Genuinely-required content (a non-nullable, default-less prop) the spec
+      // omits — a nullable-required or defaulted std styling prop stays omittable.
+      issues.push(...collectMissingRequired(compDef.props, el.props, el.type, key));
     }
+
+    // No-code moat: reject a function-call or unknown expression operator anywhere
+    // in a prop value, independent of the component schema (blanked markers pass it).
+    issues.push(...collectOffGrammarOperators(el.props, key));
 
     // (2) bad binding: every { $state }/{ $bindState } pointer in props must
     // resolve against the bound state document (the gate's own `state` arg — the

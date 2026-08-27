@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { defineMinituiCatalog } from '../src/define-catalog.js';
 import { runFullValidation } from '../src/validate/index.js';
 import { CATALOG_REPAIR_WORDING } from '../src/validate/runtime.js';
+import { videoMergeCatalog } from '../src/catalogs/video-merge.js';
 import type { AppSpec } from '../src/contract/spec.js';
 
 const cat = defineMinituiCatalog({
@@ -63,6 +64,13 @@ describe('runFullValidation', () => {
     const r = runFullValidation(spec, cat, { inputs: [] }); // /inputs/0 missing -> bad-binding
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.issues.some((i) => 'code' in i && i.code === 'bad-binding')).toBe(true);
+  });
+
+  it('a std Box with empty props stays ok (nullable-required styling props are not flagged)', () => {
+    // The std Box carries dozens of nullable-required styling props a normal spec
+    // omits; the required-prop check must not reject an empty-props Box.
+    const spec: AppSpec = { root: 'box', elements: { box: { type: 'Box', props: {} } } };
+    expect(runFullValidation(spec, videoMergeCatalog, {})).toEqual({ ok: true });
   });
 });
 

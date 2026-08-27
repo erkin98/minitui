@@ -26,6 +26,18 @@ describe('resolvePointer', () => {
   it('returns undefined for a missing pointer (never throws)', () => {
     expect(resolvePointer({ inputs: [] }, '/inputs/0')).toBeUndefined();
   });
+  it('rejects a non-canonical array-index token (strict RFC-6901: 0 or [1-9][0-9]*)', () => {
+    // Number() would leniently accept '1e0' as 1, '00' as 0, and ' 1' as 1; a
+    // strict RFC-6901 array index has no exponent/leading-zero/whitespace form, so
+    // each of these resolves to undefined (treated as unresolved, then rejected).
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/1e0')).toBeUndefined();
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/00')).toBeUndefined();
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/ 1')).toBeUndefined();
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/0x1')).toBeUndefined();
+    // canonical indices still resolve
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/0')).toBe('a');
+    expect(resolvePointer({ inputs: ['a', 'b'] }, '/inputs/1')).toBe('b');
+  });
 });
 
 describe('applyResourceTemplate', () => {

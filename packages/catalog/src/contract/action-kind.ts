@@ -19,8 +19,10 @@ export function resolvePointer(doc: JsonValue, pointer: string): JsonValue | und
   for (const tok of tokens) {
     if (cur === null || cur === undefined) return undefined;
     if (Array.isArray(cur)) {
-      const idx = Number(tok);
-      cur = Number.isInteger(idx) ? (cur as readonly JsonValue[])[idx] : undefined;
+      // Strict RFC-6901 array index: 0 or a leading-digit run only. Number() would
+      // leniently accept exponent/hex/leading-zero/whitespace forms; a token outside
+      // the canonical shape is unresolved (defense-in-depth against a lenient index).
+      cur = /^(0|[1-9][0-9]*)$/.test(tok) ? (cur as readonly JsonValue[])[Number(tok)] : undefined;
     } else if (typeof cur === 'object') {
       cur = (cur as { readonly [k: string]: JsonValue })[tok];
     } else {
