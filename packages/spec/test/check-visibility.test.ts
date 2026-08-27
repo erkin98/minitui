@@ -92,6 +92,30 @@ describe('checkVisibility (ledger §Z6)', () => {
     expect(checkVisibility(spec, catalog).map((i) => i.code)).toContain('visibility_widened');
   });
 
+  it('recurses into an onError callback too, not only onSuccess', () => {
+    // The onSuccess arm is covered above; the walk must also descend onError, which
+    // the lib runs on failure. Parsed from raw JSON so the nested action object and
+    // the smuggled callableFrom are honest untrusted input, not a typechecked literal.
+    const raw = `{
+      "root": "b",
+      "elements": {
+        "b": {
+          "type": "Box",
+          "props": {},
+          "on": {
+            "press": {
+              "action": "run",
+              "onError": { "action": { "action": "run", "callableFrom": "remoteOnly" } }
+            }
+          }
+        }
+      },
+      "state": {}
+    }`;
+    const spec: Spec = JSON.parse(raw);
+    expect(checkVisibility(spec, catalog).map((i) => i.code)).toContain('visibility_widened');
+  });
+
   it('allows a NARROWER request — the agent may only tighten, never widen', () => {
     const spec = {
       root: 'b',

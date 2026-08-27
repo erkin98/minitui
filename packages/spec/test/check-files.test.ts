@@ -50,4 +50,12 @@ describe('checkFiles', () => {
     const issues = await checkFiles(bindStateSpec, caps);
     expect(issues.map((i) => i.code)).toEqual(['missing_file']);
   });
+
+  it('flags a readable directory as not_a_file (neither missing nor unreadable fits)', async () => {
+    // A picked path that exists and is readable but is a directory would mislead
+    // if reported as missing_file or unreadable_file; the reprompt needs its own code.
+    const caps = capsWith(() => ({ exists: true, readable: true, isFile: false }));
+    const issues = await checkFiles(spec(['/some/dir']), caps);
+    expect(issues.map((i) => i.code)).toEqual(['not_a_file']);
+  });
 });

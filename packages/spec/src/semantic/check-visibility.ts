@@ -1,6 +1,6 @@
 import { isWiderThan, type MinituiCatalog, type VisibilityClass } from '@minitui/catalog';
-import type { ActionBinding } from '@json-render/core';
-import type { Spec, UIElement } from '../spec-types.js';
+import { bindingsOf } from './walk-bindings.js';
+import type { Spec } from '../spec-types.js';
 import type { SemanticIssue } from './semantic-types.js';
 
 /** Read an agent-supplied visibility/callableFrom the wire type does not model. */
@@ -11,39 +11,6 @@ function requestedClass(
   if (typeof bag !== 'object' || bag === null) return undefined;
   const v = (bag as Record<string, unknown>)[key];
   return v === 'localOnly' || v === 'clientOnly' || v === 'remoteOnly' ? v : undefined;
-}
-
-/**
- * Every `on`/`watch` action binding on an element (single or array form),
- * INCLUDING any action nested under a json-render `onSuccess`/`onError` callback
- * — the adopted lib EXECUTES those as real secondary actions (core/actions.ts:216,232),
- * so the widen-check must see them too. Defense-in-depth behind the pre-render
- * prepareSpec strip; twin of check-capabilities' walk.
- */
-function* bindingsOf(el: UIElement): Iterable<ActionBinding> {
-  for (const group of [el.on, el.watch]) {
-    if (!group) continue;
-    for (const entry of Object.values(group)) {
-      for (const b of Array.isArray(entry) ? entry : [entry]) {
-        if (b && typeof b === 'object') yield* withCallbacks(b);
-      }
-    }
-  }
-}
-
-/** A binding plus any action nested under its `onSuccess`/`onError` callbacks (all depths). */
-function* withCallbacks(binding: ActionBinding): Iterable<ActionBinding> {
-  yield binding;
-  // onSuccess/onError are real ActionBinding fields; read them directly (a string-
-  // index cast does not overlap the interface under strict TS). The spec is untrusted
-  // agent JSON, so a callback's `action` is widened to unknown before the object guard
-  // — a smuggled nested action object is still walked (defense-in-depth).
-  for (const cb of [binding.onSuccess, binding.onError]) {
-    if (cb && 'action' in cb) {
-      const nested: unknown = cb.action;
-      if (nested && typeof nested === 'object') yield* withCallbacks(nested as ActionBinding);
-    }
-  }
 }
 
 /**

@@ -44,6 +44,13 @@ export async function checkFiles(
           message: `File "${path}" selected on element "${key}" is not readable.`,
           elementKey: key,
         });
+      } else if (!stat.isFile) {
+        issues.push({
+          severity: 'error',
+          code: 'not_a_file',
+          message: `Path "${path}" selected on element "${key}" is a directory, not a file.`,
+          elementKey: key,
+        });
       }
     }
   }
