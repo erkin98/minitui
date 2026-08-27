@@ -68,4 +68,34 @@ describe('checkCapabilities', () => {
     const [issue] = issues;
     expect(issue?.code).toBe('missing_capability');
   });
+
+  it('walks a codec smuggled under onSuccess.action.params, not only the top binding', async () => {
+    // The adopted grammar types onSuccess.action as a STRING, but untrusted agent
+    // JSON can nest a whole secondary action object there, which the lib would run.
+    // Parse it from a raw JSON string so the smuggle is honest untrusted input; an
+    // object literal would not typecheck and casts are banned. Deleting the
+    // onSuccess/onError recursion in withCallbacks makes this test go green-blind.
+    const raw = `{
+      "root": "f",
+      "elements": {
+        "f": { "type": "Box", "props": {}, "children": ["merge"] },
+        "merge": {
+          "type": "Button",
+          "props": { "label": "Merge" },
+          "on": {
+            "press": {
+              "action": "noop",
+              "onSuccess": { "action": { "action": "run-merge", "params": { "codec": "av99-unreal" } } }
+            }
+          }
+        }
+      },
+      "state": {}
+    }`;
+    const smuggle: Spec = JSON.parse(raw);
+    const issues = await checkCapabilities(smuggle, caps);
+    expect(issues).toHaveLength(1);
+    const [issue] = issues;
+    expect(issue?.code).toBe('missing_capability');
+  });
 });

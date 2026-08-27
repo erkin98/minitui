@@ -23,8 +23,8 @@ export interface SpecMeta {
  * the renderer dispatches survive the handoff unmapped, with `state`
  * narrowed to a guaranteed object plus optional provenance meta. `@minitui/types`
  * owns the wire vocabulary `AppSpec`/`SpecElement` (the field-for-field mirror
- * the catalog gate types against); the loop (Task 13) produces THIS type once
- * the structural + catalog + semantic gates pass.
+ * the catalog gate types against); the loop produces THIS type once the
+ * structural + catalog + semantic gates pass.
  */
 export type MiniAppSpec = Spec & {
   state: Record<string, unknown>;

@@ -13,13 +13,19 @@ export interface BoundPointer {
   readonly source: 'prop' | 'watch' | 'repeat';
 }
 
-function isStateBinding(v: unknown): v is { $state: string } {
-  return (
-    typeof v === 'object' &&
-    v !== null &&
-    '$state' in v &&
-    typeof (v as { $state: unknown }).$state === 'string'
-  );
+/**
+ * The state-pointer a prop value carries, or undefined. Both one-way (`$state`)
+ * and two-way (`$bindState`) markers hold a JSON-Pointer into the state document,
+ * so both count — the value control the frozen catalog uses (FilePicker, Select)
+ * binds two-way. Repeat-item / conditional / template markers ($item, $index,
+ * $cond, $template) are NOT state pointers and are intentionally not treated here.
+ */
+function stateBindingPointer(v: unknown): string | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.$state === 'string') return o.$state;
+  if (typeof o.$bindState === 'string') return o.$bindState;
+  return undefined;
 }
 
 /** Normalize a json-render path to a leading-slash RFC-6901 pointer. */
@@ -27,20 +33,35 @@ function toPointer(path: string): string {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
-function collectFromProps(props: unknown, elementKey: string, out: BoundPointer[]): void {
-  if (typeof props !== 'object' || props === null) return;
-  for (const value of Object.values(props as Record<string, unknown>)) {
-    if (isStateBinding(value)) {
-      out.push({ pointer: toPointer(value.$state), elementKey, source: 'prop' });
+/**
+ * Collect every state-binding pointer anywhere inside a prop value. A binding can
+ * sit at the top of props or nested inside an object or array (a repeated row's
+ * label, a config sub-object), so the walk recurses; a marker is a leaf (its
+ * pointer is collected and it is not descended into).
+ */
+function collectFromProps(value: unknown, elementKey: string, out: BoundPointer[]): void {
+  const pointer = stateBindingPointer(value);
+  if (pointer !== undefined) {
+    out.push({ pointer: toPointer(pointer), elementKey, source: 'prop' });
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectFromProps(item, elementKey, out);
+    return;
+  }
+  if (typeof value === 'object' && value !== null) {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      collectFromProps(v, elementKey, out);
     }
   }
 }
 
 /**
- * Walk a spec and collect every pointer the UI binds to: `$state` props,
- * `watch` state-path keys, and `repeat.statePath` (`on` is deliberately NOT
- * walked — its values are action bindings, not state pointers). The semantic
- * validator uses this to prove every binding resolves against spec.state.
+ * Walk a spec and collect every pointer the UI binds to: `$state`/`$bindState`
+ * props (at any nesting depth), `watch` state-path keys, and `repeat.statePath`
+ * (`on` is deliberately NOT walked — its values are action bindings, not state
+ * pointers). The semantic validator uses this to prove every binding resolves
+ * against spec.state.
  */
 export function collectBoundPointers(spec: Spec): readonly BoundPointer[] {
   const out: BoundPointer[] = [];

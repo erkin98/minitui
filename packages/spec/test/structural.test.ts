@@ -54,6 +54,25 @@ describe('structural', () => {
     expect(out.fixes.length).toBeGreaterThan(0);
     expect(out.spec).not.toBe(input); // immutability: new object
   });
+
+  it('never silently prunes a dangling child ref — a typo stays a surfaced error', () => {
+    // `children` names `body` but only `bdy` (typo) is defined. The autofixer must
+    // not quietly drop `body`; the defect has to survive so the structural validator
+    // reports it and the loop reprompts instead of shipping a spec missing an element.
+    const input = {
+      root: 'root',
+      elements: {
+        root: { type: 'Box', props: {}, children: ['header', 'body'] },
+        header: { type: 'Box', props: {} },
+        bdy: { type: 'Box', props: {} },
+      },
+    };
+    const out = autoFixStructure(input);
+    expect(out.spec.elements.root?.children).toContain('body');
+    const v = validateStructure(input);
+    expect(v.valid).toBe(false);
+    expect(v.issues.some((i) => i.code === 'missing_child')).toBe(true);
+  });
 });
 
 describe('barrel', () => {
