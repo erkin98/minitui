@@ -247,6 +247,109 @@ describe('off-grammar prop-value operators', () => {
   });
 });
 
+describe('off-grammar operators in action-binding params', () => {
+  // Action params feed the renderer's resolveActionParam → resolvePropValue at
+  // dispatch, which EXECUTES a $computed function — so params get the same
+  // fail-closed gate props get. A $computed smuggled through a param must be
+  // rejected at generation time, not run at press.
+  const st = { p: 1, x: 'v', inputs: ['/abs/a.mp4'] };
+
+  it('rejects a $computed action-binding param (it would execute at dispatch)', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: {
+          b: {
+            type: 'Button',
+            props: { label: 'Go' },
+            on: {
+              press: {
+                action: 'merge',
+                params: { value: { $computed: 'fn', args: { s: { $state: '/x' } } } },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('rejects a $computed nested under a $cond inside an action param', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: {
+          b: {
+            type: 'Button',
+            props: { label: 'Go' },
+            on: {
+              press: {
+                action: 'merge',
+                params: {
+                  value: {
+                    $cond: { $state: '/p', gt: 0 },
+                    $then: { $computed: 'fn' },
+                    $else: 'y',
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('passes a legit { $state } / { $item } action param (no false positive)', () => {
+    for (const value of [{ $state: '/x' }, { $item: 'name' }]) {
+      const spec: AppSpec = JSON.parse(
+        JSON.stringify({
+          root: 'b',
+          elements: {
+            b: {
+              type: 'Button',
+              props: { label: 'Go' },
+              on: { press: { action: 'merge', params: { value } } },
+            },
+          },
+        }),
+      );
+      expect(codes(checkSemantics(spec, cat, st))).not.toContain('off-grammar-operator');
+    }
+  });
+});
+
+describe('a mistyped terminal marker must not hide a nested operator', () => {
+  const st = { p: 1, ptr: 'ok', inputs: ['/abs/a.mp4'] };
+
+  it('rejects a mistyped { $state: { $computed } } (non-scalar marker payload is walked)', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: {
+          b: {
+            type: 'Button',
+            props: { label: { $state: { $computed: 'fn', args: { s: { $state: '/p' } } } } },
+          },
+        },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).toContain('off-grammar-operator');
+  });
+
+  it('still passes a scalar { $state: "/ptr" } marker (control — a scalar payload terminates safe)', () => {
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: { b: { type: 'Button', props: { label: { $state: '/ptr' } } } },
+      }),
+    );
+    expect(codes(checkSemantics(spec, cat, st))).not.toContain('off-grammar-operator');
+  });
+});
+
 describe('missing required prop', () => {
   it('flags a genuinely-required (non-nullable, no-default) prop the spec omits', () => {
     // Button.label is a required non-nullable string; omitting it is incomplete

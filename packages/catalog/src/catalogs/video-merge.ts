@@ -9,7 +9,7 @@ import { defineComponent } from '../contract/catalog-component.js';
 import { defineAction } from '../contract/catalog-action.js';
 
 // Re-tag a std json-render ComponentDefinition with a minitui trust tier. Every
-// std def pulled into this Slice-1 catalog (Box/Select/ProgressBar/Text) is
+// std def pulled into this catalog (Box/Select/ProgressBar/Text) is
 // non-free-text, so capturesText is false — the app-shell `q` quits while one is
 // focused. A future std TextInput would pass capturesText:true.
 function tag(
@@ -27,7 +27,7 @@ function localAction(def: ActionDefinition) {
 }
 
 /**
- * Slice-1 video-merge catalog. FilePicker + OrderList + Button are CUSTOM
+ * The video-merge catalog. FilePicker + OrderList + Button are CUSTOM
  * components (json-render's 27 std Ink defs ship no file picker, no reorderable
  * list, and NO Button — the interactive std defs are TextInput/Select/MultiSelect/
  * ConfirmInput). Their props zod is the same source renderer-ink resolves the widget

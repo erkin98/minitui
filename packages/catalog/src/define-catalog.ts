@@ -1,5 +1,6 @@
 import { z, type ZodType } from 'zod';
 import { defineCatalog, type PromptOptions } from '@json-render/core';
+import { ACTION_KINDS } from '@minitui/types';
 import { inkSchema, type ComponentDefinition, type ActionDefinition } from './schema-bridge.js';
 import type { MinituiComponentDef, TrustTier } from './contract/catalog-component.js';
 import { requiresPermission, type MinituiActionDef } from './contract/catalog-action.js';
@@ -19,13 +20,6 @@ import {
 interface JsonRenderCatalog {
   prompt(options?: PromptOptions): string;
 }
-
-const ACTION_KINDS: ReadonlySet<string> = new Set([
-  'render-local',
-  'exec-local',
-  'exec-mcp',
-  'agent-callback',
-]);
 
 // An OPEN top-level schema (z.record, or an object with a passthrough/catchall
 // escape hatch) is an arbitrary-data hole behind the .strict() surface — reject at
@@ -51,12 +45,26 @@ function assertClosedSchema(context: string, schema: ZodType): void {
       if (member instanceof z.ZodType) assertClosedSchema(context, member);
     }
   }
+  if (schema instanceof z.ZodIntersection) {
+    // Both members gate the incoming value (it must satisfy each), so an open
+    // member on either side is a hole — recurse both.
+    for (const member of [schema.def.left, schema.def.right]) {
+      if (member instanceof z.ZodType) assertClosedSchema(context, member);
+    }
+  }
+  if (schema instanceof z.ZodPipe) {
+    // Scan the INPUT surface only: .in gates the incoming params. .out is the
+    // transform OUTPUT — a legit closed-in to open-out transform is not an
+    // incoming-data hole, so an open record there is not rejected.
+    const input = schema.def.in;
+    if (input instanceof z.ZodType) assertClosedSchema(context, input);
+  }
 }
 
 // Fail-closed action ingest: an unrecognized kind or a gate-less non-render-local
 // action is a catalog-definition error, never a permissive default.
 function assertActionDef(name: string, def: MinituiActionDef): void {
-  if (!ACTION_KINDS.has(def.kind)) {
+  if (!ACTION_KINDS.includes(def.kind)) {
     throw new Error(
       `Catalog action "${name}": unknown kind "${String(def.kind)}" — fail closed, no permissive default.`,
     );

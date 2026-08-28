@@ -83,8 +83,11 @@ const TERMINAL_MARKERS: ReadonlySet<string> = new Set([
 // function a $computed names, so the gate fails closed on such an operator
 // wherever it hides. A conditional resolves only its chosen branch (its condition
 // is a separate visibility grammar checked elsewhere), so only the branches are
-// walked; a terminal marker holds a scalar the renderer reads directly, so its
-// payload is not walked.
+// walked. A terminal marker normally holds a scalar the renderer reads directly;
+// if its payload is instead a non-scalar (a mistyped marker), the renderer does not
+// treat it as a marker and recurses into it, so the gate walks that payload too —
+// only a scalar payload terminates safe, and the dead-code siblings of a scalar
+// marker are not walked.
 function hasOffGrammarOperator(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasOffGrammarOperator);
   if (typeof value !== 'object' || value === null) return false;
@@ -99,7 +102,16 @@ function hasOffGrammarOperator(value: unknown): boolean {
   if ('$cond' in record) {
     return hasOffGrammarOperator(record.$then) || hasOffGrammarOperator(record.$else);
   }
-  if (markerKeys.some((markerKey) => TERMINAL_MARKERS.has(markerKey))) return false;
+  const terminalKeys = markerKeys.filter((markerKey) => TERMINAL_MARKERS.has(markerKey));
+  if (terminalKeys.length > 0) {
+    // A scalar terminal-marker payload is read directly and terminates safe; a
+    // non-scalar payload is a mistype the renderer recurses into, so walk it. The
+    // marker's siblings are dead code once the marker resolves — not walked.
+    return terminalKeys.some((markerKey) => {
+      const payload = record[markerKey];
+      return typeof payload === 'object' && payload !== null && hasOffGrammarOperator(payload);
+    });
+  }
   return Object.values(record).some(hasOffGrammarOperator);
 }
 
@@ -115,6 +127,27 @@ function collectOffGrammarOperators(
         code: 'off-grammar-operator',
         elementKey: key,
         message: `Prop "${propKey}" on "${key}" uses an off-grammar expression operator — only the taught state, binding, and conditional markers are allowed.`,
+      });
+    }
+  }
+  return issues;
+}
+
+// Reject any action-binding param whose value carries an off-grammar expression
+// operator. Params resolve through the same resolvePropValue path as props at
+// dispatch, which EXECUTES a $computed function — so a function-call or unknown
+// $-operator hidden in a param must fail closed here, not run at press.
+function collectParamOffGrammar(
+  params: Readonly<Record<string, JsonValue>>,
+  key: string,
+): readonly SemanticIssue[] {
+  const issues: SemanticIssue[] = [];
+  for (const [paramKey, value] of Object.entries(params)) {
+    if (hasOffGrammarOperator(value)) {
+      issues.push({
+        code: 'off-grammar-operator',
+        elementKey: key,
+        message: `Action param "${paramKey}" on "${key}" uses an off-grammar expression operator — only the taught state, binding, and conditional markers are allowed.`,
       });
     }
   }
@@ -268,6 +301,11 @@ export function checkSemantics(
     }
 
     for (const binding of collectBindings(el)) {
+      // No-code moat: an action param feeds the renderer's resolveActionParam →
+      // resolvePropValue at dispatch, which executes a $computed function — reject a
+      // function-call or unknown expression operator in a param, fail closed.
+      issues.push(...collectParamOffGrammar(binding.params ?? {}, key));
+
       // (2) dynamic action params: { $state } refs must resolve (the gate
       // inspects dynamic params, not just action names).
       for (const pointer of collectStateRefs(binding.params ?? {})) {
