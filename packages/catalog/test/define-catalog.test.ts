@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import { ACTION_KINDS } from '@minitui/types';
 import { defineMinituiCatalog } from '../src/define-catalog.js';
 
 const cat = defineMinituiCatalog({
@@ -199,5 +200,61 @@ describe('fail-closed build guards', () => {
         actions: { go: okAction },
       }),
     ).toThrowError(/secret/);
+  });
+  it('rejects a ZodIntersection props schema whose member is an open record', () => {
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'bad',
+        components: {
+          Split: {
+            props: z.intersection(
+              z.object({ a: z.string() }).strict(),
+              z.record(z.string(), z.unknown()),
+            ),
+            slots: [],
+            description: 'x',
+            trustTier: 'display',
+          },
+        },
+        actions: { go: okAction },
+      }),
+    ).toThrowError(/record/);
+  });
+  it('rejects a ZodPipe props schema whose INPUT surface is an open record', () => {
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'bad',
+        components: {
+          Piped: {
+            props: z.record(z.string(), z.unknown()).pipe(z.object({ a: z.string() }).strict()),
+            slots: [],
+            description: 'x',
+            trustTier: 'display',
+          },
+        },
+        actions: { go: okAction },
+      }),
+    ).toThrowError(/record/);
+  });
+});
+
+describe('ActionKind set imported from @minitui/types (no hand-copied drift)', () => {
+  it('accepts every canonical ActionKind (a stale local copy would reject a valid kind)', () => {
+    for (const kind of ACTION_KINDS) {
+      expect(() =>
+        defineMinituiCatalog({
+          id: 'kinds',
+          components: {},
+          actions: {
+            a: {
+              params: z.object({}),
+              description: 'x',
+              kind,
+              permission: { danger: false, resourceTemplate: 'echo', summaryTemplate: 'Echo' },
+            },
+          },
+        }),
+      ).not.toThrow();
+    }
   });
 });
