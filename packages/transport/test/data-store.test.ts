@@ -49,6 +49,20 @@ describe('DataStore (canonical immutable state seam)', () => {
     expect(notifications).toBe(1);
     expect(store.getState()).toEqual({ codec: 'vp9' });
   });
+
+  it('setLocal strips model ANSI from a string value, symmetric with applyDelta/applySnapshot', () => {
+    const store = createDataStore({ initial: {} });
+    store.setLocal('/title', `a${ESC}[0mb`);
+    expect(store.getState()).toEqual({ title: 'ab' }); // CSI stripped at ingress like the delta path
+  });
+
+  it('setLocal deep-strips ANSI from nested string values (the walker, not a top-level-only strip)', () => {
+    const store = createDataStore({ initial: {} });
+    store.setLocal('/node', { label: `x${ESC}[1my`, tags: [`p${ESC}[0mq`] });
+    // A bare string-only strip would leave the nested object/array untouched; the walker cleans
+    // every string leaf at any depth, matching foldDelta/foldSnapshot.
+    expect(store.getState()).toEqual({ node: { label: 'xy', tags: ['pq'] } });
+  });
 });
 
 // A pathological nesting far past MAX_DEPTH (256): plain recursive walks

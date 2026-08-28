@@ -146,10 +146,11 @@ importers:
         version: 4.0.17(@types/node@22.19.19)(tsx@4.19.2)
 
   packages/renderer-core:
-    devDependencies:
+    dependencies:
       '@minitui/types':
         specifier: workspace:*
         version: link:../types
+    devDependencies:
       eslint:
         specifier: 'catalog:'
         version: 9.13.0
