@@ -9,7 +9,7 @@ import {
   type JsonValue,
 } from './json-pointer.js';
 import { type JsonPatchOp } from './patch-apply.js';
-import { foldDelta, foldSnapshot } from './snapshot-delta.js';
+import { foldDelta, foldSnapshot, sanitizeStrings } from './snapshot-delta.js';
 import type { StorePort, StoreSubscriber } from './store-port.js';
 
 export interface DataStore extends StorePort {
@@ -132,7 +132,10 @@ export function createDataStore(opts?: {
       try {
         const canonicalValue = canonicalize(value, 'dropped invalid setLocal value');
         if (canonicalValue === undefined) return;
-        commit(setIn(stagedState(), pointer, canonicalValue));
+        // Fold string leaves through the same walker the delta/snapshot paths use so a
+        // local write is stripped of model ANSI/OSC on the same footing as ingress state,
+        // keeping the single-writer chokepoint symmetric.
+        commit(setIn(stagedState(), pointer, sanitizeStrings(canonicalValue)));
       } catch (error) {
         report('dropped invalid setLocal write', error);
       }

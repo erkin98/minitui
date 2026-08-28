@@ -1,12 +1,12 @@
-// Published-artifact gate for the pure-type swap boundary: pack renderer-core + its peer
-// @minitui/types → assert the four-file tarball + manifest (concrete deps, concrete PEER
-// dep, engines floor, exact exports) → install into a throwaway strict consumer → tsc
+// Published-artifact gate for the pure-type swap boundary: pack renderer-core + its
+// @minitui/types dependency → assert the four-file tarball + manifest (concrete deps,
+// engines floor, exact exports) → install into a throwaway strict consumer → tsc
 // (types:[] skipLibCheck:false) forces the WHOLE dist/index.d.ts AND its external
 // @minitui/types re-exports to resolve with no ambient fallback (declaration-closure +
 // §Z80 ambient check) → one ESM import proving the shipped module loads with ZERO runtime
 // exports (the package's pure-interface invariant). Proves the SHIPPED tarball, not just
-// source. renderer-core has NO runtime deps; @minitui/types is a PEER, packed alongside and
-// installed directly (its 0.0.0 resolves nowhere else). Permanent (run by the root package
+// source. @minitui/types is renderer-core's sole runtime dependency, packed alongside and
+// pinned via a pnpm override (its 0.0.0 resolves nowhere else). Permanent (run by the root package
 // gate + pre-push).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
@@ -49,7 +49,7 @@ const pack = (dir) => {
 try {
   assertConcreteSemverControl(die);
 
-  // 1. Pack renderer-core + its peer @minitui/types (workspace:* rewritten concrete on pack).
+  // 1. Pack renderer-core + its dependency @minitui/types (workspace:* rewritten concrete on pack).
   const tgz = pack(pkgDir);
   const typesTgz = pack(join(packagesDir, 'types'));
   // 2. Assert EXACTLY the four intended files (a stray/missing file reds).
@@ -64,15 +64,16 @@ try {
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
   );
-  // renderer-core has NO runtime deps; still assert the (empty) container is concrete-clean,
-  // so a regression that adds a workspace:* dependency reds here.
+  // @minitui/types is renderer-core's sole runtime dependency and its workspace:* MUST be
+  // rewritten concrete on pack. assertConcreteDependencies reds if any dependency leaks a
+  // non-concrete range (a workspace:*), and the presence check reds if the types dependency
+  // is ever dropped from the shipped manifest.
   assertConcreteDependencies(m.dependencies, 'packed manifest', die);
-  // The DEFINING manifest fact of this package: @minitui/types is a PEER, and its workspace:*
-  // MUST be rewritten concrete on pack. pnpm treats an unmet/wrong peer as a WARNING, not a
-  // failure, so the install step would not catch a leaked workspace:* — only this does.
+  if (m.dependencies?.['@minitui/types'] === undefined)
+    die('packed manifest dropped the @minitui/types dependency: ' + JSON.stringify(m.dependencies));
+  // No peer dependencies: assert the container is empty/absent so a regression that
+  // reintroduces a workspace:* peer reds here.
   assertConcreteDependencies(m.peerDependencies, 'packed peer manifest', die);
-  if (m.peerDependencies?.['@minitui/types'] === undefined)
-    die('packed manifest dropped the @minitui/types peer: ' + JSON.stringify(m.peerDependencies));
   // Engines floor checked by VALUE against the repo floor (a weakened '*'/'>=18' reds).
   if (m.engines?.node !== EXPECTED_NODE_FLOOR)
     die('packed engines.node ' + JSON.stringify(m.engines?.node) + ' != ' + EXPECTED_NODE_FLOOR);
@@ -82,9 +83,10 @@ try {
     die('packed manifest missing exports map: ' + JSON.stringify(m.exports));
   if (!eq(Object.keys(m.exports ?? {}), ['.']))
     die('packed exports subpaths ' + JSON.stringify(Object.keys(m.exports ?? {})) + " ≠ ['.']");
-  // 4. Install the tarballs into a fresh strict consumer. renderer-core's peer @minitui/types
-  // is installed DIRECTLY (its 0.0.0 resolves nowhere else); no override is needed since it
-  // is a first-class dependency of the throwaway consumer.
+  // 4. Install into a fresh strict consumer. @minitui/types is renderer-core's regular
+  // dependency, so its 0.0.0 (which resolves on no registry) is pinned to the local tarball via
+  // an override. pnpm 11 reads overrides from pnpm-workspace.yaml, NOT the package.json `pnpm`
+  // key — the latter is silently ignored and the offline install fails to resolve 0.0.0.
   writeFileSync(
     join(tmp, 'package.json'),
     JSON.stringify({
@@ -92,13 +94,13 @@ try {
       private: true,
       type: 'module',
       packageManager: EXPECTED_PACKAGE_MANAGER,
-      dependencies: {
-        '@minitui/renderer-core': 'file:' + tgz,
-        '@minitui/types': 'file:' + typesTgz,
-      },
+      dependencies: { '@minitui/renderer-core': 'file:' + tgz },
     }),
   );
-  writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
+  writeFileSync(
+    join(tmp, 'pnpm-workspace.yaml'),
+    'packages: []\n' + 'overrides:\n' + "  '@minitui/types': file:" + typesTgz + '\n',
+  );
   writeFileSync(
     join(tmp, 'tsconfig.json'),
     JSON.stringify({
