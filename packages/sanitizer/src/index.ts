@@ -1,6 +1,6 @@
 // @minitui/sanitizer — ANSI/control-character chokepoint leaf (zero-dep).
 // The single import every package routes untrusted text through before the screen.
-import { caretEncode, CSI_SEQUENCE_SOURCE, hasEscape, stripAnsi } from './ansi.js';
+import { caretEncode, CSI_SEQUENCE_SOURCE, hasEscape, PRESERVE_C0, stripAnsi } from './ansi.js';
 import {
   stripDangerousOscSegments,
   ALLOWED_OSC8_SCHEMES,
@@ -76,7 +76,7 @@ function sgrPassClean(text: string): string {
       continue;
     }
     if (
-      (code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      (code <= 0x1f && !PRESERVE_C0.has(code)) ||
       code === 0x7f ||
       (code >= 0x80 && code <= 0x9f)
     ) {

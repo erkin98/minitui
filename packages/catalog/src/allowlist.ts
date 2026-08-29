@@ -104,7 +104,7 @@ export function rejectOffCatalog(
       // agent-authored consent text are all off the frozen grammar (consent is
       // host-resolved, never taken from the model). Object.hasOwn reads the runtime
       // key the strict wire type deliberately omits (no cast).
-      for (const callback of ['onSuccess', 'onError', 'confirm'] as const) {
+      for (const callback of ['onSuccess', 'onError', 'confirm', 'preventDefault'] as const) {
         if (Object.hasOwn(binding, callback)) {
           issues.push({
             code: 'off-grammar-callback',

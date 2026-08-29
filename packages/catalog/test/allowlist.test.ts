@@ -143,6 +143,40 @@ describe('rejectOffCatalog (generation-time gate)', () => {
     expect(issues.map((i: AllowlistIssue) => i.offending)).toContain('confirm');
   });
 
+  it('rejects a preventDefault flag on a binding — off the frozen action grammar', () => {
+    // The wire ActionBinding is action + params only; the pinned json-render binding
+    // carries a 4th preventDefault field (a browser-navigation flag, inert in a TUI).
+    // Parse a JSON literal into the typed spec (the sanctioned invalid-input recipe,
+    // no cast) to mirror an untrusted model stream that rides the excess key through.
+    const spec: AppSpec = JSON.parse(
+      JSON.stringify({
+        root: 'app',
+        elements: {
+          app: {
+            type: 'Button',
+            props: { label: 'X' },
+            on: { press: { action: 'merge', preventDefault: true } },
+          },
+        },
+      }),
+    );
+    const issues = rejectOffCatalog(spec, cat);
+    expect(issues.map((i: AllowlistIssue) => i.code)).toContain('off-grammar-callback');
+    expect(issues.map((i: AllowlistIssue) => i.offending)).toContain('preventDefault');
+
+    // Control: the same binding without preventDefault raises no off-grammar issue,
+    // isolating preventDefault as the trigger (not the merge action itself).
+    const clean: AppSpec = {
+      root: 'app',
+      elements: {
+        app: { type: 'Button', props: { label: 'X' }, on: { press: { action: 'merge' } } },
+      },
+    };
+    expect(rejectOffCatalog(clean, cat).map((i: AllowlistIssue) => i.code)).not.toContain(
+      'off-grammar-callback',
+    );
+  });
+
   it('rejects a null binding VALUE as malformed-binding — returns an issue, never throws', () => {
     // json-render validateSpec never validates binding VALUES, so a null binding
     // reaches this walk. It must fail closed with a repromptable issue, not crash

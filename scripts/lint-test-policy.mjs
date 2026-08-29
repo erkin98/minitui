@@ -46,6 +46,8 @@ if (output.length > 0) console.error(output);
 
 let failed = results.reduce((total, result) => total + result.errorCount, 0) > 0;
 
+// A delegating global wrapper that restores in finally is instrumentation, not a
+// replacement double, so it is permitted.
 // Reachability guard for the replacement-API ban. `no-vitest-replacement-api` catches
 // `vi`/`vitest` only when they are IMPORTED; with vitest's `globals: true`, `vi` becomes an
 // ambient global and `vi.mock(...)` needs no import — invisible to the rule. Forbidding
@@ -77,6 +79,9 @@ const vitestConfigs = globSync(
   ],
   { cwd: root },
 );
+// Zero-file floor mirroring the lint-half guard: if the config names ever migrate off this
+// glob (e.g. to .mts) the sweep scans nothing and would pass vacuously, reopening the bypass.
+if (vitestConfigs.length === 0) throw new Error(ZERO_MATCH);
 const globalsOffenders = vitestConfigs.filter((rel) =>
   hasGlobalsTrue(readFileSync(resolve(root, rel), 'utf8')),
 );
