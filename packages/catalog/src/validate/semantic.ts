@@ -65,17 +65,6 @@ const ALLOWED_PROP_OPERATORS: ReadonlySet<string> = new Set([
 ]);
 // A conditional expression's branch containers — walk into these; they are not operators.
 const COND_BRANCH_KEYS: ReadonlySet<string> = new Set(['$then', '$else']);
-// Single-value markers the renderer reads directly from a scalar payload; it does
-// not resolve nested prop expressions inside them, so their payload is not walked.
-const TERMINAL_MARKERS: ReadonlySet<string> = new Set([
-  '$state',
-  '$bindState',
-  '$path',
-  '$template',
-  '$item',
-  '$index',
-  '$bindItem',
-]);
 
 // True when a prop value carries a function-call operator or any unknown
 // $-operator at ANY depth. Mirrors how the renderer resolves prop values: it
@@ -88,6 +77,23 @@ const TERMINAL_MARKERS: ReadonlySet<string> = new Set([
 // treat it as a marker and recurses into it, so the gate walks that payload too —
 // only a scalar payload terminates safe, and the dead-code siblings of a scalar
 // marker are not walked.
+// Mirrors the pinned renderer's marker guards (@json-render/core resolvePropValue): a
+// record is read as a single direct-value marker — its siblings never resolved — only
+// when a string-payload marker matches or `$index === true`. Any other shape the renderer
+// resolves as a generic object (every value walked), so the gate must walk it too. Keep
+// this in lockstep with the renderer: a guard it type-checks that this omits reopens the
+// nested-sibling smuggle path.
+function isRendererDirectMarker(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.$state === 'string' ||
+    typeof record.$bindState === 'string' ||
+    typeof record.$item === 'string' ||
+    typeof record.$bindItem === 'string' ||
+    typeof record.$template === 'string' ||
+    record.$index === true
+  );
+}
+
 function hasOffGrammarOperator(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasOffGrammarOperator);
   if (typeof value !== 'object' || value === null) return false;
@@ -99,19 +105,21 @@ function hasOffGrammarOperator(value: unknown): boolean {
   for (const markerKey of markerKeys) {
     if (!ALLOWED_PROP_OPERATORS.has(markerKey) && !COND_BRANCH_KEYS.has(markerKey)) return true;
   }
-  if ('$cond' in record) {
+  // A COMPLETE $cond ($cond + $then + $else all present) is a marker the renderer reads:
+  // it resolves the chosen branch and never touches other siblings, so walk the two
+  // branches only (the $cond condition is a separate visibility grammar checked
+  // elsewhere). An INCOMPLETE $cond is NOT a marker to the renderer — it resolves the
+  // record as a generic object — so it must fall through to the walk-all below.
+  if ('$cond' in record && '$then' in record && '$else' in record) {
     return hasOffGrammarOperator(record.$then) || hasOffGrammarOperator(record.$else);
   }
-  const terminalKeys = markerKeys.filter((markerKey) => TERMINAL_MARKERS.has(markerKey));
-  if (terminalKeys.length > 0) {
-    // A scalar terminal-marker payload is read directly and terminates safe; a
-    // non-scalar payload is a mistype the renderer recurses into, so walk it. The
-    // marker's siblings are dead code once the marker resolves — not walked.
-    return terminalKeys.some((markerKey) => {
-      const payload = record[markerKey];
-      return typeof payload === 'object' && payload !== null && hasOffGrammarOperator(payload);
-    });
-  }
+  // A WELL-FORMED terminal marker (the renderer's OWN type guard: a string payload for
+  // the pointer/template/item markers, or `$index === true`) is read directly and its
+  // siblings are genuinely dead. A MISTYPED marker ($state:1, $index:'x', …) fails that
+  // guard, so the renderer resolves the record as a generic object and walks every value
+  // — a $computed nested in a sibling would execute — so it falls through to the walk-all.
+  // ($path has no renderer handler at all, so it never terminates the walk.)
+  if (isRendererDirectMarker(record)) return false;
   return Object.values(record).some(hasOffGrammarOperator);
 }
 

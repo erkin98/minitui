@@ -26,6 +26,14 @@ describe('resolvePointer', () => {
   it('returns undefined for a missing pointer (never throws)', () => {
     expect(resolvePointer({ inputs: [] }, '/inputs/0')).toBeUndefined();
   });
+  it('reads a slashless pointer as ONE relative segment (mirrors the runtime getByPath, not the whole doc)', () => {
+    // The pinned runtime parseJsonPointer('missing') === ['missing'], so getByPath reads
+    // state['missing']. The gate must resolve identically, else a slashless binding
+    // resolves to the whole document (always defined) and the bad-binding check can never
+    // fire for it while the action wires to nothing at dispatch.
+    expect(resolvePointer({ missing: 'v' }, 'missing')).toBe('v');
+    expect(resolvePointer({ p: 1 }, 'missing')).toBeUndefined();
+  });
   it('rejects a non-canonical array-index token (strict RFC-6901: 0 or [1-9][0-9]*)', () => {
     // Number() would leniently accept '1e0' as 1, '00' as 0, and ' 1' as 1; a
     // strict RFC-6901 array index has no exponent/leading-zero/whitespace form, so

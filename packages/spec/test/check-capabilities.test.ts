@@ -98,4 +98,41 @@ describe('checkCapabilities', () => {
     const [issue] = issues;
     expect(issue?.code).toBe('missing_capability');
   });
+
+  it('checks BOTH branches of a $cond capability value (an on-grammar marker the renderer resolves)', async () => {
+    // The taught grammar permits $cond in params/props and the renderer resolves it to a
+    // real string at dispatch. Resolving only $state/$bindState left a branch unchecked.
+    const condSpec: Spec = {
+      root: 'f',
+      elements: {
+        f: { type: 'Box', props: {}, children: ['fx'] },
+        fx: {
+          type: 'Select',
+          props: {
+            codec: JSON.parse('{"$cond":{"$state":"/hd"},"$then":"libvpx-vp99","$else":"h264"}'),
+          },
+        },
+      },
+      state: { hd: true },
+    };
+    const issues = await checkCapabilities(condSpec, caps);
+    expect(issues).toHaveLength(1); // $then "libvpx-vp99" not live; $else "h264" ok
+    const [issue] = issues;
+    expect(issue?.code).toBe('missing_capability');
+  });
+
+  it('control: a $cond whose both branches are live passes (no over-rejection)', async () => {
+    const condSpec: Spec = {
+      root: 'f',
+      elements: {
+        f: { type: 'Box', props: {}, children: ['fx'] },
+        fx: {
+          type: 'Select',
+          props: { codec: JSON.parse('{"$cond":{"$state":"/hd"},"$then":"h264","$else":"hevc"}') },
+        },
+      },
+      state: { hd: true },
+    };
+    expect(await checkCapabilities(condSpec, caps)).toEqual([]);
+  });
 });
