@@ -1,0 +1,40 @@
+{
+  "name": "@minitui/agent-core",
+  "version": "0.0.0",
+  "private": false,
+  "dependencies": {
+    "@ai-sdk/anthropic": "catalog:",
+    "@minitui/types": "workspace:*",
+    "ai": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "eslint-plugin-import": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}
