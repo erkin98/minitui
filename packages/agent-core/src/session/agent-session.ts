@@ -3,7 +3,7 @@ import { streamText as realStreamText, type LanguageModel } from 'ai';
 import type { AppSpec } from '@minitui/types';
 import type { ModelProvider } from '../provider/provider-port.js';
 import type { ToolDispatchPort, SpecSinkPort, Clock } from '../ports/index.js';
-import type { VisibilityChannel } from '../visibility/index.js';
+import type { VisibilityChannel, RedactionPolicy } from '../visibility/index.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import { createAsyncEventQueue, type AsyncEventQueue } from '../events/event-stream.js';
 import { createConversation } from './conversation.js';
@@ -22,6 +22,13 @@ export interface AgentConfig {
   readonly streamMaxRetries?: number;
   /** Test seam: inject a fake streamText. Production leaves this undefined (the real SDK is used). */
   readonly streamTextImpl?: typeof realStreamText;
+  /**
+   * Host redaction policy applied to every tool result on the model-feed path — the safety valve for
+   * org-specific secret shapes the built-in heuristics miss (extraSecretPatterns) and for a custom
+   * home/tmp. Threaded to routeToolCallResult on both the SDK and non-SDK loops; the built-in patterns +
+   * default $HOME/$TMPDIR still fire when this is undefined.
+   */
+  readonly redactionPolicy?: RedactionPolicy | undefined;
 }
 
 /** The agent loop facade. submit() is what the composition root hands createLocalAgentPort(session.submit). */
@@ -86,6 +93,7 @@ export class AgentSession {
       // Stream-resilience knobs threaded through; runTurns applies the defaults when undefined.
       idleTimeoutMs: this.#config.idleTimeoutMs,
       streamMaxRetries: this.#config.streamMaxRetries,
+      redactionPolicy: this.#config.redactionPolicy,
       model: this.#model,
     };
 
@@ -107,19 +115,25 @@ export class AgentSession {
             model: this.#model,
             system: this.#config.system,
             toolDispatch: this.#toolDispatch,
+            redactionPolicy: this.#config.redactionPolicy,
             queue,
             signal,
           });
-      void runner.finally(() => queue.close());
+      // The run's own errors surface as in-band RUN_ERROR events, so a terminal .catch keeps a
+      // hypothetical runner rejection from escaping as an unhandledRejection.
+      void runner.finally(() => queue.close()).catch(() => {});
 
       for await (const ev of queue) {
         if (signal.aborted) break;
         yield ev;
       }
     } finally {
-      // Close on ANY exit (including break-on-abort). With backpressure runTurns can be parked on an
-      // awaited push when the consumer stops draining; close() releases parked producers so the run graph
-      // unwinds instead of deadlocking. Idempotent with runTurns' own finally(queue.close()).
+      // Abort on ANY exit so abandoning the generator (consumer break/throw/.return()) tears down the
+      // run graph — the model stream and any in-flight tool dispatch stop, not just the queue. Harmless
+      // on normal completion (the run has already finished). Then close: with backpressure runTurns can
+      // be parked on an awaited push when the consumer stops draining; close() releases parked producers
+      // so the graph unwinds instead of deadlocking. Idempotent with runTurns' own finally(queue.close()).
+      controller.abort();
       queue.close();
       if (this.#queue === queue) this.#queue = undefined;
     }

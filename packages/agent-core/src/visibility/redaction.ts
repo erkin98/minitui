@@ -18,6 +18,10 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
   /\bBearer\s+[A-Za-z0-9._-]{12,}\b/g, // Authorization: Bearer ...
   /\beyJ[A-Za-z0-9._-]{20,}\b/g, // JWT (header starts eyJ)
+  /\b[sr]k_live_[A-Za-z0-9]{20,}\b/g, // Stripe live secret/restricted keys
+  /\bAIza[A-Za-z0-9_-]{35}\b/g, // Google API keys
+  /\bnpm_[A-Za-z0-9]{36}\b/g, // npm automation tokens
+  /-----BEGIN[A-Z ]*PRIVATE KEY-----/g, // PEM private-key block marker
   /(?<=password=)\S+/gi, // password=... in command/url
   /(?<=:\/\/[^:@\s/]+:)[^@\s/]+(?=@)/g, // creds in user:pass@host urls
 ];

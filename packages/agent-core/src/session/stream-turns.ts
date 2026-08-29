@@ -2,7 +2,7 @@ import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet 
 import { z } from 'zod';
 import { assertNever, type JsonValue } from '@minitui/types';
 import type { ToolDispatchPort } from '../ports/index.js';
-import { routeToolCallResult } from '../visibility/index.js';
+import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility/index.js';
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import type { Conversation } from './conversation.js';
@@ -46,6 +46,8 @@ export interface RunTurnsDeps {
   readonly idleTimeoutMs?: number | undefined;
   /** Mid-stream-drop re-run budget; default DEFAULT_STREAM_MAX_RETRIES. */
   readonly streamMaxRetries?: number | undefined;
+  /** Host redaction policy passed to routeToolCallResult on every dispatch result (extraSecretPatterns). */
+  readonly redactionPolicy?: RedactionPolicy | undefined;
   readonly model: LanguageModel;
 }
 
@@ -54,6 +56,7 @@ function buildTools(
   schemas: readonly ToolSchema[],
   toolDispatch: ToolDispatchPort,
   signal: AbortSignal,
+  policy?: RedactionPolicy,
 ): ToolSet {
   // Type the record with the SDK's own ToolSet (= Record<string, Tool>) — never
   // ReturnType<typeof tool>, which resolves the overloaded generic to its LAST overload
@@ -81,7 +84,7 @@ function buildTools(
         // provider sees it — it redacts `content` AND `error` and folds ok:false/denied into isError.
         // Raw ToolCallResult strings NEVER reach the SDK re-feed; what the model sees (and what
         // fullStream later echoes as the tool-result/tool-error parts) is the redacted observation.
-        const ev = routeToolCallResult(result);
+        const ev = routeToolCallResult(result, policy);
         // routeToolCallResult always yields a TOOL_CALL_RESULT event; the check narrows the union.
         if (ev.type !== 'TOOL_CALL_RESULT') {
           throw new Error('unreachable: observation events are TOOL_CALL_RESULT');
@@ -138,6 +141,17 @@ export async function runTurns(args: {
   const idleTimeoutMs = deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const streamMaxRetries = deps.streamMaxRetries ?? DEFAULT_STREAM_MAX_RETRIES;
 
+  // Build the tool set ONCE, outside the re-run loop: it does not depend on the attempt. A deterministic
+  // config throw here (e.g. a reserved tool name) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
+  // never re-run as if it were a transient stream drop. The repair closure also consults it.
+  let toolSet: ToolSet;
+  try {
+    toolSet = buildTools(deps.tools, deps.toolDispatch, signal, deps.redactionPolicy);
+  } catch (err) {
+    await queue.push(runError(toRunError(err).message, 'non-retriable'));
+    return;
+  }
+
   // The mid-stream-drop re-run tier. Distinct from stopWhen (bounds STEPS in one stream) and the SDK's
   // call-level maxRetries (only retries ESTABLISHING the stream). A retriable drop (idle-timeout /
   // truncation) re-runs streamText from the same history — but only while THIS attempt emitted nothing,
@@ -149,8 +163,6 @@ export async function runTurns(args: {
     let finishUsage: { inputTokens: number; outputTokens: number } | undefined;
 
     try {
-      // Build the tool set ONCE so the repair closure can consult it for the case-fix tier.
-      const toolSet = buildTools(deps.tools, deps.toolDispatch, signal);
       const result = deps.streamTextImpl({
         model: deps.model,
         // ProviderMessage rows are a structural subset of the SDK ModelMessage union; the cast narrows
@@ -336,11 +348,22 @@ export async function runProviderStream(args: {
   model: LanguageModel;
   system?: string | undefined;
   toolDispatch: ToolDispatchPort;
+  redactionPolicy?: RedactionPolicy | undefined;
   queue: AsyncEventQueue<MinituiEvent>;
   signal: AbortSignal;
 }): Promise<void> {
-  const { provider, conversation, threadId, runId, model, system, toolDispatch, queue, signal } =
-    args;
+  const {
+    provider,
+    conversation,
+    threadId,
+    runId,
+    model,
+    system,
+    toolDispatch,
+    redactionPolicy,
+    queue,
+    signal,
+  } = args;
   // A real non-SDK provider reads config.model; a scripted double ignores the request entirely. When the
   // model handle is an opaque object (not a bare id string) fall back to the provider id. The system
   // prompt is already the conversation's head row (AgentSession seeds it) — do NOT also thread it via
@@ -374,20 +397,23 @@ export async function runProviderStream(args: {
             },
             signal,
           );
-          await queue.push(routeToolCallResult(result));
+          await queue.push(routeToolCallResult(result, redactionPolicy));
           break;
         }
         case 'tool-result':
-          // The observation carries toolName (ProviderChunk tool-result supplies it) so the
-          // model-facing TOOL_CALL_RESULT is not toolName-dropped.
+          // A pre-composed tool-result is remote-composed (the provider ran the tool), so it should carry
+          // no locally-dispatched content — but redact it anyway, symmetric with the tool-call arm above,
+          // so the redaction invariant holds by construction rather than by assumption.
           await queue.push(
             agentObservation({
               toolCallId: chunk.toolCallId,
               toolName: chunk.toolName,
-              content:
+              content: redact(
                 typeof chunk.output === 'string'
                   ? chunk.output
                   : JSON.stringify(chunk.output ?? null),
+                redactionPolicy,
+              ),
               isError: chunk.isError,
             }),
           );

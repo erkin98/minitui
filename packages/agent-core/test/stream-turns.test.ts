@@ -372,6 +372,62 @@ describe('stream-turns', () => {
     expect(JSON.stringify(results)).toContain('[redacted-secret]');
   });
 
+  it('applies the host redactionPolicy (extraSecretPatterns) on the SDK loop', async () => {
+    // An org-specific token shape the built-in patterns deliberately MISS. It is redacted ONLY because
+    // AgentConfig.redactionPolicy threads through RunTurnsDeps to routeToolCallResult — if that wiring
+    // breaks, the built-ins never match this shape and the org token reaches the model verbatim.
+    const orgToken = 'COMPANY-123456';
+    const orgDispatch: ToolDispatchPort = {
+      dispatch: async (req) => ({
+        toolCallId: req.toolCallId,
+        ok: true,
+        toolName: req.toolName,
+        content: `wrote ${orgToken}`,
+        isError: false,
+      }),
+    };
+    const sdkLike = ((args: {
+      tools?: Record<
+        string,
+        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
+      >;
+    }) => ({
+      fullStream: (async function* () {
+        const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't-ok' });
+        yield {
+          type: 'tool-result',
+          toolCallId: 't-ok',
+          toolName: 'ffmpeg',
+          input: { a: 1 },
+          output,
+        };
+        yield { type: 'finish', finishReason: 'stop' };
+      })(),
+    })) as unknown as typeof import('ai').streamText;
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation(),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: {
+        streamTextImpl: sdkLike,
+        toolDispatch: orgDispatch,
+        tools,
+        model: 'test-model',
+        redactionPolicy: { extraSecretPatterns: [/COMPANY-\d{6}/g] },
+      },
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    const results = out.filter((e) => e.type === 'TOOL_CALL_RESULT');
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results)).not.toContain(orgToken);
+    expect(JSON.stringify(results)).toContain('[redacted-secret]');
+  });
+
   it('halts the wired SDK loop when repeatedToolCallDetector fires (doom-loop exit)', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     let captured: { simulatedSteps: number; stopped: boolean } | undefined;

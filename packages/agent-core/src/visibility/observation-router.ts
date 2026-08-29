@@ -6,6 +6,17 @@ import { redact, type RedactionPolicy } from './redaction.js';
 
 const STDERR_CAP = 4096;
 
+// ToolCallResult.content is `unknown`; JSON.stringify THROWS (not returns undefined) on a circular ref
+// or a BigInt. A malformed host result must degrade to a placeholder, never abort the turn or escape
+// the redaction path — so a throw here collapses to a fixed marker (which then still crosses redact()).
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '[unserializable]';
+  }
+}
+
 export interface ObservationInput {
   readonly toolCallId: string;
   readonly result: ActionResult;
@@ -72,7 +83,7 @@ export function routeToolCallResult(
   const isError = result.ok === false || result.isError === true || result.denied === true;
   const errorText = result.error ?? (result.denied ? 'execution denied' : undefined);
   const contentText =
-    typeof result.content === 'string' ? result.content : (JSON.stringify(result.content) ?? '');
+    typeof result.content === 'string' ? result.content : safeStringify(result.content);
   return agentObservation({
     toolCallId: result.toolCallId,
     toolName: result.toolName,

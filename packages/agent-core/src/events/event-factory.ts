@@ -29,7 +29,7 @@ export function runFinished(
 
 /** RUN_ERROR is { message, code? } on the wire (no retriable field); non-retriable maps to a code. */
 export function runError(message: string, code?: string): MinituiEvent {
-  return { type: 'RUN_ERROR', message, code };
+  return { type: 'RUN_ERROR', message, ...(code !== undefined ? { code } : {}) };
 }
 
 export function textContent(delta: string): MinituiEvent {
