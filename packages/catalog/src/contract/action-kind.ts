@@ -29,7 +29,11 @@ export function resolvePointer(doc: JsonValue, pointer: string): JsonValue | und
       // the canonical shape is unresolved (defense-in-depth against a lenient index).
       cur = /^(0|[1-9][0-9]*)$/.test(tok) ? (cur as readonly JsonValue[])[Number(tok)] : undefined;
     } else if (typeof cur === 'object') {
-      cur = (cur as { readonly [k: string]: JsonValue })[tok];
+      // Own-property read only: a segment naming a prototype member
+      // ('__proto__'/'constructor'/'prototype') resolves to undefined instead of the
+      // inherited object, matching the write-side own-property rule so the check
+      // catches such a pointer as a wires-to-nothing binding at generation time.
+      cur = Object.hasOwn(cur, tok) ? (cur as { readonly [k: string]: JsonValue })[tok] : undefined;
     } else {
       return undefined;
     }

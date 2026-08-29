@@ -34,6 +34,17 @@ describe('resolvePointer', () => {
     expect(resolvePointer({ missing: 'v' }, 'missing')).toBe('v');
     expect(resolvePointer({ p: 1 }, 'missing')).toBeUndefined();
   });
+  it('resolves a reserved/inherited-key pointer to undefined (own-property read only)', () => {
+    // A plain member read walks the prototype chain: ({})['__proto__'] is
+    // Object.prototype and ({})['constructor'] is the Object function — both truthy,
+    // so such a pointer would validate against a member the store never serves. An
+    // own-property read returns undefined so the bad-binding check fires instead.
+    expect(resolvePointer({}, '/__proto__')).toBeUndefined();
+    expect(resolvePointer({}, '/constructor')).toBeUndefined();
+    // Controls: a real own key still resolves, at depth and slashless.
+    expect(resolvePointer({ a: { b: 1 } }, '/a/b')).toBe(1);
+    expect(resolvePointer({ missing: 'v' }, 'missing')).toBe('v');
+  });
   it('rejects a non-canonical array-index token (strict RFC-6901: 0 or [1-9][0-9]*)', () => {
     // Number() would leniently accept '1e0' as 1, '00' as 0, and ' 1' as 1; a
     // strict RFC-6901 array index has no exponent/leading-zero/whitespace form, so
