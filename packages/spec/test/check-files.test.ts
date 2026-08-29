@@ -36,7 +36,7 @@ describe('checkFiles', () => {
   });
 
   it('resolves the catalog-canonical $bindState FilePicker binding, not only $state', async () => {
-    // The frozen catalog binds FilePicker.value two-way via $bindState (plan 06:2048);
+    // The frozen catalog binds FilePicker.value two-way via $bindState;
     // the moat must stat that path or it never bites for a real FilePicker.
     const bindStateSpec: Spec = {
       root: 'f',

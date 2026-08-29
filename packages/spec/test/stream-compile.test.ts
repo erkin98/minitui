@@ -20,7 +20,7 @@ describe('compileSpecStream', () => {
     expect(spec.state).toEqual({});
   });
 
-  it('rejects a patch whose path walks a prototype segment (§Z84) and leaves Object.prototype clean', async () => {
+  it('rejects a patch whose path walks a prototype segment and leaves Object.prototype clean', async () => {
     for (const seg of ['__proto__', 'constructor', 'prototype']) {
       await expect(
         compileSpecStream(chunks([`{"op":"add","path":"/${seg}/polluted","value":true}\n`])),

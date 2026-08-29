@@ -34,7 +34,7 @@ const catalog = defineMinituiCatalog({
   },
 });
 
-describe('checkVisibility (ledger §Z6)', () => {
+describe('checkVisibility', () => {
   it('passes a spec that never touches visibility (the catalog class governs silently)', () => {
     const spec: Spec = {
       root: 'b',
@@ -68,11 +68,11 @@ describe('checkVisibility (ledger §Z6)', () => {
     expect(checkVisibility(spec, catalog).map((i) => i.code)).toContain('visibility_widened');
   });
 
-  it("recurses into onSuccess/onError callbacks so a nested action's widen is caught (§Z87)", () => {
+  it("recurses into onSuccess/onError callbacks so a nested action's widen is caught", () => {
     // json-render EXECUTES onSuccess.action as a real secondary action; a walk that
     // stops at the top-level binding is blind to it. The recursion in bindingsOf makes
     // the widen-check bite on the nested `run` (clientOnly -> remoteOnly) exactly as on
-    // a top-level binding — defense-in-depth behind plan-13's prepareSpec strip.
+    // a top-level binding — defense-in-depth behind the prepareSpec strip.
     const spec = {
       root: 'b',
       elements: {

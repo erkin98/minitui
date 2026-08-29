@@ -3,7 +3,7 @@ import { videoMergeCatalog } from '../src/catalogs/video-merge.js';
 import { videoMergeCatalog as fromBarrel } from '../src/catalogs/index.js';
 
 describe('videoMergeCatalog', () => {
-  it('registers the Slice-1 components incl. the custom FilePicker/OrderList/Button', () => {
+  it('registers the components incl. the custom FilePicker/OrderList/Button', () => {
     for (const c of ['Box', 'FilePicker', 'OrderList', 'Select', 'Button', 'ProgressBar', 'Text']) {
       expect(videoMergeCatalog.componentNames).toContain(c);
     }

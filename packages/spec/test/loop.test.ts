@@ -16,10 +16,10 @@ const caps: CapabilityProvider = {
   statFile: async () => ({ exists: true, readable: true, isFile: true }),
 };
 
-// A REAL catalog handle with Box registered (ledger §B17: typed MinituiCatalog,
+// A REAL catalog handle with Box registered (typed MinituiCatalog,
 // no `as never`/hand-rolled shell). composeValidation CALLS runFullValidation
 // against it, so the handle must be a working catalog — the factory is the same
-// one every Slice-1 catalog is built with (plan 06 Task 7).
+// one every catalog is built with.
 const catalog = defineMinituiCatalog({
   id: 'test',
   components: {
@@ -64,7 +64,7 @@ describe('composeValidation', () => {
   it('rejects an off-catalog component through the catalog gate and reprompts', async () => {
     // Structurally valid, but "Iframe" is not registered in the catalog — only
     // runFullValidation can catch it. This is the wiring proof for the dead-catalog
-    // finding: if the loop never called the gate, this spec would pass.
+    // case: if the loop never called the gate, this spec would pass.
     const offCatalogJsonl =
       '{"op":"add","path":"/root","value":"f"}\n' +
       '{"op":"add","path":"/elements","value":{"f":{"type":"Iframe","props":{}}}}\n' +
@@ -83,7 +83,7 @@ describe('composeValidation', () => {
     expect(r.ok).toBe(true);
   });
 
-  it('rejects an agent-widened visibility through the visibility gate and reprompts (ledger §Z6)', async () => {
+  it('rejects an agent-widened visibility through the visibility gate and reprompts', async () => {
     // Box is catalog-declared with the default clientOnly class; the agent smuggles
     // a wider `visibility: 'remoteOnly'` onto the element — an excess field the wire
     // type does not model and strict-props never sees. Only checkVisibility catches it
@@ -121,7 +121,7 @@ describe('composeValidation', () => {
     }
   });
 
-  it('turns a model-stream compile throw into a reprompt, never escaping (PMID-10)', async () => {
+  it('turns a model-stream compile throw into a reprompt, never escaping', async () => {
     // A failing RFC-6902 `test` op throws inside json-render's applySpecStreamPatch;
     // the untrusted-boundary catch converts it to a repair attempt, not a crash.
     const throwingJsonl = '{"op":"test","path":"/root","value":"nope"}\n';
@@ -139,7 +139,7 @@ describe('composeValidation', () => {
     expect(r.ok).toBe(true);
   });
 
-  it('survives an empty stream by reprompting rather than throwing (PMID-10)', async () => {
+  it('survives an empty stream by reprompting rather than throwing', async () => {
     const r = await composeValidation({
       stream: once(''),
       catalog,
@@ -151,7 +151,7 @@ describe('composeValidation', () => {
 });
 
 describe('toWireSpec', () => {
-  it('toWireSpec is state-free at runtime — drops state and meta (§Z98)', () => {
+  it('toWireSpec is state-free at runtime — drops state and meta', () => {
     const mini: MiniAppSpec = {
       root: 'r',
       elements: {},

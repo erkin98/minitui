@@ -33,7 +33,7 @@ describe('RendererPort / RenderHandle', () => {
       },
     };
 
-    const spec: AppSpec = { root: 'r', elements: {} }; // complete state-free AppSpec (§B7/§G7) — no cast needed
+    const spec: AppSpec = { root: 'r', elements: {} }; // complete state-free AppSpec — no cast needed
     const handle = await port.mount({
       spec,
       binding: { catalogId: 'c', resolve: () => undefined },

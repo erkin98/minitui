@@ -3,7 +3,7 @@
 // engines floor, exact exports) → install into a throwaway strict consumer → tsc
 // (types:[] skipLibCheck:false) forces the WHOLE dist/index.d.ts AND its external
 // @minitui/types re-exports to resolve with no ambient fallback (declaration-closure +
-// §Z80 ambient check) → one ESM import proving the shipped module loads with ZERO runtime
+// ambient check) → one ESM import proving the shipped module loads with ZERO runtime
 // exports (the package's pure-interface invariant). Proves the SHIPPED tarball, not just
 // source. @minitui/types is renderer-core's sole runtime dependency, packed alongside and
 // pinned via a pnpm override (its 0.0.0 resolves nowhere else). Permanent (run by the root package

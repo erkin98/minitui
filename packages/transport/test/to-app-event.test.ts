@@ -210,7 +210,7 @@ describe('toAppEvent (single normalization chokepoint)', () => {
   });
 
   it('lets a non-retriable code override an explicit retriable true wire flag', () => {
-    // A Slice-2+ remote wire could set retriable:true on a ContextOverflow; the derived
+    // A future remote wire could set retriable:true on a ContextOverflow; the derived
     // non-retriable floor MUST win so a context-overflow error can never re-feed.
     const ev = toAppEvent({
       type: EventType.RUN_ERROR,

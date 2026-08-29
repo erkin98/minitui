@@ -45,9 +45,9 @@ export function createAgUiAgentPort(
         }
         // Bound the buffer so a fast producer and slow consumer cannot grow AppEvent[]
         // unboundedly. Drop OLDEST past the ceiling and surface it through diagnostics; on the remote
-        // path a dropped STATE_DELTA forces full resync — no seq-guard runs on this pump in Slice 1
-        // (only local-agent has one); Slice-2 must add seq metadata + a seq-guard here before this
-        // path ships, so the drop stops being silent.
+        // path a dropped STATE_DELTA forces full resync — no seq-guard runs on this pump today
+        // (only local-agent has one); the remote path must add seq metadata + a seq-guard here
+        // before it ships, so the drop stops being silent.
         if (queue.length >= maxQueue) {
           queue.shift();
           try {

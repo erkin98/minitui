@@ -9,8 +9,8 @@ import { EventType, type BaseEvent } from '@ag-ui/core';
  * required { messageId, activityType, content } shape at all, so that event gets reshaped
  * rather than merely stamped.
  *
- * Reserved for a genuinely-remote BFF (Slice 2+) that runs the same agent-core loop behind an
- * HTTP+SSE endpoint and must speak real AG-UI wire protocol; the Slice-1 in-process path
+ * Reserved for a genuinely-remote BFF that runs the same agent-core loop behind an
+ * HTTP+SSE endpoint and must speak real AG-UI wire protocol; the in-process path
  * (local-agent.ts) never crosses this boundary — it feeds MinituiEvent straight through
  * toAppEvent.
  */

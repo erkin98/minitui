@@ -14,8 +14,8 @@ describe('WidgetCatalogBinding', () => {
     const binding: WidgetCatalogBinding<string> = {
       catalogId: 'video-merge',
       resolve(componentId) {
-        // capturesText (ledger §Z26): a FREE-TEXT-capturing widget (a path field that consumes typed
-        // characters) is `true`; a display/select widget is `false`. Plan 13's app-shell reads this
+        // capturesText: a FREE-TEXT-capturing widget (a path field that consumes typed
+        // characters) is `true`; a display/select widget is `false`. The app-shell reads this
         // bit to keep `q` as literal input while a free-text widget is focused, and quit otherwise.
         if (componentId === 'FilePicker')
           return { factory: 'file-picker-widget', trustTier: 'interactive', capturesText: true };

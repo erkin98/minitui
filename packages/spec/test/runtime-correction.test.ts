@@ -18,7 +18,7 @@ describe('toRuntimeRepair', () => {
     expect(repair.reprompt).toContain('merge');
   });
 
-  it('appends the injected catalog-domain wording when provided (ledger §Z3 chain)', () => {
+  it('appends the injected catalog-domain wording when provided', () => {
     const repair = toRuntimeRepair(
       { exitCode: 1, stderrExcerpt: "Unknown encoder 'libvpx-vp99'", actionKey: 'merge' },
       'Adjust the action parameters, codecs, filters, or file paths so the action can succeed.',
@@ -35,11 +35,11 @@ describe('toRuntimeRepair', () => {
     expect(repair.reprompt).toBe('');
   });
 
-  it('accepts the canonical @minitui/types RuntimeFault at the seam (ledger §B1/§Z3)', () => {
-    // Every real caller — agent-core routeRuntimeFault, the cli buildRepair adapter
-    // (plan 15), the integration suite (plan 17) — holds a RuntimeFault and passes it
-    // straight in. RuntimeError aliases RuntimeFault (§B1 — ONE shape, owned by
-    // @minitui/types), so this is an exact match, not a structural coincidence.
+  it('accepts the canonical @minitui/types RuntimeFault at the seam', () => {
+    // Every real caller — agent-core routeRuntimeFault, the cli buildRepair adapter,
+    // the integration suite — holds a RuntimeFault and passes it
+    // straight in. RuntimeError aliases RuntimeFault — ONE shape, owned by
+    // @minitui/types, so this is an exact match, not a structural coincidence.
     const fault: RuntimeFault = { actionKey: 'merge', exitCode: 2, stderrExcerpt: 'boom' };
     expect(toRuntimeRepair(fault).fixable).toBe(true);
   });
