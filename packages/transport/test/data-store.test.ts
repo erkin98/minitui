@@ -10,6 +10,14 @@ describe('DataStore (canonical immutable state seam)', () => {
     expect(store.getIn('/merge/progress')).toBe(0);
   });
 
+  it('strips model ANSI from the initial seed, symmetric with applySnapshot/applyDelta/setLocal', () => {
+    const store = createDataStore({
+      initial: { title: `a${ESC}[0mb`, node: { label: `x${ESC}[1my` } },
+    });
+    // initial is an ingress like the others; a raw CSI in a seeded value must not survive.
+    expect(store.getState()).toEqual({ title: 'ab', node: { label: 'xy' } });
+  });
+
   it('applySnapshot strips model ANSI and replaces state', () => {
     const store = createDataStore();
     store.applySnapshot({ title: `a${ESC}[0mb` });

@@ -7,22 +7,33 @@ import type { SemanticIssue } from './semantic-types.js';
 const CAPABILITY_PROPS = ['encoder', 'codec', 'filter'] as const;
 type CapProp = (typeof CAPABILITY_PROPS)[number];
 
-/** Resolve a capability value: a literal string, or a `$state`/`$bindState` binding read from state. */
-function resolveCapabilityValue(raw: unknown, state: Record<string, unknown>): string | undefined {
-  if (typeof raw === 'string') return raw;
-  if (typeof raw === 'object' && raw !== null) {
-    // A capability value can arrive one-way ($state) or two-way ($bindState) —
-    // the canonical catalog uses both, so resolve either binding form.
-    if ('$state' in raw) {
-      const v = getByPath(state, (raw as { $state: string }).$state);
-      return typeof v === 'string' ? v : undefined;
-    }
-    if ('$bindState' in raw) {
-      const v = getByPath(state, (raw as { $bindState: string }).$bindState);
-      return typeof v === 'string' ? v : undefined;
-    }
+/**
+ * Every STATICALLY-KNOWABLE candidate string a capability value can resolve to: a literal,
+ * a one-way `$state` or two-way `$bindState` read, and BOTH branches of a complete `$cond`
+ * (the renderer picks one at dispatch, so validation must check both). Dynamic forms
+ * (`$template`/`$item`/`$bindItem`) resolve to a runtime value the gate cannot know at
+ * generation time and are honestly skipped, not rejected — matching the renderer's own
+ * marker guards (a mistyped marker resolves to nothing checkable here).
+ */
+function resolveCapabilityValues(raw: unknown, state: Record<string, unknown>): readonly string[] {
+  if (typeof raw === 'string') return [raw];
+  if (typeof raw !== 'object' || raw === null) return [];
+  const record = raw as Record<string, unknown>;
+  if (typeof record.$state === 'string') {
+    const v = getByPath(state, record.$state);
+    return typeof v === 'string' ? [v] : [];
   }
-  return undefined;
+  if (typeof record.$bindState === 'string') {
+    const v = getByPath(state, record.$bindState);
+    return typeof v === 'string' ? [v] : [];
+  }
+  if ('$cond' in record && '$then' in record && '$else' in record) {
+    return [
+      ...resolveCapabilityValues(record.$then, state),
+      ...resolveCapabilityValues(record.$else, state),
+    ];
+  }
+  return [];
 }
 
 /**
@@ -39,15 +50,18 @@ function* capabilityValues(
 ): Iterable<{ readonly prop: CapProp; readonly value: string }> {
   const props = element.props as Record<string, unknown> | undefined;
   for (const prop of CAPABILITY_PROPS) {
-    const value = resolveCapabilityValue(props?.[prop], state);
-    if (value !== undefined) yield { prop, value };
+    for (const value of resolveCapabilityValues(props?.[prop], state)) yield { prop, value };
   }
   for (const binding of bindingsOf(element)) {
     const params = (binding as { params?: unknown }).params;
     if (typeof params !== 'object' || params === null) continue;
     for (const prop of CAPABILITY_PROPS) {
-      const value = resolveCapabilityValue((params as Record<string, unknown>)[prop], state);
-      if (value !== undefined) yield { prop, value };
+      for (const value of resolveCapabilityValues(
+        (params as Record<string, unknown>)[prop],
+        state,
+      )) {
+        yield { prop, value };
+      }
     }
   }
 }

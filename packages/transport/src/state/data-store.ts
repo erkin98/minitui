@@ -97,7 +97,15 @@ export function createDataStore(opts?: {
   };
 
   if (opts?.initial !== undefined) {
-    state = canonicalize(opts.initial, 'dropped invalid initial state') ?? state;
+    const canonical = canonicalize(opts.initial, 'dropped invalid initial state');
+    // Fold the seed's string leaves through the same walker the delta/snapshot/setLocal
+    // paths use, so `initial` is stripped of model ANSI/OSC on the same footing as every
+    // other ingress. Re-canonicalize the stripped value (as commit does after foldSnapshot)
+    // so the seed is deeply frozen like a committed snapshot — sanitizeStrings rebuilds a
+    // fresh, unfrozen tree, and initial bypasses commit's freeze.
+    if (canonical !== undefined) {
+      state = canonicalize(sanitizeStrings(canonical), 'dropped invalid initial state') ?? state;
+    }
   }
 
   return {

@@ -11,10 +11,15 @@ export type { ActionKind, PermissionDescriptor } from '@minitui/types';
 // local resolvePointer).
 export function resolvePointer(doc: JsonValue, pointer: string): JsonValue | undefined {
   if (pointer === '') return doc;
-  const tokens = pointer
-    .split('/')
-    .slice(1)
-    .map((t) => t.replace(/~1/g, '/').replace(/~0/g, '~'));
+  // Drop the leading empty segment ONLY for a canonical /-rooted pointer; a slashless
+  // pointer is a single relative segment, matching the runtime parseJsonPointer/getByPath
+  // (`'missing'` → `['missing']`, read against the document root). Unconditional slice(1)
+  // would turn a slashless pointer into `[]` = the whole document (always defined), hiding
+  // a wires-to-nothing binding from the bad-binding check.
+  const segments = pointer.split('/');
+  const tokens = (segments[0] === '' ? segments.slice(1) : segments).map((t) =>
+    t.replace(/~1/g, '/').replace(/~0/g, '~'),
+  );
   let cur: JsonValue | undefined = doc;
   for (const tok of tokens) {
     if (cur === null || cur === undefined) return undefined;

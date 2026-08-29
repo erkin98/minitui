@@ -350,6 +350,76 @@ describe('a mistyped terminal marker must not hide a nested operator', () => {
   });
 });
 
+describe('a MALFORMED marker must not hide a $computed in a non-$ sibling', () => {
+  // The pinned renderer resolves a record as a direct-read marker ONLY when the
+  // marker's payload passes its type guard (string $state/$bindState/$item/$bindItem/
+  // $template, $index===true, complete $cond). A MISTYPED/INCOMPLETE marker fails the
+  // guard, so the renderer falls through to generic object recursion and resolves every
+  // value — including a $computed nested in a plain sibling key. The gate must walk the
+  // whole record in exactly those cases; a scalar-marker short-circuit that skipped
+  // siblings was bypassable.
+  const st = { p: 1, x: 'v', inputs: ['/abs/a.mp4'] };
+  const propSpec = (label: unknown): AppSpec =>
+    JSON.parse(
+      JSON.stringify({ root: 'b', elements: { b: { type: 'Button', props: { label } } } }),
+    );
+  const paramSpec = (value: unknown): AppSpec =>
+    JSON.parse(
+      JSON.stringify({
+        root: 'b',
+        elements: {
+          b: {
+            type: 'Button',
+            props: { label: 'Go' },
+            on: { press: { action: 'merge', params: { value } } },
+          },
+        },
+      }),
+    );
+
+  it('rejects a $computed sibling of a mistyped scalar $state (prop surface)', () => {
+    expect(
+      codes(checkSemantics(propSpec({ $state: 1, evil: { $computed: 'fn' } }), cat, st)),
+    ).toContain('off-grammar-operator');
+  });
+
+  it('rejects a $computed sibling of an INCOMPLETE $cond missing $else (prop surface)', () => {
+    expect(
+      codes(
+        checkSemantics(
+          propSpec({ $cond: { $state: '/p' }, $then: 'a', evil: { $computed: 'fn' } }),
+          cat,
+          st,
+        ),
+      ),
+    ).toContain('off-grammar-operator');
+  });
+
+  it('rejects a $computed sibling of a mistyped $index (prop surface)', () => {
+    expect(
+      codes(checkSemantics(propSpec({ $index: 'x', evil: { $computed: 'fn' } }), cat, st)),
+    ).toContain('off-grammar-operator');
+  });
+
+  it('rejects a $computed sibling of a mistyped scalar $state (LIVE action-param surface)', () => {
+    expect(
+      codes(checkSemantics(paramSpec({ $state: 1, evil: { $computed: 'fn' } }), cat, st)),
+    ).toContain('off-grammar-operator');
+  });
+
+  it('control: a WELL-FORMED { $state: "/p" } with a benign sibling still passes (sibling genuinely dead)', () => {
+    expect(codes(checkSemantics(propSpec({ $state: '/p', dead: 'x' }), cat, st))).not.toContain(
+      'off-grammar-operator',
+    );
+  });
+
+  it('control: a COMPLETE { $cond, $then, $else } still passes (no over-rejection)', () => {
+    expect(
+      codes(checkSemantics(propSpec({ $cond: { $state: '/p' }, $then: 'a', $else: 'b' }), cat, st)),
+    ).not.toContain('off-grammar-operator');
+  });
+});
+
 describe('missing required prop', () => {
   it('flags a genuinely-required (non-nullable, no-default) prop the spec omits', () => {
     // Button.label is a required non-nullable string; omitting it is incomplete
