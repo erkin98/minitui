@@ -255,7 +255,7 @@ describe('doubled-ESC control strings and the ESC intermediate/final grammar', (
     // unterminated OSC, which trips MAX_CARRY (8192), drops the carry, and lets
     // the sequence's continuation surface as visible text in the next chunk.
     // It fails SAFE — the leaked bytes are inert text and a caret-encoded BEL,
-    // never a live control byte — but it breaks the §Z107/§Z128 promise that
+    // never a live control byte — but it breaks the promise that
     // one-shot and every below-cap chunking are byte-identical.
     //
     // The one-plain-byte-between row is the control: it breaks the adjacency

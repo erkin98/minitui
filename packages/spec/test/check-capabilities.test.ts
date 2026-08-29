@@ -50,7 +50,7 @@ describe('checkCapabilities', () => {
   it("scans a codec carried in an action binding's params, not only element props", async () => {
     // The canonical MERGE_SPEC carries the codec under the merge Button's
     // on.press.params.codec (a $state binding), never an element `codec` prop —
-    // scanning props alone would greenlight an unsupported codec (plan-17 gate RED).
+    // scanning props alone would greenlight an unsupported codec.
     const paramSpec: Spec = {
       root: 'f',
       elements: {

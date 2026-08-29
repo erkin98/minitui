@@ -29,9 +29,9 @@ function done(): IteratorReturnResult<undefined> {
  * events (AgentEventSchema — RUN_STARTED/RUN_FINISHED already carry their own
  * threadId+runId, TOOL_CALL_START already carries toolCallName) STRAIGHT into the SAME
  * toAppEvent normalization + seq-guard the HttpAgent path uses — never raw to the AppEvent
- * stream, no HTTP/SSE. Slice 1 does not cross the AG-UI adapter boundary: the
+ * stream, no HTTP/SSE. The in-process path does not cross the AG-UI adapter boundary: the
  * explicit minitui→AG-UI adapter (`toAgUiEvent`, ./to-ag-ui.ts) is reserved for a genuinely-
- * remote BFF producing real AG-UI wire events and is never invoked here. Slice-1 default;
+ * remote BFF producing real AG-UI wire events and is never invoked here. The in-process default;
  * wired in cli/main.tsx so transport never imports agent-core.
  */
 export function createLocalAgentPort(
@@ -47,8 +47,8 @@ export function createLocalAgentPort(
 
       const normalizeEvent = (event: AgentEvent): AppEvent => {
         const app = toAppEvent(event);
-        // Slice 1 enforces the missed-baseline invariant. Strict wire sequencing activates once
-        // STATE_DELTA carries a sequence number in the later resync slice.
+        // This path enforces the missed-baseline invariant; strict wire sequencing activates once
+        // STATE_DELTA carries a sequence number in a later resync stage.
         if (app.kind === 'state-snapshot') seq.onSnapshot();
         else if (app.kind === 'state-delta') {
           const verdict = seq.checkDelta();

@@ -9,7 +9,7 @@ import { formatUnknown } from '../format-unknown.js';
 import type { AppEvent } from './app-event.js';
 
 // Two different origins, neither of them the AG-UI protocol. `'non-retriable'` is
-// minitui's own cross-plan vocabulary (ledger §Z79): the agent side emits it and
+// minitui's own internal vocabulary: the agent side emits it and
 // this consumer must never re-feed it. The other three are upstream-agent codes
 // accepted defensively; two trace to the opencode project (github.com/sst/opencode —
 // packages/opencode/src/provider/error.ts:111,113 maps `context_length_exceeded`
