@@ -9,7 +9,7 @@ import { createAsyncEventQueue, type AsyncEventQueue } from '../events/event-str
 import { createConversation } from './conversation.js';
 import { runTurns, runProviderStream, type ToolSchema, type RunTurnsDeps } from './stream-turns.js';
 import { withTimeout } from '../guards/timeout.js';
-import { runStarted } from '../events/event-factory.js';
+import { runStarted, runError } from '../events/event-factory.js';
 import { DEFAULT_STEP_CEILING } from '../guards/loop-guard.js';
 
 export interface AgentConfig {
@@ -31,7 +31,21 @@ export interface AgentConfig {
   readonly redactionPolicy?: RedactionPolicy | undefined;
 }
 
-/** The agent loop facade. submit() is what the composition root hands createLocalAgentPort(session.submit). */
+/** A whole-turn deadline (AbortSignal.timeout) aborts with a TimeoutError; a user cancel with an AbortError. */
+function isTimeoutAbort(signal: AbortSignal): boolean {
+  return signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError';
+}
+
+const isTerminalEvent = (ev: MinituiEvent): boolean =>
+  ev.type === 'RUN_FINISHED' || ev.type === 'RUN_ERROR';
+
+/**
+ * The agent loop facade. The composition root wraps submit() into a local AgentPort with a thin adapter
+ * — `createLocalAgentPort((input, signal) => submit(intentFrom(input), { signal }))` — since the port's
+ * genFactory takes `(RunAgentInput, AbortSignal)` while submit takes `(intent, opts)`. The yielded event
+ * type already matches exactly (MinituiEvent = the transport AgentPort's AgentEvent), so only the call
+ * shape is adapted, never the event.
+ */
 export class AgentSession {
   readonly threadId: string;
   #controller: AbortController | undefined;
@@ -123,9 +137,18 @@ export class AgentSession {
       // hypothetical runner rejection from escaping as an unhandledRejection.
       void runner.finally(() => queue.close()).catch(() => {});
 
+      let sawTerminal = false;
       for await (const ev of queue) {
         if (signal.aborted) break;
+        if (isTerminalEvent(ev)) sawTerminal = true;
         yield ev;
+      }
+      // The whole-turn deadline aborts the SAME signal the loop breaks on, so a timed-out turn would
+      // otherwise leave RUN_STARTED unbracketed (the stream returns silently on abort). A user cancel
+      // (AbortError) ends silently by design — the consumer initiated it; a deadline (TimeoutError from
+      // AbortSignal.timeout) surfaces a non-retriable RUN_ERROR so the consumer learns the turn ended.
+      if (!sawTerminal && isTimeoutAbort(signal)) {
+        yield runError('turn exceeded its time budget', 'non-retriable');
       }
     } finally {
       // Abort on ANY exit so abandoning the generator (consumer break/throw/.return()) tears down the

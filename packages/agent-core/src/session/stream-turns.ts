@@ -304,7 +304,14 @@ export async function runTurns(args: {
             // An explicit in-stream error is already classified + terminal — surface it, never re-run
             // (a drop is a stall/truncation with no error object; that is what the re-run tier retries).
             const { message, retriable } = toRunError(part.error);
-            await queue.push(runError(message, retriable ? undefined : 'non-retriable'));
+            // A provider error string is consumer-facing (never re-fed to the model) but can echo a
+            // secret/path from the request — redact it like every other externally-sourced string.
+            await queue.push(
+              runError(
+                redact(message, deps.redactionPolicy),
+                retriable ? undefined : 'non-retriable',
+              ),
+            );
             return;
           }
           default:
@@ -441,7 +448,12 @@ export async function runProviderStream(args: {
           await queue.push(runFinished(threadId, runId, chunk.usage));
           return;
         case 'error':
-          await queue.push(runError(chunk.message, chunk.retriable ? undefined : 'non-retriable'));
+          await queue.push(
+            runError(
+              redact(chunk.message, redactionPolicy),
+              chunk.retriable ? undefined : 'non-retriable',
+            ),
+          );
           return;
         default:
           // ProviderChunk is a closed union (all variants handled above) — a future unmodeled variant

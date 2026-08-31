@@ -117,6 +117,37 @@ describe('AgentSession', () => {
     expect(seen).not.toContain('RUN_FINISHED');
   });
 
+  it('brackets a timed-out turn with RUN_ERROR — a deadline abort is not a silent end', async () => {
+    // The whole-turn deadline (turnTimeoutMs) aborts the same signal the stream loop checks. Without the
+    // TimeoutError bracket in submit(), the turn would return silently — RUN_STARTED with no terminal
+    // event, so a consumer waiting for RUN_FINISHED/RUN_ERROR hangs forever.
+    const session = new AgentSession({
+      provider,
+      toolDispatch,
+      specSink,
+      visibility,
+      tools,
+      model: 'test-model',
+      config: {
+        turnTimeoutMs: 5,
+        idleTimeoutMs: 5000, // high, so the whole-turn deadline (not the idle guard) is what fires
+        streamTextImpl: (() => ({
+          fullStream: (async function* () {
+            // The finish part never arrives before the 5ms whole-turn deadline.
+            await new Promise((r) => setTimeout(r, 40));
+            yield { type: 'finish', finishReason: 'stop' };
+          })(),
+        })) as unknown as typeof import('ai').streamText,
+      },
+    });
+    const seen: MinituiEvent[] = [];
+    for await (const e of session.submit('slow one')) seen.push(e);
+    expect(seen[0]?.type).toBe('RUN_STARTED');
+    const last = seen.at(-1);
+    expect(last?.type).toBe('RUN_ERROR');
+    if (last?.type === 'RUN_ERROR') expect(last.code).toBe('non-retriable');
+  });
+
   it('cancel aborts the SAME signal threaded into an in-flight ToolDispatchPort.dispatch (abort unwinding)', async () => {
     // Prove the provider stream AND tool dispatch share one controller.
     let dispatchSignal: AbortSignal | undefined;
