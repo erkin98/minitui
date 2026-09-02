@@ -53,6 +53,34 @@ const AI_SDK_IMPORT_PATTERNS = [
     message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/* modules.',
   },
 ];
+// The renderer swap-boundary wall (only @minitui/renderer-ink + @minitui/cli may import React/Ink and the
+// Ink renderer — the single place the declarative spec becomes a real terminal UI; a PR-7 deliverable).
+// @json-render/CORE is deliberately ABSENT (spec/catalog/renderer-core adopt it); only @json-render/INK
+// (the React binding) is walled. Banned everywhere the wide block applies; rendererInkImportRule
+// re-permits it for renderer-ink (and cli). Same-rule placement + the clobber note above apply.
+const REACT_INK_IMPORT_PATHS = [
+  { name: 'react', message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.' },
+  {
+    name: 'react-dom',
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
+  },
+  { name: 'ink', message: 'Swap boundary: only @minitui/renderer-ink + cli may import Ink.' },
+  {
+    name: '@json-render/ink',
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import @json-render/ink.',
+  },
+];
+const REACT_INK_IMPORT_PATTERNS = [
+  {
+    group: ['react/*'],
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
+  },
+  { group: ['ink/*'], message: 'Swap boundary: only @minitui/renderer-ink + cli may import Ink.' },
+  // NOTE: the wall bans the REACT root `@json-render/ink` (in PATHS above) but NOT its `/server`
+  // subpath — `@json-render/ink/server` is the deliberately React-FREE entry `@minitui/catalog` adopts
+  // for its schema-bridge (a load-bearing non-renderer import). A `@json-render/ink/*` pattern here
+  // would wrongly wall that off; the exact-root ban is what the swap boundary needs.
+];
 
 // Shared by both exec-moat capability blocks below (the widened glob over real code and
 // the narrow list over the boundary-fixture files that exercise this wall) so the two
@@ -62,8 +90,12 @@ const execMoatCapabilityRules = {
   'no-restricted-imports': [
     'error',
     {
-      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS],
-      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...AI_SDK_IMPORT_PATTERNS],
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
+      patterns: [
+        ...EXEC_MOAT_IMPORT_PATTERNS,
+        ...AI_SDK_IMPORT_PATTERNS,
+        ...REACT_INK_IMPORT_PATTERNS,
+      ],
     },
   ],
   'minitui/no-restricted-capability-load': 'error',
@@ -73,13 +105,30 @@ const execMoatCapabilityRules = {
 };
 
 // @minitui/agent-core is the ONE package permitted the model SDK. Re-set no-restricted-imports (in a
-// block placed AFTER the wide exec-moat block, so it wins for agent-core) to the exec-moat paths ONLY —
-// dropping the SDK-wall ban while keeping child_process / MCP / sandbox banned (the agent reaches
+// block placed AFTER the wide exec-moat block, so it wins for agent-core) to DROP the SDK-wall ban only —
+// keeping child_process / MCP / sandbox AND React/Ink banned (agent-core is not a renderer and reaches
 // execution only through the injected ToolDispatchPort, never a subprocess directly).
 const agentCoreImportRule = {
   'no-restricted-imports': [
     'error',
-    { paths: EXEC_MOAT_IMPORT_PATHS, patterns: EXEC_MOAT_IMPORT_PATTERNS },
+    {
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
+      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+    },
+  ],
+};
+
+// @minitui/renderer-ink + @minitui/cli are the ONLY packages permitted React/Ink (the swap boundary).
+// Re-set no-restricted-imports (AFTER the wide block, so it wins for them) to DROP the React/Ink ban only —
+// keeping child_process / MCP / sandbox AND the model SDK banned (a renderer is not the exec moat and not
+// the agent loop).
+const rendererInkImportRule = {
+  'no-restricted-imports': [
+    'error',
+    {
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS],
+      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...AI_SDK_IMPORT_PATTERNS],
+    },
   ],
 };
 
@@ -245,6 +294,7 @@ export default tseslint.config(
       'test/eslint-boundary-fixture/illegal-implied-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-test-file-capability.test.ts',
       'test/eslint-boundary-fixture/illegal-ai-sdk-import.ts',
+      'test/eslint-boundary-fixture/illegal-react-import.ts',
     ],
     rules: execMoatCapabilityRules,
   },
@@ -255,6 +305,13 @@ export default tseslint.config(
     // merge, so only no-restricted-imports is overridden.
     files: ['packages/agent-core/**/*.{ts,tsx,mts}'],
     rules: agentCoreImportRule,
+  },
+  {
+    // @minitui/renderer-ink + @minitui/cli are the ONLY packages permitted React/Ink (the swap
+    // boundary) — re-permit react/ink/@json-render/ink here (AFTER the wide block, so it wins) while
+    // keeping the exec-moat + SDK-wall bans.
+    files: ['packages/renderer-ink/**/*.{ts,tsx,mts}', 'packages/cli/**/*.{ts,tsx,mts}'],
+    rules: rendererInkImportRule,
   },
   {
     files: [
