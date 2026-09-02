@@ -19,6 +19,10 @@ export type ProviderChunk =
       readonly toolName: string;
       readonly output: unknown;
       readonly isError: boolean;
+      // Dedicated failure text for an isError result. Without it a provider can only bury the
+      // message in `output`, where a non-string value is JSON-stringified downstream (an Error
+      // collapses to '{}'). Optional: success results and providers that predate it omit it.
+      readonly error?: string;
     }
   | {
       readonly type: 'approval-request';

@@ -414,7 +414,8 @@ export async function runProviderStream(args: {
         case 'tool-result':
           // A pre-composed tool-result is remote-composed (the provider ran the tool), so it should carry
           // no locally-dispatched content — but redact it anyway, symmetric with the tool-call arm above,
-          // so the redaction invariant holds by construction rather than by assumption.
+          // so the redaction invariant holds by construction rather than by assumption. A failed chunk's
+          // failure text rides the dedicated `error` slot (not lost inside a JSON-stringified output).
           await queue.push(
             agentObservation({
               toolCallId: chunk.toolCallId,
@@ -426,6 +427,7 @@ export async function runProviderStream(args: {
                 redactionPolicy,
               ),
               isError: chunk.isError,
+              ...(chunk.error !== undefined ? { error: redact(chunk.error, redactionPolicy) } : {}),
             }),
           );
           break;
