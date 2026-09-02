@@ -13,43 +13,74 @@ const noDynamicFunctionGlobal = [
   },
 ];
 
+// The exec-moat import ban (only @minitui/exec may reach the subprocess / OS-sandbox / MCP capabilities).
+const EXEC_MOAT_IMPORT_PATHS = [
+  { name: 'child_process', message: 'Exec-moat: only @minitui/exec may import child_process.' },
+  {
+    name: 'node:child_process',
+    message: 'Exec-moat: only @minitui/exec may import child_process.',
+  },
+  {
+    name: '@anthropic-ai/sandbox-runtime',
+    message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
+  },
+  {
+    name: '@modelcontextprotocol/client',
+    message: 'Exec-moat: only @minitui/exec may import the MCP client.',
+  },
+];
+const EXEC_MOAT_IMPORT_PATTERNS = [
+  {
+    group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
+    message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
+  },
+];
+// The SDK wall (only @minitui/agent-core may import the model SDK — the parallel of the exec-moat, and a
+// PR-6 deliverable). Banned everywhere the wide block below applies; agent-core is re-permitted by
+// agentCoreImportRule (which drops these paths, keeping the exec-moat ones). Kept in the SAME
+// no-restricted-imports rule as the exec-moat paths because ESLint flat config replaces (not merges) a
+// repeated rule across overlapping file globs — two separate blocks would clobber each other's paths.
+const AI_SDK_IMPORT_PATHS = [
+  { name: 'ai', message: 'SDK wall: only @minitui/agent-core may import the model SDK (ai).' },
+  {
+    name: '@ai-sdk/anthropic',
+    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/*.',
+  },
+];
+const AI_SDK_IMPORT_PATTERNS = [
+  {
+    group: ['@ai-sdk/*'],
+    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/* modules.',
+  },
+];
+
 // Shared by both exec-moat capability blocks below (the widened glob over real code and
 // the narrow list over the boundary-fixture files that exercise this wall) so the two
-// stay identical by construction instead of by manual upkeep.
+// stay identical by construction instead of by manual upkeep. The import ban carries BOTH the
+// exec-moat paths and the SDK-wall paths (see AI_SDK_IMPORT_PATHS above).
 const execMoatCapabilityRules = {
   'no-restricted-imports': [
     'error',
     {
-      paths: [
-        {
-          name: 'child_process',
-          message: 'Exec-moat: only @minitui/exec may import child_process.',
-        },
-        {
-          name: 'node:child_process',
-          message: 'Exec-moat: only @minitui/exec may import child_process.',
-        },
-        {
-          name: '@anthropic-ai/sandbox-runtime',
-          message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
-        },
-        {
-          name: '@modelcontextprotocol/client',
-          message: 'Exec-moat: only @minitui/exec may import the MCP client.',
-        },
-      ],
-      patterns: [
-        {
-          group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
-          message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
-        },
-      ],
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS],
+      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...AI_SDK_IMPORT_PATTERNS],
     },
   ],
   'minitui/no-restricted-capability-load': 'error',
   'no-eval': 'error',
   'no-implied-eval': 'error',
   'no-restricted-globals': noDynamicFunctionGlobal,
+};
+
+// @minitui/agent-core is the ONE package permitted the model SDK. Re-set no-restricted-imports (in a
+// block placed AFTER the wide exec-moat block, so it wins for agent-core) to the exec-moat paths ONLY —
+// dropping the SDK-wall ban while keeping child_process / MCP / sandbox banned (the agent reaches
+// execution only through the injected ToolDispatchPort, never a subprocess directly).
+const agentCoreImportRule = {
+  'no-restricted-imports': [
+    'error',
+    { paths: EXEC_MOAT_IMPORT_PATHS, patterns: EXEC_MOAT_IMPORT_PATTERNS },
+  ],
 };
 
 // Local-only ignores (untracked working-copy trees). This checkout can double as a
@@ -213,8 +244,17 @@ export default tseslint.config(
       'test/eslint-boundary-fixture/illegal-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-implied-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-test-file-capability.test.ts',
+      'test/eslint-boundary-fixture/illegal-ai-sdk-import.ts',
     ],
     rules: execMoatCapabilityRules,
+  },
+  {
+    // @minitui/agent-core is the ONE package permitted the model SDK — re-permit `ai`/`@ai-sdk/*` here
+    // (this block is AFTER the wide exec-moat block, so it wins) while keeping the exec-moat bans. The
+    // other execMoatCapabilityRules keys (capability-load / eval / globals) are separate rule ids that
+    // merge, so only no-restricted-imports is overridden.
+    files: ['packages/agent-core/**/*.{ts,tsx,mts}'],
+    rules: agentCoreImportRule,
   },
   {
     files: [
