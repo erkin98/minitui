@@ -665,6 +665,60 @@ describe('stream-turns', () => {
     });
   });
 
+  it('threads a scripted error tool-result chunk into the observation error slot — redacted, not lost', async () => {
+    // A non-SDK provider reporting its OWN failed tool run carries the failure text in the chunk's
+    // dedicated `error` field. The observation must surface it in its `error` slot, redacted like every
+    // provider-sourced string — stringifying only `output` would collapse a non-string failure (an Error
+    // serializes to '{}') and lose the message entirely.
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const scripted: ModelProvider = {
+      id: 'scripted',
+      async *streamChat() {
+        yield {
+          type: 'tool-result',
+          toolCallId: 't9',
+          toolName: 'ffmpeg',
+          output: { exitCode: 1 },
+          isError: true,
+          error: 'encode failed: bad key sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaa',
+        };
+        // A success tool-result without a chunk error must NOT grow an error key on its observation.
+        yield {
+          type: 'tool-result',
+          toolCallId: 't10',
+          toolName: 'ffprobe',
+          output: 'ok',
+          isError: false,
+        };
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const done = runProviderStream({
+      provider: scripted,
+      conversation: createConversation([{ role: 'user', content: 'merge' }]),
+      threadId: 'tid',
+      runId: 'run-1',
+      model: 'test-model',
+      toolDispatch: dispatch,
+      queue,
+      signal: new AbortController().signal,
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    const results = out.filter((e) => e.type === 'TOOL_CALL_RESULT');
+    expect(results[0]).toEqual({
+      type: 'TOOL_CALL_RESULT',
+      toolCallId: 't9',
+      toolName: 'ffmpeg',
+      content: '{"exitCode":1}',
+      isError: true,
+      error: 'encode failed: bad key [redacted-secret]',
+    });
+    expect(results[1]).toBeDefined();
+    expect(results[1] && 'error' in results[1]).toBe(false);
+  });
+
   it('repairs a wrong-CASE tool name in place — tier 1, and never lets the model call `invalid`', async () => {
     // Capture the repair fn + activeTools runTurns passes to streamText, then drive the repair directly.
     let repair:
