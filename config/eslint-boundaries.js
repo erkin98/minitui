@@ -51,6 +51,10 @@ function pkgZone(pkg, ...allowed) {
   };
 }
 
+// The live spec zone, held in a const so the witness zone at the bottom of the table can
+// re-target the SAME from/except object at its planted fixture — the two can never diverge.
+const SPEC_ZONE = pkgZone('spec', 'types', 'catalog');
+
 /** @type {BoundaryZone[]} */
 export const BOUNDARY_ZONES = [
   // EXERCISED from the start: a leaf may not reach an internal sibling. Both paths on disk, so
@@ -84,7 +88,7 @@ export const BOUNDARY_ZONES = [
   pkgZone('transport', 'types', 'sanitizer'),
   pkgZone('sanitizer'),
   pkgZone('renderer-core', 'types'),
-  pkgZone('spec', 'types', 'catalog'),
+  SPEC_ZONE,
   pkgZone('catalog', 'types', 'renderer-core', 'sanitizer'),
   pkgZone('agent-core', 'types', 'transport', 'spec', 'sanitizer'),
   pkgZone('exec', 'types', 'renderer-core', 'sanitizer'),
@@ -92,6 +96,21 @@ export const BOUNDARY_ZONES = [
   pkgZone('renderer-ink', 'types', 'renderer-core', 'catalog', 'sanitizer'),
   pkgZone('library', 'types', 'spec'),
   pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink'),
+  // Witness for the pkgZone encoding itself. The two fixture zones at the top are bare
+  // file-target zones with no `except`, so they prove nothing about the from:'./packages'
+  // + except shape every real package zone uses — a plugin upgrade whose except handling
+  // drifted toward over-permitting would silently disarm all twelve package zones while
+  // both existing witnesses stayed red. This zone re-targets the LIVE spec zone's
+  // from/except at a planted fixture importing @minitui/sanitizer (outside the allowed
+  // set); the fixture registry expects exactly one no-restricted-paths error there, so an
+  // except drift — or a pkgZone construction bug — surfaces as a missing expected error,
+  // never as silence.
+  {
+    ...SPEC_ZONE,
+    target: './test/eslint-boundary-fixture/illegal-package-zone-import.ts',
+    message:
+      'package-zone witness: this fixture carries the spec allowed-set and may not import @minitui/sanitizer.',
+  },
 ];
 
 /**
