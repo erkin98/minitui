@@ -140,8 +140,9 @@ describe('gated-dispatch (headless)', () => {
   // DEFERRED: single-key input through the real mounted tree works (see the q/Esc + focused-widget
   // tests below), but Tab TRAVERSAL of json-render's focus ring does not advance the focused element in
   // this headless harness (json-render focus-manager detail under ink's real render with fake stdio).
-  // The per-widget focus gating IS proven by the capturesText tests; full Tab cycling is exercised end
-  // to end when the cli mounts through the port in the spine e2e. Un-skip once the traversal is wired.
+  // The per-widget focus GATE (an unfocused widget consumes no keys) is proven by the running two-widget
+  // security test below; the capturesText tests prove the focus-REPORT channel. Full Tab cycling is
+  // exercised end to end when the cli mounts through the port in the spine e2e. Un-skip once wired.
   it.skip('a real Tab->Enter keypress routes through the focus ring to the gated dispatcher', async () => {
     // Two focusable Buttons in a Box — the first auto-focuses, Tab moves focus to Merge, Enter fires its
     // bound gated action. If Tab did NOT move focus, Enter would land on btnOther (no binding) and the
@@ -210,13 +211,14 @@ describe('gated-dispatch (headless)', () => {
     handle.unmount();
   });
 
-  // DEFERRED (same Tab-traversal harness gap as above): the pre-Tab half — an unfocused widget does NOT
-  // consume keys — is the security-relevant assertion and holds; the Tab-advances-the-ring half is what
-  // this harness cannot yet drive. Un-skip with the test above.
-  it.skip('two custom widgets: only the FOCUSED widget consumes keys; Tab moves the ring', async () => {
-    // OrderList registers first so it auto-focuses; the UNfocused FilePicker must NOT fire its
-    // Enter->'change'. If FilePicker's useInput were UNgated, the first Enter would dispatch 'pick'
-    // while OrderList holds focus — so the length-0 assertion bites.
+  // Two custom widgets share the ring: OrderList registers first and auto-focuses; FilePicker is
+  // UNfocused. The security property (an unfocused gated widget consumes no keys) needs only a single
+  // keypress + auto-focus, so it runs headless today; only the Tab-advances-the-ring half is deferred.
+  function mountTwoWidgets(): {
+    dispatched: DispatchContext[];
+    stdin: FakeStdin;
+    handle: ReturnType<typeof mountInk>;
+  } {
     const twoWidgetCatalog = makeCatalog({
       id: 'video-merge',
       components: {
@@ -265,16 +267,89 @@ describe('gated-dispatch (headless)', () => {
         stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
       },
     });
+    return { dispatched, stdin, handle };
+  }
+
+  // SECURITY HALF (focus-gate): an UNfocused gated widget must not consume a key. OrderList auto-focuses and
+  // ignores a bare Enter; the UNfocused FilePicker must NOT fire its Enter->'change'. An ungated
+  // FilePicker WOULD dispatch here — so this is the running positive control that reds if `{ isActive }`
+  // is dropped from a widget's useInput. No Tab needed (single-key + auto-focus, both proven above).
+  it('two custom widgets: an UNfocused gated widget does not consume a key', async () => {
+    const { dispatched, stdin, handle } = mountTwoWidgets();
     await tick(); // OrderList registers first -> auto-focuses; FilePicker is INACTIVE
     stdin.write('\r'); // Enter -> OrderList ignores it; a GATED FilePicker must NOT consume it
     await tick();
     expect(dispatched).toHaveLength(0); // an ungated FilePicker would dispatch here
+    handle.unmount();
+  });
+
+  // TAB-TRAVERSAL HALF (deferred): Tab advancing json-render's focus ring to the next widget does not
+  // drive in this headless harness (focus-manager detail under ink's real render with fake stdio).
+  // Un-skip once the traversal is wired; exercised end to end when the cli mounts through the port.
+  it.skip('two custom widgets: Tab advances the ring to the FilePicker, whose Enter then dispatches', async () => {
+    const { dispatched, stdin, handle } = mountTwoWidgets();
+    await tick();
+    stdin.write('\r'); // OrderList focused; no dispatch yet
+    await tick();
+    expect(dispatched).toHaveLength(0);
     stdin.write('\t'); // Tab -> the ring moves to FilePicker
     await tick();
     stdin.write('\r'); // Enter -> the FOCUSED FilePicker emits('change') -> gated dispatch
     await tick();
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.elementKey).toBe('fp');
+    handle.unmount();
+  });
+
+  // Native render-local proto tripwire: an agent-emitted `setState` is render-local — it bypasses
+  // the permission gate and reaches json-render's native store built-in with the statePath taken RAW from
+  // agent params (minitui runs no zod check on the omitted-handler path). A malicious `/__proto__/...`
+  // statePath must NOT pollute the global prototype. Safety today rests on json-render's copy semantics
+  // (immutableSetByPath); this is the positive control that reds if a future adapter swap loses it.
+  it('render-local setState with a __proto__ statePath does not pollute the global prototype', async () => {
+    const stateCatalog = makeCatalog({
+      id: 'state',
+      components: { Button: { trustTier: 'interactive' } },
+      actions: {
+        setState: {
+          kind: 'render-local',
+          params: z.object({ statePath: z.string(), value: z.unknown() }),
+        },
+      },
+    });
+    const evilSpec: AppSpec = {
+      root: 'btn',
+      elements: {
+        btn: {
+          type: 'Button',
+          props: { label: 'go' },
+          on: {
+            press: {
+              action: 'setState',
+              params: { statePath: '/__proto__/polluted', value: 'PWNED' },
+            },
+          },
+        },
+      },
+    };
+    const stdin = new FakeStdin();
+    const handle = mountInk({
+      spec: evilSpec,
+      catalog: stateCatalog,
+      binding: createInkBinding(stateCatalog),
+      dispatcher: { dispatch: async () => ({ status: 'settled' as const }) },
+      store: controlledIo({}),
+      consent: noopConsent,
+      io: {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+      },
+    });
+    await tick(); // Button auto-focuses
+    stdin.write('\r'); // Enter -> emit('press') -> native render-local setState with the evil statePath
+    await tick();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.prototype).not.toHaveProperty('polluted');
     handle.unmount();
   });
 
