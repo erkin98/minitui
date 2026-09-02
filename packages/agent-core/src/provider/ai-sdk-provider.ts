@@ -3,6 +3,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import type { ModelProvider } from './provider-port.js';
 import type { ProviderChunk, ProviderRequest } from './provider-types.js';
 import type { FinishReason } from '../session/finish-reason.js';
+import { CONTEXT_OVERFLOW_RE } from '../errors.js';
 
 type StreamTextFn = typeof realStreamText;
 
@@ -41,7 +42,7 @@ function parseRetryAfterMs(message: string): number | undefined {
  */
 function classifyStreamError(err: unknown): Extract<ProviderChunk, { type: 'error' }> {
   const message = err instanceof Error ? err.message : String(err);
-  if (/context|too\s*long|maximum.*token|overflow/i.test(message)) {
+  if (CONTEXT_OVERFLOW_RE.test(message)) {
     return { type: 'error', message, retriable: false };
   }
   const retryAfterMs = parseRetryAfterMs(message);

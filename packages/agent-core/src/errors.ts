@@ -27,7 +27,7 @@ export class RouteError extends Error {
  * Error or string (never a ContextOverflowError), so toRunError classifies by message too, keeping
  * the retry path honest so a doomed turn is never re-run.
  */
-const CONTEXT_OVERFLOW_RE = /context|too\s*long|maximum.*token|overflow/i;
+export const CONTEXT_OVERFLOW_RE = /context|too\s*long|maximum.*token|overflow/i;
 
 /**
  * Classify any thrown value for the RUN_ERROR mapping; overflow + route stay non-retriable.
