@@ -42,6 +42,7 @@ const expectedByFile = new Map([
   ['test/eslint-boundary-fixture/illegal-eval-capability.ts', ['no-eval']],
   ['test/eslint-boundary-fixture/illegal-implied-eval-capability.ts', ['no-implied-eval']],
   ['test/eslint-boundary-fixture/illegal-test-file-capability.test.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/illegal-ai-sdk-import.ts', ['no-restricted-imports']],
   [
     'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
     ['minitui/sanitizer-local-imports-only'],
