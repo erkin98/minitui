@@ -11,6 +11,11 @@ const expectedByFile = new Map([
   // reaching package source, which is the state a cold clone is in without the root
   // tsconfig `paths` mapping.
   ['test/eslint-boundary-fixture/illegal-by-name-import.ts', ['import/no-restricted-paths']],
+  // Exercises the from './packages' + `except` zone shape all real package zones use — the
+  // two entries above prove only bare file-target zones with no except list. The boundaries
+  // config re-targets the live spec zone at this fixture; sanitizer sits outside that
+  // zone's allowed set, so exactly one restricted-paths error is expected.
+  ['test/eslint-boundary-fixture/illegal-package-zone-import.ts', ['import/no-restricted-paths']],
   [
     'test/eslint-boundary-fixture/illegal-dynamic-capability.ts',
     ['minitui/no-restricted-capability-load'],
