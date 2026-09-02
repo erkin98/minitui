@@ -148,7 +148,9 @@ export async function runTurns(args: {
   try {
     toolSet = buildTools(deps.tools, deps.toolDispatch, signal, deps.redactionPolicy);
   } catch (err) {
-    await queue.push(runError(toRunError(err).message, 'non-retriable'));
+    await queue.push(
+      runError(redact(toRunError(err).message, deps.redactionPolicy), 'non-retriable'),
+    );
     return;
   }
 
@@ -330,7 +332,9 @@ export async function runTurns(args: {
       const { message, retriable } = toRunError(err);
       // Re-run a retriable drop that emitted nothing this attempt, within the retry budget.
       if (retriable && !emittedContent && attempt < streamMaxRetries) continue;
-      await queue.push(runError(message, retriable ? undefined : 'non-retriable'));
+      await queue.push(
+        runError(redact(message, deps.redactionPolicy), retriable ? undefined : 'non-retriable'),
+      );
       return;
     }
   }
@@ -467,6 +471,8 @@ export async function runProviderStream(args: {
   } catch (err) {
     if (signal.aborted) return;
     const { message, retriable } = toRunError(err);
-    await queue.push(runError(message, retriable ? undefined : 'non-retriable'));
+    await queue.push(
+      runError(redact(message, redactionPolicy), retriable ? undefined : 'non-retriable'),
+    );
   }
 }
