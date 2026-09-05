@@ -148,10 +148,13 @@ try {
 // vacuous-gate failure the policy fixtures exist to prevent, one level up. Reject any local
 // ignore that targets a tracked tree; the repo's own intentional ignores live in the config's
 // ignores block below, not here.
-const REPO_TREES = /^(\.\/)?(packages|apps|test|scripts|config)(\/|$)/;
-// Positive control (lint-test-policy.mjs idiom): prove the floor can fire — REPO_TREES must
-// match a planted repo-tree glob, else a broken pattern would let a real overreach pass green.
-if (!REPO_TREES.test('packages/**')) {
+// Match a repo tree as a path SEGMENT anywhere in the glob, not just at the start — so a
+// non-anchored form (`**/packages/**`) or an absolute path (`/home/.../packages/**`) that would
+// still ignore tracked files is flagged, not only the bare `packages/**` form.
+const REPO_TREES = /(^|\/)(packages|apps|test|scripts|config)(\/|$)/;
+// Positive control (lint-test-policy.mjs idiom): prove the floor can fire on BOTH the anchored
+// and the embedded-segment forms, else a broken pattern would let a real overreach pass green.
+if (!REPO_TREES.test('packages/**') || !REPO_TREES.test('**/packages/**')) {
   throw new Error('eslint.ignores.local repo-tree floor is vacuous');
 }
 const overreach = localIgnores.filter((p) => typeof p !== 'string' || REPO_TREES.test(p));
