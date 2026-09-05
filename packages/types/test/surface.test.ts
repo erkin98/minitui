@@ -31,6 +31,8 @@ const PUBLIC_SURFACE = [
   'ActionBindingSchema',
   'ActionKind',
   'ActionKindSchema',
+  'CatalogVisibilitySource',
+  'VisibilityClass',
   'ActionRequest',
   'ActionRequestSchema',
   'ActionResult',

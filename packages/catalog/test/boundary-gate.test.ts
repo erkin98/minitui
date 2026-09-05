@@ -18,7 +18,10 @@ describe('catalog import-boundary HARD GATE fails closed', () => {
     });
     const messages = results.flatMap((r) => r.messages);
     const errors = messages.filter((m) => m.severity === 2);
-    expect(errors.length).toBeGreaterThanOrEqual(2);
+    // Four planted specifiers must EACH be flagged — the React root, react itself, and both
+    // non-/server subpaths (/schema, /catalog). >= 4 witnesses the subpath bans specifically:
+    // drop either subpath from the wall and the count falls below four.
+    expect(errors.length).toBeGreaterThanOrEqual(4);
     expect(errors.every((m) => m.ruleId === 'no-restricted-imports')).toBe(true);
     // hard gate: zero warning-level downgrades
     expect(messages.filter((m) => m.severity === 1)).toHaveLength(0);

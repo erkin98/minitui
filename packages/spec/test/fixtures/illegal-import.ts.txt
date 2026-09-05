@@ -1,0 +1,8 @@
+// deliberately-planted boundary violation — spec is not a renderer, so EVERY @json-render/ink specifier
+// is a breach here: BOTH the React root AND the React-free /server entry that @minitui/catalog alone
+// allows. Planting exactly these two keeps the gate's ">= 2 errors" threshold a tight witness — removing
+// either ban drops the count below two and reds the test.
+import { Renderer } from '@json-render/ink';
+import { standardComponentDefinitions } from '@json-render/ink/server';
+
+export const illegal = [Renderer, standardComponentDefinitions];

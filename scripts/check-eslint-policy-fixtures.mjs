@@ -57,6 +57,12 @@ const expectedByFile = new Map([
     'test/eslint-boundary-fixture/illegal-vitest-alias.test.ts',
     ['minitui/no-vitest-replacement-api'],
   ],
+  // The .mts witness: proves the widened test-file glob reaches an .mts test, so the
+  // replacement-API ban covers ESM/CJS test extensions, not only .ts/.tsx.
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-mock.test.mts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
   [
     'test/eslint-boundary-fixture/illegal-vitest-nonliteral.test.ts',
     ['minitui/no-vitest-replacement-api'],
@@ -235,7 +241,7 @@ const tsFilesUnder = (rel) =>
   readdirSync(join(root, rel), { withFileTypes: true }).flatMap((entry) => {
     if (entry.isDirectory())
       return BUILD_OUTPUT.has(entry.name) ? [] : tsFilesUnder(`${rel}/${entry.name}`);
-    return entry.name.endsWith('.ts') ? [`${rel}/${entry.name}`] : [];
+    return /\.(ts|tsx|mts|cts)$/.test(entry.name) ? [`${rel}/${entry.name}`] : [];
   });
 
 const fixtureDirs = FIXTURE_ROOTS.flatMap((rootDir) =>

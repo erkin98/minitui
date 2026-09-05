@@ -301,11 +301,106 @@ describe('gated-dispatch (headless)', () => {
     handle.unmount();
   });
 
+  // FOCUS GATE (Button): the first-registered widget auto-focuses; a bound Button that is NOT focused
+  // must not fire on its steal-key. btnOther (unbound) registers first and auto-focuses; the bound
+  // btnMerge stays UNfocused, so its Enter must be a no-op. Runs headless (single key + auto-focus, no
+  // Tab). Reds if the isActive gate is dropped from Button's useInput — the unfocused button would fire.
+  it('two Buttons: an UNfocused bound Button does not fire on its steal-key', async () => {
+    const keyCatalog = makeCatalog({
+      id: 'video-merge',
+      components: { Box: { trustTier: 'display' }, Button: { trustTier: 'interactive' } },
+      actions: {
+        merge: {
+          kind: 'exec-local',
+          params: z.object({ inputs: z.array(z.string()) }),
+          permission: { danger: true, resourceTemplate: 'ffmpeg', summaryTemplate: 'merge' },
+        },
+      },
+    });
+    const twoButtons: AppSpec = {
+      root: 'col',
+      elements: {
+        col: {
+          type: 'Box',
+          props: { flexDirection: 'column' },
+          children: ['btnOther', 'btnMerge'],
+        },
+        btnOther: { type: 'Button', props: { label: 'Other' } },
+        btnMerge: {
+          type: 'Button',
+          props: { label: 'Merge' },
+          on: { press: { action: 'merge', params: { inputs: ['a.mp4'] } } },
+        },
+      },
+    };
+    const { dispatched, stdin, handle } = harness(
+      { status: 'settled', result: 'ok' },
+      twoButtons,
+      keyCatalog,
+    );
+    await tick(); // btnOther registers first -> auto-focuses; btnMerge is UNfocused
+    stdin.write('\r'); // Enter -> the focused unbound btnOther; the UNfocused btnMerge must not fire
+    await tick();
+    expect(dispatched).toHaveLength(0);
+    handle.unmount();
+  });
+
+  // FOCUS GATE (OrderList): children reversed so FilePicker registers first and auto-focuses; the bound
+  // OrderList stays UNfocused, so its shift+down reorder key must be a no-op. `ol` carries a real reorder
+  // binding (an unbound widget could never dispatch, so the witness needs one). Reds if the isActive gate
+  // is dropped from OrderList's useInput — the unfocused list would reorder and dispatch.
+  it('two custom widgets: an UNfocused OrderList does not consume its reorder key', async () => {
+    const orderCatalog = makeCatalog({
+      id: 'video-merge',
+      components: {
+        Box: { trustTier: 'display' },
+        OrderList: { trustTier: 'interactive' },
+        FilePicker: { trustTier: 'interactive', capturesText: true },
+      },
+      actions: {
+        pick: {
+          kind: 'exec-local',
+          params: z.object({}),
+          permission: { danger: false, resourceTemplate: 'pick', summaryTemplate: 'pick' },
+        },
+      },
+    });
+    const orderSpec: AppSpec = {
+      root: 'col',
+      elements: {
+        col: { type: 'Box', props: { flexDirection: 'column' }, children: ['fp', 'ol'] },
+        fp: {
+          type: 'FilePicker',
+          props: { label: 'out', value: '' },
+          on: { change: { action: 'pick', params: {} } },
+        },
+        ol: {
+          type: 'OrderList',
+          props: { items: ['a.mp4', 'b.mp4'] },
+          on: { reorder: { action: 'pick', params: {} } },
+        },
+      },
+    };
+    const { dispatched, stdin, handle } = harness(
+      { status: 'settled', result: 'ok' },
+      orderSpec,
+      orderCatalog,
+    );
+    await tick(); // FilePicker registers first -> auto-focuses; OrderList is UNfocused
+    stdin.write('\x1B[1;2B'); // shift+down -> the UNfocused OrderList must not reorder/dispatch
+    await tick();
+    expect(dispatched).toHaveLength(0);
+    handle.unmount();
+  });
+
   // Native render-local proto tripwire: an agent-emitted `setState` is render-local — it bypasses
   // the permission gate and reaches json-render's native store built-in with the statePath taken RAW from
-  // agent params (minitui runs no zod check on the omitted-handler path). A malicious `/__proto__/...`
-  // statePath must NOT pollute the global prototype. Safety today rests on json-render's copy semantics
-  // (immutableSetByPath); this is the positive control that reds if a future adapter swap loses it.
+  // agent params (minitui runs no zod check on the omitted-handler path). ONE Enter fires an array binding
+  // that json-render runs sequentially on a single emit (prepareSpec preserves the array): a benign
+  // `/probe` write first proves the native setState sink is LIVE (its write reaches the controlled store),
+  // then a malicious `/__proto__/...` write must NOT pollute the global prototype. Safety today rests on
+  // json-render's copy semantics (immutableSetByPath); asserting the liveness half keeps the negative half
+  // from passing vacuously if a future adapter swap silently stopped writing.
   it('render-local setState with a __proto__ statePath does not pollute the global prototype', async () => {
     const stateCatalog = makeCatalog({
       id: 'state',
@@ -324,21 +419,22 @@ describe('gated-dispatch (headless)', () => {
           type: 'Button',
           props: { label: 'go' },
           on: {
-            press: {
-              action: 'setState',
-              params: { statePath: '/__proto__/polluted', value: 'PWNED' },
-            },
+            press: [
+              { action: 'setState', params: { statePath: '/probe', value: 'ok' } },
+              { action: 'setState', params: { statePath: '/__proto__/polluted', value: 'PWNED' } },
+            ],
           },
         },
       },
     };
+    const io = controlledIo({});
     const stdin = new FakeStdin();
     const handle = mountInk({
       spec: evilSpec,
       catalog: stateCatalog,
       binding: createInkBinding(stateCatalog),
       dispatcher: { dispatch: async () => ({ status: 'settled' as const }) },
-      store: controlledIo({}),
+      store: io,
       consent: noopConsent,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
@@ -346,8 +442,9 @@ describe('gated-dispatch (headless)', () => {
       },
     });
     await tick(); // Button auto-focuses
-    stdin.write('\r'); // Enter -> emit('press') -> native render-local setState with the evil statePath
+    stdin.write('\r'); // Enter -> emit('press') -> both render-local setStates run in order
     await tick();
+    expect(io.getSnapshot()).toMatchObject({ probe: 'ok' }); // liveness: the native sink wrote through
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(Object.prototype).not.toHaveProperty('polluted');
     handle.unmount();

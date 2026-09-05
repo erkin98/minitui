@@ -1,13 +1,14 @@
-/**
- * The three-class field-visibility model, pinned as BUILDER-owned catalog metadata
- * the agent CANNOT widen — the a2ui `callableFrom` shape (read at runtime, default
- * clientOnly, MUST-reject on a widen) extended with a `localOnly` class for secrets.
- * The class governs TWO surfaces: (1) state projection to the model — whether a
- * component's bound field VALUE is included in the state snapshot shown to the
- * agent; (2) callback params — whether that value may leave as a remote/agent
- * callback argument. Ordered by exposure (narrowest to widest).
- */
-export type VisibilityClass = 'localOnly' | 'clientOnly' | 'remoteOnly';
+import type { VisibilityClass } from '@minitui/types';
+
+// The three-class field-visibility model — single source of truth lives in
+// @minitui/types, re-exported here so this package's contract keeps naming it
+// VisibilityClass. BUILDER-owned catalog metadata the agent CANNOT widen (the a2ui
+// `callableFrom` shape: read at runtime, default clientOnly, MUST-reject on a widen,
+// extended with a `localOnly` class for secrets). The class governs TWO surfaces:
+// (1) state projection to the model — whether a component's bound field VALUE is in the
+// snapshot shown to the agent; (2) callback params — whether that value may leave as a
+// remote/agent callback argument. Ordered by exposure (narrowest to widest).
+export type { VisibilityClass };
 
 // Exposure order. The agent may only NARROW, never widen, the builder-declared
 // class (a2ui MUST-reject on a widen).

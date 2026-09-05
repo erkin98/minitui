@@ -3,7 +3,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
-import { policyPlugin } from './config/eslint-policy.js';
+import { policyPlugin, TEST_FILE_GLOBS } from './config/eslint-policy.js';
 
 const noDynamicFunctionGlobal = [
   'error',
@@ -143,6 +143,22 @@ try {
   localIgnores = [];
 }
 
+// Floor on the local-only ignores loaded above: this config and eslint.ignores.local.mjs are
+// both untracked, so an entry there could silently disable linting on a real repo tree — the
+// vacuous-gate failure the policy fixtures exist to prevent, one level up. Reject any local
+// ignore that targets a tracked tree; the repo's own intentional ignores live in the config's
+// ignores block below, not here.
+const REPO_TREES = /^(\.\/)?(packages|apps|test|scripts|config)(\/|$)/;
+// Positive control (lint-test-policy.mjs idiom): prove the floor can fire — REPO_TREES must
+// match a planted repo-tree glob, else a broken pattern would let a real overreach pass green.
+if (!REPO_TREES.test('packages/**')) {
+  throw new Error('eslint.ignores.local repo-tree floor is vacuous');
+}
+const overreach = localIgnores.filter((p) => typeof p !== 'string' || REPO_TREES.test(p));
+if (overreach.length) {
+  throw new Error(`eslint.ignores.local.mjs may not ignore a repo tree: ${overreach.join(', ')}`);
+}
+
 export default tseslint.config(
   {
     // The planted-violation fixture is INTENTIONALLY a permanent boundary violation.
@@ -172,7 +188,7 @@ export default tseslint.config(
   // other half — replacement-mock bans; this is the type/async half.)
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
+    files: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'],
     plugins: { import: importPlugin, minitui: policyPlugin },
     languageOptions: {
       parserOptions: {
@@ -270,7 +286,11 @@ export default tseslint.config(
     //                 Kept as the SOLE no-restricted-imports / no-restricted-capability-load
     //                 cover for any future top-level test file — the later test-file block
     //                 carries only eval / globals / vitest-replacement-api, not those two.
-    files: ['packages/**/*.{ts,tsx,mts}', 'apps/**/*.{ts,tsx,mts}', 'test/**/*.{ts,tsx,mts}'],
+    files: [
+      'packages/**/*.{ts,tsx,mts,cts}',
+      'apps/**/*.{ts,tsx,mts,cts}',
+      'test/**/*.{ts,tsx,mts,cts}',
+    ],
     ignores: [
       'packages/exec/**',
       'packages/*/scripts/**',
@@ -323,12 +343,7 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      '**/*.test.{ts,tsx}',
-      '**/*.spec.{ts,tsx}',
-      '**/test/**/*.{ts,tsx}',
-      '**/__tests__/**/*.{ts,tsx}',
-    ],
+    files: TEST_FILE_GLOBS,
     rules: {
       'minitui/no-vitest-replacement-api': 'error',
       'no-eval': 'error',
@@ -354,8 +369,7 @@ export default tseslint.config(
       'vitest.determinism.test.ts',
       '**/tsup.config.ts',
       '**/vitest.config.ts',
-      '**/test/**/*.{ts,tsx}',
-      '**/__tests__/**/*.{ts,tsx}',
+      ...TEST_FILE_GLOBS,
     ],
     ...tseslint.configs.disableTypeChecked,
   },

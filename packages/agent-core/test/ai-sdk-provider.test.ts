@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { createAiSdkProvider, createAnthropicModel } from '../src/provider/ai-sdk-provider.js';
 import type { ProviderChunk, ProviderRequest } from '../src/provider/provider-types.js';
+import { runProviderStream } from '../src/session/stream-turns.js';
+import { createAsyncEventQueue } from '../src/events/event-stream.js';
+import { createConversation } from '../src/session/conversation.js';
+import type { MinituiEvent } from '../src/events/event-types.js';
+import type { ToolCallResult, ToolDispatchPort } from '../src/ports/index.js';
 
 const req: ProviderRequest = {
   messages: [{ role: 'user', content: 'merge' }],
@@ -67,6 +72,57 @@ describe('ai-sdk-provider', () => {
       isError: true,
     });
     expect(out.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('a tool-error carries its message on the observation content AND error slot', async () => {
+    // The tool-error arm derives the failure text once and puts it on BOTH `output` and the dedicated
+    // `error` slot. Driven through runProviderStream (which maps output -> content, error -> error), the
+    // observation surfaces the message on both fields. Before the fix `output` held the raw Error object,
+    // so content JSON-stringified to '{}' and error was undefined — the failure text was lost.
+    const provider = createAiSdkProvider({
+      streamTextImpl: fakeStreamText([
+        {
+          type: 'tool-error',
+          toolCallId: 't1',
+          toolName: 'ffmpeg',
+          input: { a: 1 },
+          error: new Error('exit 1'),
+        },
+        { type: 'finish', finishReason: 'stop' },
+      ]),
+    });
+    // The tool-error path yields a tool-result chunk (no dispatch), so this double is never called; it
+    // only satisfies runProviderStream's required port.
+    const noopDispatch: ToolDispatchPort = {
+      dispatch: async (r): Promise<ToolCallResult> => ({
+        toolCallId: r.toolCallId,
+        ok: true,
+        toolName: r.toolName,
+        content: '',
+        isError: false,
+      }),
+    };
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runProviderStream({
+      provider,
+      conversation: createConversation([{ role: 'user', content: 'merge' }]),
+      threadId: 'tid',
+      runId: 'run-1',
+      model: 'test-model',
+      toolDispatch: noopDispatch,
+      queue,
+      signal: new AbortController().signal,
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    const ev = out.find((e) => e.type === 'TOOL_CALL_RESULT');
+    expect(ev).toBeDefined();
+    if (ev?.type === 'TOOL_CALL_RESULT') {
+      expect(ev.isError).toBe(true);
+      expect(ev.error).toBe('exit 1');
+      expect(ev.content).toBe('exit 1');
+    }
   });
 
   it('maps tool-approval request/response parts to approval chunks (forward-compatible arms)', async () => {

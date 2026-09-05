@@ -21,6 +21,11 @@ export interface ToolCallResult {
 
 // The SOLE seam from the model loop to execution. The host wires permission +
 // exec into this; agent-core imports neither @minitui/exec nor child_process.
+//
+// CONTRACT: dispatch RESOLVES for every outcome — a refusal is { ok:false, denied:true }, a failure is
+// { ok:false, isError:true, error } — so denied/content/toolName survive structurally to the model. A
+// rejection (a thrown promise) is a DEFECT signal, not a modelled result: agent-core catches it, redacts
+// the message, and re-feeds it to the model as a structureless failure.
 export interface ToolDispatchPort {
   dispatch(req: ToolCallRequest, signal: AbortSignal): Promise<ToolCallResult>;
 }

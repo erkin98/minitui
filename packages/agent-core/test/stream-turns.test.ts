@@ -372,6 +372,83 @@ describe('stream-turns', () => {
     expect(JSON.stringify(results)).toContain('[redacted-secret]');
   });
 
+  it('redacts a REJECTED dispatch on BOTH the model re-feed and the observation', async () => {
+    // A dispatch that REJECTS (an unexpected throw, not the modelled ok:false result) must still cross the
+    // redaction chokepoint. buildTools' execute catches the rejection and rethrows a REDACTED Error, so the
+    // secret reaches neither the SDK's model re-feed (the thrown Error the SDK echoes back) NOR the
+    // observation. Without the catch, the raw rejection would flow straight to the model as a failure.
+    const secret = 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaa';
+    const rejectingDispatch: ToolDispatchPort = {
+      dispatch: async () => {
+        throw new Error(`boom ${secret}`);
+      },
+    };
+    // The SDK fake captures the error execute rethrew (the model re-feed exit) AND surfaces it as a
+    // tool-error part (the observation exit), mirroring the real SDK's tool-error path.
+    const caught: unknown[] = [];
+    const sdkLike = ((args: {
+      tools?: Record<
+        string,
+        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
+      >;
+    }) => ({
+      fullStream: (async function* () {
+        const parts: Array<Record<string, unknown>> = [];
+        try {
+          const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't1' });
+          parts.push({
+            type: 'tool-result',
+            toolCallId: 't1',
+            toolName: 'ffmpeg',
+            input: { a: 1 },
+            output,
+          });
+        } catch (error) {
+          caught.push(error);
+          parts.push({
+            type: 'tool-error',
+            toolCallId: 't1',
+            toolName: 'ffmpeg',
+            input: { a: 1 },
+            error,
+          });
+        }
+        parts.push({ type: 'finish', finishReason: 'stop' });
+        for (const p of parts) yield p;
+      })(),
+    })) as unknown as typeof import('ai').streamText;
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation(),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: {
+        streamTextImpl: sdkLike,
+        toolDispatch: rejectingDispatch,
+        tools,
+        model: 'test-model',
+      },
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    // Exit 1 — the model re-feed: the Error execute rethrew (which the SDK echoes to the model) is redacted.
+    // This is the assert the try/catch keeps honest: remove it and the raw key reaches this exit.
+    expect(caught).toHaveLength(1);
+    expect((caught[0] as Error).message).toContain('[redacted-secret]');
+    expect((caught[0] as Error).message).not.toContain(secret);
+    // Exit 2 — the observation: the queued TOOL_CALL_RESULT carries the redacted text on content AND error.
+    const result = out.find((e) => e.type === 'TOOL_CALL_RESULT');
+    expect(result).toBeDefined();
+    if (result?.type === 'TOOL_CALL_RESULT') {
+      expect(result.content).toContain('[redacted-secret]');
+      expect(result.error).toContain('[redacted-secret]');
+    }
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
   it('applies the host redactionPolicy (extraSecretPatterns) on the SDK loop', async () => {
     // An org-specific token shape the built-in patterns deliberately MISS. It is redacted ONLY because
     // AgentConfig.redactionPolicy threads through RunTurnsDeps to routeToolCallResult — if that wiring

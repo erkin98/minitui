@@ -1,5 +1,9 @@
-// deliberately-planted boundary violation — the gate MUST flag the React root entry.
+// deliberately-planted boundary violation — the gate MUST flag the React root entry AND every non-/server
+// subpath. /server is the ONE allowed React-free entry; /schema and /catalog are banned by the
+// conservative single-surface policy even though they are themselves React-free.
 import { Renderer } from '@json-render/ink';
 import React from 'react';
+import { inkSchema } from '@json-render/ink/schema';
+import { inkCatalog } from '@json-render/ink/catalog';
 
-export const illegal = () => (Renderer ?? React);
+export const illegal = () => (Renderer ?? React ?? inkSchema ?? inkCatalog);

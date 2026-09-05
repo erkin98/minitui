@@ -1,7 +1,7 @@
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { assertNever, type JsonValue } from '@minitui/types';
-import type { ToolDispatchPort } from '../ports/index.js';
+import type { ToolCallResult, ToolDispatchPort } from '../ports/index.js';
 import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility/index.js';
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
@@ -76,14 +76,24 @@ function buildTools(
       execute: async (input, { toolCallId }: { toolCallId: string }) => {
         // ToolDispatchPort takes { toolName, args } and returns { ok, toolName, content, isError,
         // error?, denied? }. The validated input IS the args record.
-        const result = await toolDispatch.dispatch(
-          { toolCallId, toolName: s.name, args: input as Readonly<Record<string, JsonValue>> },
-          signal,
-        );
-        // The redaction chokepoint: EVERY dispatch result crosses routeToolCallResult before the
-        // provider sees it — it redacts `content` AND `error` and folds ok:false/denied into isError.
-        // Raw ToolCallResult strings NEVER reach the SDK re-feed; what the model sees (and what
-        // fullStream later echoes as the tool-result/tool-error parts) is the redacted observation.
+        let result: ToolCallResult;
+        try {
+          result = await toolDispatch.dispatch(
+            { toolCallId, toolName: s.name, args: input as Readonly<Record<string, JsonValue>> },
+            signal,
+          );
+        } catch (err) {
+          // A REJECTED dispatch (an unexpected throw, not the modelled ok:false result) still crosses the
+          // redaction chokepoint: rethrow a REDACTED Error so the SDK's model re-feed AND the observation
+          // carry no raw path/secret. Chokepoint is total: every dispatch OUTCOME — resolved-isError or
+          // rejected — is redacted before the provider sees it.
+          throw new Error(redact(err instanceof Error ? err.message : String(err), policy));
+        }
+        // The redaction chokepoint: EVERY dispatch OUTCOME is redacted before the provider sees it — a
+        // resolved result crosses routeToolCallResult (which redacts `content` AND `error` and folds
+        // ok:false/denied into isError), a rejection crosses the catch above. Raw ToolCallResult strings
+        // NEVER reach the SDK re-feed; what the model sees (and what fullStream later echoes as the
+        // tool-result/tool-error parts) is the redacted observation.
         const ev = routeToolCallResult(result, policy);
         // routeToolCallResult always yields a TOOL_CALL_RESULT event; the check narrows the union.
         if (ev.type !== 'TOOL_CALL_RESULT') {
@@ -245,16 +255,19 @@ export async function runTurns(args: {
             // surface it as TOOL_CALL_RESULT isError:true. Carry toolName + the structured error AND the
             // `denied` bit — buildTools attaches `denied` to the thrown Error, which the SDK echoes
             // verbatim as this part's `error`, so a permission-gate refusal stays distinguishable from an
-            // execution failure on the observation (not only in the message text).
+            // execution failure on the observation (not only in the message text). Redact the error text
+            // here too: the SDK has three tool-error producers and only the buildTools execute crosses the
+            // redaction chokepoint, so redacting on this arm makes the observation total by construction —
+            // idempotent on the already-redacted text a rejected/isError throw carries.
             emittedContent = true;
             const denied = (part.error as { denied?: boolean } | undefined)?.denied === true;
             await queue.push(
               agentObservation({
                 toolCallId: String(part.toolCallId),
                 toolName: String(part.toolName),
-                content: String(part.error),
+                content: redact(String(part.error), deps.redactionPolicy),
                 isError: true,
-                error: String(part.error),
+                error: redact(String(part.error), deps.redactionPolicy),
                 ...(denied ? { denied: true } : {}),
               }),
             );
