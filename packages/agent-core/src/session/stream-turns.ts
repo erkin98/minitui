@@ -235,17 +235,22 @@ export async function runTurns(args: {
             await queue.push(toolCallStart(String(part.toolCallId), String(part.toolName)));
             break;
           case 'tool-result':
-            // The SDK emits tool-result ONLY for a successful execute; failures arrive as 'tool-error'.
+            // On the pinned SDK a tool-result is emitted ONLY for a successful buildTools execute,
+            // whose return already crossed routeToolCallResult — but redact here too so the observation
+            // is total by CONSTRUCTION, not by that assumption: a future provider-defined / server-side
+            // tool could emit a tool-result that never touched execute. Idempotent on redacted text.
             // The observation carries toolName so the renderer + observation channel see WHICH tool.
             emittedContent = true;
             await queue.push(
               agentObservation({
                 toolCallId: String(part.toolCallId),
                 toolName: String(part.toolName),
-                content:
+                content: redact(
                   typeof part.output === 'string'
                     ? part.output
                     : JSON.stringify(part.output ?? null),
+                  deps.redactionPolicy,
+                ),
                 isError: false,
               }),
             );

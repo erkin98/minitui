@@ -449,6 +449,55 @@ describe('stream-turns', () => {
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 
+  it('redacts a tool-result whose output never crossed execute (a provider-defined tool)', async () => {
+    // The success 'tool-result' arm redacts defensively too. On the pinned SDK a tool-result comes only
+    // from a successful buildTools execute (already redacted), but a future provider-defined / server-side
+    // tool could emit one that never touched execute. Emit such a part directly (no execute call) carrying
+    // a secret and assert the observation is redacted anyway — the chokepoint is total by construction.
+    const secret = 'sk-ant-api03-bbbbbbbbbbbbbbbbbbbbbbbb';
+    const noopDispatch: ToolDispatchPort = {
+      dispatch: async (req): Promise<ToolCallResult> => ({
+        toolCallId: req.toolCallId,
+        ok: true,
+        toolName: req.toolName,
+        content: 'unused',
+        isError: false,
+      }),
+    };
+    const sdkLike = (() => ({
+      fullStream: (async function* () {
+        // A tool-result straight from the provider — no execute call, so it never crossed the chokepoint.
+        yield {
+          type: 'tool-result',
+          toolCallId: 't1',
+          toolName: 'serverTool',
+          input: {},
+          output: `leaked ${secret}`,
+        };
+        yield { type: 'finish', finishReason: 'stop' };
+      })(),
+    })) as unknown as typeof import('ai').streamText;
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation(),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: { streamTextImpl: sdkLike, toolDispatch: noopDispatch, tools, model: 'test-model' },
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    const result = out.find((e) => e.type === 'TOOL_CALL_RESULT');
+    expect(result).toBeDefined();
+    if (result?.type === 'TOOL_CALL_RESULT') {
+      expect(result.content).toContain('[redacted-secret]');
+      expect(result.content).not.toContain(secret);
+    }
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
   it('applies the host redactionPolicy (extraSecretPatterns) on the SDK loop', async () => {
     // An org-specific token shape the built-in patterns deliberately MISS. It is redacted ONLY because
     // AgentConfig.redactionPolicy threads through RunTurnsDeps to routeToolCallResult — if that wiring
