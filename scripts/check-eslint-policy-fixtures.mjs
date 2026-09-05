@@ -49,6 +49,13 @@ const expectedByFile = new Map([
   ['test/eslint-boundary-fixture/illegal-test-file-capability.test.ts', ['no-restricted-imports']],
   ['test/eslint-boundary-fixture/illegal-ai-sdk-import.ts', ['no-restricted-imports']],
   ['test/eslint-boundary-fixture/illegal-react-import.ts', ['no-restricted-imports']],
+  // The exec import walls: (a) exec keeps the SDK + React/Ink bans, (b) only exec/+sandbox/ may
+  // reach child_process (static + dynamic forms). Each fixture fires exactly the rule its block
+  // carries; an unregistered fixture would red this completeness gate.
+  ['test/eslint-boundary-fixture/exec-walls/react-import.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts', ['no-restricted-syntax']],
   [
     'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
     ['minitui/sanitizer-local-imports-only'],

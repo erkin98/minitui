@@ -12,6 +12,7 @@
     { "path": "./packages/catalog" },
     { "path": "./packages/spec" },
     { "path": "./packages/agent-core" },
-    { "path": "./packages/renderer-ink" }
+    { "path": "./packages/renderer-ink" },
+    { "path": "./packages/exec" }
   ]
 }
