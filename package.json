@@ -35,7 +35,7 @@
     "lint:policy-fixtures": "node scripts/check-eslint-policy-fixtures.mjs",
     "lint:test-policy": "node scripts/lint-test-policy.mjs",
     "lint:trace": "node scripts/check-outbound-trace.mjs",
-    "pack:check": "pnpm run build:all && node packages/types/scripts/pack-consumer.mjs && node packages/sanitizer/scripts/pack-consumer.mjs && node packages/transport/scripts/pack-consumer.mjs && node packages/renderer-core/scripts/pack-consumer.mjs && node packages/catalog/scripts/pack-consumer.mjs && node packages/spec/scripts/pack-consumer.mjs",
+    "pack:check": "pnpm run build:all && node packages/types/scripts/pack-consumer.mjs && node packages/sanitizer/scripts/pack-consumer.mjs && node packages/transport/scripts/pack-consumer.mjs && node packages/renderer-core/scripts/pack-consumer.mjs && node packages/catalog/scripts/pack-consumer.mjs && node packages/spec/scripts/pack-consumer.mjs && node packages/renderer-ink/scripts/pack-consumer.mjs",
     "prepare": "lefthook install || true",
     "syncpack": "syncpack lint",
     "test": "turbo run test && pnpm exec vitest run --project root",

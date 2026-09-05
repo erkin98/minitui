@@ -1,15 +1,11 @@
 import { z, type ZodType } from 'zod';
 import { defineCatalog, type PromptOptions } from '@json-render/core';
-import { ACTION_KINDS } from '@minitui/types';
+import { ACTION_KINDS, type CatalogVisibilitySource } from '@minitui/types';
 import { inkSchema, type ComponentDefinition, type ActionDefinition } from './schema-bridge.js';
 import type { MinituiComponentDef, TrustTier } from './contract/catalog-component.js';
 import { requiresPermission, type MinituiActionDef } from './contract/catalog-action.js';
 import type { ActionKind, PermissionDescriptor } from './contract/action-kind.js';
-import {
-  DEFAULT_VISIBILITY,
-  SECRET_VISIBILITY,
-  type VisibilityClass,
-} from './contract/visibility.js';
+import { DEFAULT_VISIBILITY, SECRET_VISIBILITY } from './contract/visibility.js';
 
 // The adopted-catalog surface minitui consumes. `defineCatalog` is generic, so
 // `ReturnType<typeof defineCatalog>` collapses its unresolved type parameters to
@@ -76,16 +72,16 @@ function assertActionDef(name: string, def: MinituiActionDef): void {
   }
 }
 
-export interface MinituiCatalog {
+// The built catalog surface minitui consumes. Extends the @minitui/types
+// CatalogVisibilitySource (componentNames / actionNames + the RESOLVED visibilityOf /
+// callableFromOf index) so this shape and agent-core's adapter reference ONE definition
+// instead of hand-mirroring it — a drift reds `tsc -b`.
+export interface MinituiCatalog extends CatalogVisibilitySource {
   readonly id: string;
   readonly base: JsonRenderCatalog;
-  readonly componentNames: readonly string[];
-  readonly actionNames: readonly string[];
   readonly tierOf: (component: string) => TrustTier | undefined;
   readonly kindOf: (action: string) => ActionKind | undefined;
   readonly permissionOf: (action: string) => PermissionDescriptor | undefined;
-  readonly visibilityOf: (component: string) => VisibilityClass | undefined;
-  readonly callableFromOf: (action: string) => VisibilityClass | undefined;
   readonly componentDefs: ReadonlyMap<string, MinituiComponentDef>;
   readonly actionDefs: ReadonlyMap<string, MinituiActionDef>;
 }

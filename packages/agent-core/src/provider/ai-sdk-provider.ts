@@ -130,17 +130,23 @@ export function createAiSdkProvider(
               isError: false,
             };
             break;
-          case 'tool-error':
+          case 'tool-error': {
             // A thrown tool execute — preserve the failure as an isError tool-result chunk; dropping it
-            // would silence every tool failure.
+            // would silence every tool failure. Derive the failure text ONCE and put it on BOTH `output`
+            // and the dedicated `error` slot: the consumer JSON-stringifies a non-string output, and a raw
+            // Error stringifies to '{}', erasing the message. A string output survives, and `error` gives
+            // the observation a first-class failure field symmetric with the tool-result arm.
+            const message = part.error instanceof Error ? part.error.message : String(part.error);
             yield {
               type: 'tool-result',
               toolCallId: String(part.toolCallId),
               toolName: String(part.toolName),
-              output: part.error,
+              output: message,
               isError: true,
+              error: message,
             };
             break;
+          }
           case 'tool-approval-request': {
             // Forward-compatible: absent in the pinned SDK version, tolerated if a future pin adds it.
             const call = approvalToolCall(part);

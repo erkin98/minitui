@@ -16,7 +16,7 @@ pre-commit:
       # dir (helpers/fixtures/setup the script also scans), so pre-commit covers the same
       # set as the CI witness. Single-string brace glob with the alternatives inlined —
       # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).
-      glob: '{*.test.ts,*.test.tsx,**/test/**/*.ts,**/test/**/*.tsx,**/__tests__/**/*.ts,**/__tests__/**/*.tsx}'
+      glob: '{*.test.ts,*.test.tsx,*.test.mts,*.test.cts,**/test/**/*.ts,**/test/**/*.tsx,**/test/**/*.mts,**/test/**/*.cts,**/__tests__/**/*.ts,**/__tests__/**/*.tsx,**/__tests__/**/*.mts,**/__tests__/**/*.cts}'
       run: pnpm run lint:test-policy
     syncpack:
       glob: '**/package.json'
@@ -35,7 +35,7 @@ pre-push:
     format:
       run: pnpm run format:check
     policy-fixtures:
-      # The 52-fixture proof that the capability/replacement-mock AST rules actually
+      # The policy-fixture proof that the capability/replacement-mock AST rules actually
       # bite. Enforced here, not only in the un-hooked `pnpm lint`, so
       # a regressed rule cannot reach the remote green.
       run: pnpm run lint:policy-fixtures

@@ -13,6 +13,7 @@ export type AppEvent =
     }
   | { kind: 'run-error'; message: string; code?: string | undefined; retriable: boolean }
   | { kind: 'text-delta'; messageId: string; delta: string }
+  | { kind: 'tool-start'; toolCallId: string; toolName: string }
   | {
       kind: 'tool-result';
       toolCallId: string;

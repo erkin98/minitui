@@ -118,6 +118,17 @@ function normalizeTextDelta(event: WireObject): AppEvent {
   return { kind: 'text-delta', messageId: messageId ?? '', delta };
 }
 
+function normalizeToolStart(event: WireObject): AppEvent {
+  const toolCallId = event.toolCallId;
+  // The wire event field is toolCallName; the internal event field is toolName — renamed here,
+  // mirroring the tool-result mapping and the producer's own rename at the emit site.
+  const toolName = event.toolCallName;
+  if (typeof toolCallId !== 'string' || typeof toolName !== 'string') {
+    return malformed('TOOL_CALL_START');
+  }
+  return { kind: 'tool-start', toolCallId, toolName };
+}
+
 function normalizeToolResult(event: WireObject): AppEvent {
   const toolCallId = event.toolCallId;
   const content = event.content;
@@ -200,6 +211,8 @@ function normalizeObject(event: WireObject): AppEvent {
       return normalizeRunError(event);
     case EventType.TEXT_MESSAGE_CONTENT:
       return normalizeTextDelta(event);
+    case EventType.TOOL_CALL_START:
+      return normalizeToolStart(event);
     case EventType.TOOL_CALL_RESULT:
       return normalizeToolResult(event);
     case EventType.STATE_SNAPSHOT:

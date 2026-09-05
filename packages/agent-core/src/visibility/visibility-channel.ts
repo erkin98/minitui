@@ -1,3 +1,8 @@
+import type {
+  VisibilityClass as CatalogVisibilityClass,
+  CatalogVisibilitySource,
+} from '@minitui/types';
+
 export type VisibilityClass = 'localOnly' | 'modelVisible' | 'modelOnly';
 
 /**
@@ -33,26 +38,15 @@ export function createVisibilityChannel(classes: VisibilityMap): VisibilityChann
   };
 }
 
-/**
- * The catalog field-visibility axis (WHERE a field is callable): localOnly | clientOnly | remoteOnly.
- * Declared structurally here because agent-core does NOT import @minitui/catalog (its allowed edges are
- * types, transport, spec, sanitizer). This is a DIFFERENT axis from VisibilityClass — the two
- * vocabularies must never be unified; they meet only through the one-way adapter below.
- */
-export type CatalogVisibilityClass = 'localOnly' | 'clientOnly' | 'remoteOnly';
-
-/**
- * The minimal catalog view catalogVisibilityToChannel reads. @minitui/catalog's built catalog satisfies
- * this structurally (componentNames/actionNames + the RESOLVED visibilityOf/callableFromOf index that
- * already folds a secret-typed field to localOnly and applies the local-renderer default), so the cli
- * passes its built catalog without agent-core ever importing the catalog package.
- */
-export interface CatalogVisibilitySource {
-  readonly componentNames: readonly string[];
-  readonly actionNames: readonly string[];
-  readonly visibilityOf: (component: string) => CatalogVisibilityClass | undefined;
-  readonly callableFromOf: (action: string) => CatalogVisibilityClass | undefined;
-}
+// The catalog field-visibility axis (WHERE a field is callable) and the minimal built-catalog view
+// catalogVisibilityToChannel reads BOTH live in @minitui/types as the single source of truth, imported at
+// the top of this file (never re-declared) so a shape drift with @minitui/catalog's MinituiCatalog reds
+// `tsc -b`. agent-core reaches types directly (its allowed edges are types, transport, spec, sanitizer)
+// without importing @minitui/catalog. CatalogVisibilityClass is the imported alias for this CATALOG axis
+// (localOnly | clientOnly | remoteOnly) — a DIFFERENT axis from the model-visibility CHANNEL
+// VisibilityClass above; the two vocabularies must never be unified, meeting only through the one-way
+// adapter below.
+export type { CatalogVisibilityClass, CatalogVisibilitySource };
 
 /**
  * catalog axis → channel axis. A localOnly (secret / host-only) field, a clientOnly field (the default:

@@ -2,14 +2,9 @@
 import { ESLint } from 'eslint';
 import { globSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { TEST_FILE_GLOBS } from '../config/eslint-policy.js';
 
 const root = resolve(import.meta.dirname, '..');
-const testPatterns = [
-  '**/*.test.{ts,tsx}',
-  '**/*.spec.{ts,tsx}',
-  '**/test/**/*.{ts,tsx}',
-  '**/__tests__/**/*.{ts,tsx}',
-];
 
 // errorOnUnmatchedPattern:false is load-bearing for the control below: it lets a
 // glob that matches nothing return an empty result set instead of throwing ESLint's
@@ -38,7 +33,7 @@ try {
 }
 if (!guardFired) throw new Error('lint:test-policy zero-file guard did not fire');
 
-const { results, files: lintedFiles } = await lintOrDie(testPatterns);
+const { results, files: lintedFiles } = await lintOrDie(TEST_FILE_GLOBS);
 
 const formatter = await eslint.loadFormatter('stylish');
 const output = await formatter.format(results);
