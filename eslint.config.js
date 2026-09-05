@@ -294,12 +294,7 @@ export default tseslint.config(
       'apps/**/*.{ts,tsx,mts,cts}',
       'test/**/*.{ts,tsx,mts,cts}',
     ],
-    ignores: [
-      'packages/exec/**',
-      'packages/*/scripts/**',
-      'scripts/**',
-      'test/eslint-boundary-fixture/**',
-    ],
+    ignores: ['packages/*/scripts/**', 'scripts/**', 'test/eslint-boundary-fixture/**'],
     rules: execMoatCapabilityRules,
   },
   {
@@ -335,6 +330,79 @@ export default tseslint.config(
     // keeping the exec-moat + SDK-wall bans.
     files: ['packages/renderer-ink/**/*.{ts,tsx,mts}', 'packages/cli/**/*.{ts,tsx,mts}'],
     rules: rendererInkImportRule,
+  },
+  // (a) @minitui/exec is the ONE package permitted the exec-moat capabilities (child_process / the
+  // OS sandbox runtime / the MCP client). AFTER the wide capability block (so it wins), DROP only the
+  // exec-moat import bans while KEEPING the model SDK and React/Ink banned — exec is neither the agent
+  // loop nor a renderer. no-eval / no-implied-eval / no-restricted-globals / capability-load come from
+  // the wide block (exec is no longer in its ignores). Mirrors agentCoreImportRule / rendererInkImportRule.
+  {
+    files: [
+      'packages/exec/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/exec-walls/react-import.ts',
+      'test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...AI_SDK_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
+          patterns: [...AI_SDK_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+        },
+      ],
+    },
+  },
+  // (b) intra-exec child_process wall: only exec/ (the spawner) and sandbox/ (the wrapper) may reach
+  // the builtin; permission/, mcp/, dispatch/ may NOT — dispatch/ routes through the sandbox-wrapped
+  // runner, mcp/ through the sandbox-wrapped stdio transport. This REPLACES (a) for these files, so it
+  // re-carries the SDK + React/Ink bans TOGETHER with the two child_process paths (a superset) — but
+  // NOT the MCP/sandbox paths (mcp/ legitimately imports the MCP client). child_process is a NODE
+  // BUILTIN, so the biting rule is no-restricted-imports (import/no-restricted-paths can never match a
+  // bare builtin — a vacuous gate here). The no-restricted-syntax arm closes the dynamic forms.
+  {
+    files: [
+      'packages/exec/src/permission/**/*.{ts,tsx,mts}',
+      'packages/exec/src/mcp/**/*.{ts,tsx,mts}',
+      'packages/exec/src/dispatch/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts',
+      'test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'child_process',
+              message:
+                'Only exec/ and sandbox/ may spawn; route through the sandbox-wrapped runner.',
+            },
+            {
+              name: 'node:child_process',
+              message:
+                'Only exec/ and sandbox/ may spawn; route through the sandbox-wrapped runner.',
+            },
+            ...AI_SDK_IMPORT_PATHS,
+            ...REACT_INK_IMPORT_PATHS,
+          ],
+          patterns: [...AI_SDK_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'ImportExpression[source.value=/^(node:)?child_process$/]',
+          message:
+            'Only exec/ and sandbox/ may spawn; dynamic import of child_process is walled — route through the sandbox-wrapped runner.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='require'] > Literal[value=/^(node:)?child_process$/]",
+          message:
+            'Only exec/ and sandbox/ may spawn; require of child_process is walled — route through the sandbox-wrapped runner.',
+        },
+      ],
+    },
   },
   {
     files: [

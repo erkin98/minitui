@@ -1,0 +1,4 @@
+# Grammar wasm copied to the package root by scripts/bundle-grammars.mjs (build artifact; the
+# parser resolves it from the installed tree-sitter-bash package in dev, this copy is for packed/SEA).
+# dist/ and dist-types/ are covered by the repo-root .gitignore.
+/*.wasm
