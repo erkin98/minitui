@@ -189,7 +189,15 @@ const capabilityEscapeVisitors = (context) => ({
 const noRestrictedCapabilityLoad = {
   meta: {
     type: 'problem',
-    schema: [],
+    schema: [
+      {
+        type: 'object',
+        properties: {
+          allow: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+        },
+        additionalProperties: false,
+      },
+    ],
     messages: {
       evaluation: 'Dynamic Function construction is reserved for the exec package and tooling.',
       indirect: 'Indirect Node module loaders are reserved for the exec package and tooling.',
@@ -198,11 +206,16 @@ const noRestrictedCapabilityLoad = {
     },
   },
   create(context) {
+    // An additive re-permit list: an EXACT-root specifier named here is not reported as restricted, so a
+    // dir that legitimately owns one capability (the OS-sandbox runtime's dynamic import seam) lints clean
+    // while deep subpaths (still caught by the startsWith arm) and every other restricted capability stay
+    // banned. Default empty, so every consumer that passes no option is unchanged.
+    const allow = new Set(context.options[0]?.allow ?? []);
     const checkSource = (node, source) => {
       const name = staticModuleName(source);
       if (name === undefined) {
         context.report({ node, messageId: 'nonliteral' });
-      } else if (isRestrictedCapability(name)) {
+      } else if (isRestrictedCapability(name) && !allow.has(name)) {
         context.report({ node, messageId: 'restricted', data: { name } });
       }
     };

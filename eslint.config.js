@@ -404,6 +404,27 @@ export default tseslint.config(
       ],
     },
   },
+  // (c) the sandbox dir is the ONE place inside exec permitted the OS-sandbox runtime's dynamic import
+  // (the fail-closed loading seam). AFTER the wide capability block (so it wins), re-permit that EXACT
+  // root specifier via the capability-load rule's additive `allow` option. This overrides ONLY the
+  // capability-load rule id; flat config merges the other detectors (nonliteral / indirect-loader from
+  // the wide block, eval / globals, block (a)'s import bans), so they all still bite here — the MCP
+  // client and every deep runtime subpath stay capability-walled. Never dir-scope the rule `off`: that
+  // would silence the nonliteral / indirect-loader detectors in the moat's own dir. The two fixture
+  // paths keep the re-permit non-vacuous — the legal runtime import lints clean, the banned MCP sibling reds.
+  {
+    files: [
+      'packages/exec/src/sandbox/**/*.{ts,mts}',
+      'test/eslint-boundary-fixture/exec-walls/sandbox-asrt-dynimport.ts',
+      'test/eslint-boundary-fixture/exec-walls/sandbox-mcp-dynimport.ts',
+    ],
+    rules: {
+      'minitui/no-restricted-capability-load': [
+        'error',
+        { allow: ['@anthropic-ai/sandbox-runtime'] },
+      ],
+    },
+  },
   {
     files: [
       'packages/sanitizer/src/**/*.{ts,tsx,mts}',
