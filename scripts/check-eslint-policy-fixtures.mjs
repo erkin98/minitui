@@ -56,6 +56,14 @@ const expectedByFile = new Map([
   ['test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts', ['no-restricted-imports']],
   ['test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts', ['no-restricted-imports']],
   ['test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts', ['no-restricted-syntax']],
+  // The sandbox capability re-permit: the OS-sandbox dir may dynamically import the sandbox runtime
+  // (exact root allowed → no rule), but the MCP client stays capability-walled there. Deleting the
+  // `allow` entry in eslint.config.js reds the first of these, so the re-permit is non-vacuous.
+  ['test/eslint-boundary-fixture/exec-walls/sandbox-asrt-dynimport.ts', []],
+  [
+    'test/eslint-boundary-fixture/exec-walls/sandbox-mcp-dynimport.ts',
+    ['minitui/no-restricted-capability-load'],
+  ],
   [
     'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
     ['minitui/sanitizer-local-imports-only'],
