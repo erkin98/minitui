@@ -22,4 +22,14 @@ describe('checkPathRules — gitignore-style, last match wins', () => {
     expect(checkPathRules('/home/u/a.mp4', rules)).toBe('allow');
     expect(checkPathRules('/home/u/sub/a.mp4', rules)).toBe('ask');
   });
+  it('normalizes .. traversal before matching — cannot ride an allow or evade a deny via ../', () => {
+    // /home/u/../../etc/shadow collapses to /etc/shadow: it no longer rides an allow rooted at
+    // /home/u, and it now matches a deny rooted at /etc it would otherwise have slipped past.
+    expect(
+      checkPathRules('/home/u/../../etc/shadow', [{ glob: '/home/u/**', effect: 'allow' }]),
+    ).toBe('ask');
+    expect(checkPathRules('/home/u/../../etc/shadow', [{ glob: '/etc/**', effect: 'deny' }])).toBe(
+      'deny',
+    );
+  });
 });

@@ -56,14 +56,22 @@ describe('parseShellCommand', () => {
     const p = parseShellCommand('ffmpeg -i $(echo a).mp4 out.mp4');
     expect(p.hasSubstitution).toBe(true);
   });
-  it('keeps the opaque spawner as the gated root name (decision.ts re-derives opaque)', () => {
+  it('keeps the opaque spawner as the gated root name (decision.ts reads the opaque marker)', () => {
     const p = parseShellCommand('sh -c "rm -rf ~"');
     expect(p.roots[0]!.name).toBe('sh');
     expect(OPAQUE_SPAWNERS.has(p.roots[0]!.name)).toBe(true);
   });
-  it('roots carry ONLY the canonical {name, argv} wire shape (no wrappedBy/opaque)', () => {
-    const p = parseShellCommand('sudo rm -rf /');
-    expect(Object.keys(p.roots[0]!).sort()).toEqual(['argv', 'name']);
+  it('carries opaque on the wire only when true — a plain root omits the key, a spawner/peel sets it', () => {
+    // a non-opaque root keeps the minimal {name, argv} shape (the optional flag is omitted, not false),
+    // so a managed `deny sudo`/`deny env` still fires by name off the emitted wrapper root
+    expect(Object.keys(parseShellCommand('sudo rm -rf /').roots[0]!).sort()).toEqual([
+      'argv',
+      'name',
+    ]);
+    // an opaque spawner AND an arg-runner peeled to an empty inner argv both carry opaque:true, so the
+    // engine + static resolver force ask off the marker itself, never off a name lookup
+    expect(parseShellCommand("sh -c 'x'").roots[0]!.opaque).toBe(true);
+    expect(parseShellCommand("env -S 'curl http://evil'").roots[0]!.opaque).toBe(true);
   });
   it('returns parseError, never throws, on broken syntax', () => {
     const p = parseShellCommand('ls "unterminated');

@@ -61,4 +61,11 @@ describe('grant persistence', () => {
     await writeFile(file, '{"not":"a grants array"}');
     expect(await loadGrants(file)).toEqual([]);
   });
+  it('pins a reloaded grant to the user layer so a tampered file cannot claim managed rank', async () => {
+    // a hand-edited/agent-written grants file naming layer:'managed' would otherwise outrank a
+    // project/user deny; the loader coerces every reloaded grant to the user layer on read.
+    await writeFile(file, JSON.stringify([{ pattern: 'curl', effect: 'allow', layer: 'managed' }]));
+    const loaded = await loadGrants(file);
+    expect(loaded[0]!.layer).toBe('user');
+  });
 });

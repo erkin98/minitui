@@ -67,6 +67,8 @@ export function createPendingChannel(): PendingChannel {
     disposeAll(reason) {
       for (const w of waiters) w.resolve({ kind: 'reject', feedback: reason });
       waiters.length = 0;
+      // drop queued-but-unshown requests too, so a later re-subscribe can't replay a disposed consent
+      buffer.length = 0;
     },
   };
 }

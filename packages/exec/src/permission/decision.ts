@@ -1,6 +1,6 @@
 import type { ParsedCommand, CommandRoot, PermissionRule } from '@minitui/types';
 import { effectFor, matchedRule, type RuleSet } from './rules.js';
-import { OPAQUE_SPAWNERS, STDIN_RUNNERS, isQualifiedPath } from './shell/wrappers.js';
+import { STDIN_RUNNERS, isQualifiedPath } from './shell/wrappers.js';
 import { defaultResolveExecutable, type ResolveExecutable } from './resolve-exec.js';
 
 // Per-tool arg semantics — a hardening for the two highest-value safelisted tools (git + ffmpeg),
@@ -75,9 +75,12 @@ export function identityMismatch(
 //   else any reason to ask (parse error, substitution, opaque spawner, missing allow) -> ask
 //   else (all roots explicitly allowed, nothing forces ask) -> allow
 //
-// opaque-spawner is re-derived here from the root NAME — the canonical CommandRoot wire shape
-// carries only {name, argv}, so `sh`/`eval`/`source` as a gated root name forces ask even if a
-// rule allows that spawner (the quoted payload is unparseable, never strip-and-trust).
+// An opaque root (roots.ts sets opaque:true on a spawner like `sh -c` or on a wrapper peeled to an
+// empty inner command like `env -S 'curl …'`) forces ask even when a rule allows that name — the
+// quoted payload is unparseable, never strip-and-trust. This branch is LOAD-BEARING and NOT redundant
+// with the engine's YOLO check: an operator `allow npx`/`allow env`/`allow sh` rule makes the opaque
+// root's effect `allow`, and the engine short-circuits on an `allow` verdict BEFORE its YOLO
+// `uncertain` block runs, so the opaque close must ALSO live here.
 // The deny-first triad plus the three allow->ask hardenings (trusted-basename, per-tool arg
 // semantics, grant-identity) are one linear security decision; splitting them would scatter the
 // load-bearing deny-first order and make it harder to audit.
@@ -100,7 +103,7 @@ export function resolveStatic(
     const byName = effectFor(rules, root.name);
     const effect = byArgv ?? byName;
     if (effect === 'deny') return 'deny'; // deny short-circuits, beats any specific allow
-    if (OPAQUE_SPAWNERS.has(root.name)) {
+    if (root.opaque === true) {
       sawAsk = true;
       allAllowed = false;
       continue;
