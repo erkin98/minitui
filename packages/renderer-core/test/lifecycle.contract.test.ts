@@ -60,7 +60,7 @@ describe('lifecycle', () => {
         seen.push(e);
       },
     };
-    // consent 'ask' is a first-class awaiting phase (ledger §Z10), not smuggled through progress
+    // consent 'ask' is a first-class awaiting phase, not smuggled through progress
     emitter.emit({
       phase: 'awaiting',
       actionName: 'merge',

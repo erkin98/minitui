@@ -351,6 +351,16 @@ const noVitestReplacementApi = {
   },
 };
 
+// The test-file globs the replacement-mock policy covers, shared verbatim by eslint.config.js
+// (its test-rules + disableTypeChecked blocks) and scripts/lint-test-policy.mjs so all three
+// stay identical by construction — every TS test extension, .mts/.cts included, is in scope.
+export const TEST_FILE_GLOBS = [
+  '**/*.test.{ts,tsx,mts,cts}',
+  '**/*.spec.{ts,tsx,mts,cts}',
+  '**/test/**/*.{ts,tsx,mts,cts}',
+  '**/__tests__/**/*.{ts,tsx,mts,cts}',
+];
+
 export const policyPlugin = {
   rules: {
     'no-restricted-capability-load': noRestrictedCapabilityLoad,

@@ -1,0 +1,47 @@
+{
+  "name": "@minitui/exec",
+  "version": "0.0.0",
+  "private": false,
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "catalog:",
+    "@cfworker/json-schema": "catalog:",
+    "@minitui/renderer-core": "workspace:*",
+    "@minitui/sanitizer": "workspace:*",
+    "@minitui/types": "workspace:*",
+    "@modelcontextprotocol/client": "catalog:",
+    "tree-sitter-bash": "catalog:",
+    "web-tree-sitter": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-import": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "bundle-grammars": "node ../../scripts/bundle-grammars.mjs",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}

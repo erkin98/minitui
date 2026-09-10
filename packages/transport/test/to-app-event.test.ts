@@ -83,6 +83,29 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     });
   });
 
+  it('maps TOOL_CALL_START, renaming the wire toolCallName to the internal toolName', () => {
+    // The producer emits TOOL_CALL_START carrying toolCallId + toolCallName; the consumer half
+    // renames toolCallName -> toolName (mirroring tool-result). Before this variant existed the
+    // event fell through to { kind: 'passthrough', rawType: 'TOOL_CALL_START' }.
+    const ev = toAppEvent({
+      type: EventType.TOOL_CALL_START,
+      toolCallId: 't1',
+      toolCallName: 'merge',
+    });
+    expect(ev).toEqual({ kind: 'tool-start', toolCallId: 't1', toolName: 'merge' });
+  });
+
+  it('rejects TOOL_CALL_START when toolCallId or toolCallName is missing', () => {
+    expect(toAppEvent({ type: EventType.TOOL_CALL_START, toolCallId: 't1' })).toMatchObject({
+      kind: 'run-error',
+      retriable: false,
+    });
+    expect(toAppEvent({ type: EventType.TOOL_CALL_START, toolCallName: 'merge' })).toMatchObject({
+      kind: 'run-error',
+      retriable: false,
+    });
+  });
+
   it('rejects TOOL_CALL_RESULT when toolName or isError is missing', () => {
     const base = {
       type: EventType.TOOL_CALL_RESULT,
@@ -210,7 +233,7 @@ describe('toAppEvent (single normalization chokepoint)', () => {
   });
 
   it('lets a non-retriable code override an explicit retriable true wire flag', () => {
-    // A Slice-2+ remote wire could set retriable:true on a ContextOverflow; the derived
+    // A future remote wire could set retriable:true on a ContextOverflow; the derived
     // non-retriable floor MUST win so a context-overflow error can never re-feed.
     const ev = toAppEvent({
       type: EventType.RUN_ERROR,

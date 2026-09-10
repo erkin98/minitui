@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist-types",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist-types/.tsbuildinfo",
+    "jsx": "react-jsx"
+  },
+  "references": [
+    { "path": "../types" },
+    { "path": "../renderer-core" },
+    { "path": "../catalog" },
+    { "path": "../sanitizer" }
+  ],
+  "include": ["src"]
+}

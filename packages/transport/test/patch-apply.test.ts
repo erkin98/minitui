@@ -308,11 +308,14 @@ describe('applyStatePatch', () => {
     ).toThrow(PatchError);
   });
 
-  it('applies a large number of move operations well inside a generous time budget', () => {
-    // Regression guard for the earlier full-document clone+parse per move operation: with a
-    // few-thousand-element array and the maximum-size patch, that shape cost seconds. Validating
-    // each move's destination in time proportional to pointer depth (not document size) keeps
-    // this near-instant regardless of array size.
+  it('clones the whole document once at ingress and never per move', () => {
+    // Regression guard for the earlier full-document structuredClone + engine-apply + schema-parse
+    // on every move: that shape re-materialized the entire document per move, so an untrusted
+    // delta carrying many moves cost proportional to move-count times document size. The fix
+    // projects each removal along the target pointer path and never re-derives the document, so
+    // the whole document is structure-cloned exactly ONCE at ingress no matter how many moves the
+    // patch carries. Counting whole-document clones is deterministic where the old wall-clock
+    // threshold was flaky, and it reds the instant per-move cloning returns.
     const size = 5000;
     const state: JsonValue = { items: Array.from({ length: size }, (_, index) => index) };
     const moveCount = 256; // JSON_RESOURCE_LIMITS.maxPatchOperations
@@ -322,12 +325,33 @@ describe('applyStatePatch', () => {
       path: `/items/${size - 1}`,
     }));
 
-    const started = performance.now();
-    const result = applyStatePatch(state, patch);
-    const elapsedMs = performance.now() - started;
+    // A real, delegating structuredClone that counts clones of the whole { items } document and
+    // passes everything else (the small per-operation clones) straight through to the genuine
+    // implementation. Not a replacement double: the real structuredClone still does the work.
+    const realStructuredClone = globalThis.structuredClone;
+    const isWholeDocument = (value: unknown): boolean =>
+      typeof value === 'object' &&
+      value !== null &&
+      'items' in value &&
+      Array.isArray((value as { items: unknown }).items) &&
+      (value as { items: unknown[] }).items.length >= size;
+    let wholeDocumentClones = 0;
+    globalThis.structuredClone = <T>(value: T): T => {
+      if (isWholeDocument(value)) wholeDocumentClones += 1;
+      return realStructuredClone(value);
+    };
+
+    let result: JsonValue;
+    try {
+      result = applyStatePatch(state, patch);
+    } finally {
+      globalThis.structuredClone = realStructuredClone;
+    }
 
     expect(Array.isArray((result as { items: unknown }).items)).toBe(true);
     expect((result as { items: unknown[] }).items.length).toBe(size);
-    expect(elapsedMs).toBeLessThan(1000);
+    // Exactly one whole-document clone (the ingress defensive copy). Re-introducing a per-move
+    // full-document clone makes this scale with moveCount, so a value above 1 fails here.
+    expect(wholeDocumentClones).toBe(1);
   });
 });

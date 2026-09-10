@@ -39,3 +39,27 @@ function renderUnhandled(x: unknown): string {
 export function assertNever(x: never, context?: string): never {
   throw new Error(`unhandled${context ? ` ${context}` : ''}: ${renderUnhandled(x)}`);
 }
+
+/**
+ * The three-class catalog field-visibility axis (WHERE a builder-owned field is
+ * callable), ordered narrowest-to-widest exposure. Owned here as the single source so
+ * @minitui/catalog and @minitui/agent-core reference ONE definition instead of
+ * hand-mirroring it — a shape drift between the two then fails `tsc -b`. This is the
+ * CATALOG axis, distinct from agent-core's model-visibility CHANNEL axis
+ * (localOnly | modelVisible | modelOnly); the two vocabularies never unify.
+ */
+export type VisibilityClass = 'localOnly' | 'clientOnly' | 'remoteOnly';
+
+/**
+ * The minimal built-catalog view the model-visibility adapter reads: the allowlist
+ * names plus the RESOLVED per-name visibility index (a secret already folded to
+ * localOnly, the clientOnly default already applied). @minitui/catalog's MinituiCatalog
+ * extends this and agent-core's adapter consumes it — so the cli hands a built catalog
+ * across the seam without agent-core importing the catalog package.
+ */
+export interface CatalogVisibilitySource {
+  readonly componentNames: readonly string[];
+  readonly actionNames: readonly string[];
+  readonly visibilityOf: (component: string) => VisibilityClass | undefined;
+  readonly callableFromOf: (action: string) => VisibilityClass | undefined;
+}

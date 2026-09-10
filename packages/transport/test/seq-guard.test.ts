@@ -46,7 +46,7 @@ describe('seq-guard', () => {
     expect(g.checkDelta(2)).toEqual({ ok: true });
   });
 
-  // A fresh snapshot is a full re-baseline (Slice-2 resync rebuilds the baseline):
+  // A fresh snapshot is a full re-baseline (a resync rebuilds the baseline):
   // its delta watermark must reset, never retain the PREVIOUS baseline's high-water mark.
   it('resets the delta watermark on a seq-less re-baseline (no stale high-water mark)', () => {
     const g = createSeqGuard();

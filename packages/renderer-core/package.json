@@ -2,8 +2,10 @@
   "name": "@minitui/renderer-core",
   "version": "0.0.0",
   "private": false,
+  "dependencies": {
+    "@minitui/types": "workspace:*"
+  },
   "devDependencies": {
-    "@minitui/types": "workspace:*",
     "eslint": "catalog:",
     "eslint-plugin-import": "catalog:",
     "tsup": "catalog:",
@@ -24,9 +26,6 @@
     "dist"
   ],
   "main": "./dist/index.js",
-  "peerDependencies": {
-    "@minitui/types": "workspace:*"
-  },
   "scripts": {
     "build": "tsup",
     "lint": "eslint .",
