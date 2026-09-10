@@ -5,7 +5,9 @@
   "globalDependencies": [
     "eslint.config.js",
     "config/eslint-boundaries.js",
+    "config/eslint-policy.js",
     "tsconfig.base.json",
+    "tsconfig.json",
     ".syncpackrc.json",
     "pnpm-workspace.yaml",
     "vitest.shared.ts",

@@ -35,7 +35,7 @@ describe('DispatchContext', () => {
     expect(local.permission).toBeUndefined();
   });
 
-  it('carries an optional onEvent correlation callback for exec progress (§Z2)', () => {
+  it('carries an optional onEvent correlation callback for exec progress', () => {
     const seen: ExecEvent[] = [];
     const ctx: DispatchContext = {
       actionName: 'merge',
@@ -45,7 +45,7 @@ describe('DispatchContext', () => {
       elementKey: 'merge-button',
       onEvent: (ev) => seen.push(ev),
     };
-    // the dispatcher streams exec progress through this seam (§Z2)
+    // the dispatcher streams exec progress through this seam
     ctx.onEvent?.({ kind: 'progress', value: 0.5 });
     expect(seen).toEqual([{ kind: 'progress', value: 0.5 }]);
   });

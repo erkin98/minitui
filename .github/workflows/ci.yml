@@ -1,0 +1,42 @@
+# Minimal single-lane CI. A later change brings the full OS x Node-22/24 matrix, the
+# hygiene split, the e2e workflow, and the pack/coverage/audit lanes.
+# This one ubuntu/node-22 gate runs the local pre-push chain so a push or PR cannot
+# reach a type-broken / lint-broken / test-broken tree while there is no full CI yet.
+# Branch trigger follows the repo convention: on.push targets `master` (the default);
+# feature-branch work gates through a pull_request. (Never key a trigger to `main` —
+# there is no `main` ref, so it would silently never fire.)
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      MINITUI_NODE_RUNTIME: node-22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Warm the graph so cross-package declaration types resolve before the cold tsc -b.
+      - run: pnpm -w run build
+      - run: pnpm -w run typecheck
+      # The tsc -b composite: an import-DAG back-edge reds the PR even if eslint is misconfigured.
+      - run: pnpm -w run typecheck:tsc
+      # eslint (import/no-restricted-paths is error-level) + policy-fixtures + test-policy + trace.
+      - run: pnpm -w run lint
+      - run: pnpm -w run format:check
+      - run: pnpm -w exec syncpack lint
+      - run: pnpm -w run test:all

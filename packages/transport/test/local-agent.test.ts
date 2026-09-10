@@ -67,7 +67,7 @@ describe('createLocalAgentPort', () => {
     expect(events[0]).toEqual({ kind: 'run-started', threadId: 't', runId: 'r' });
   });
 
-  it('abort() stops the stream (messageId is empty — Slice 1 never synthesizes AG-UI fields)', async () => {
+  it('abort() stops the stream (messageId is empty — the in-process path never synthesizes AG-UI fields)', async () => {
     async function* forever(_i: RunAgentInput, signal: AbortSignal): AsyncGenerator<AgentEvent> {
       let i = 0;
       while (!signal.aborted) {
@@ -297,7 +297,7 @@ describe('createLocalAgentPort', () => {
   });
 
   it('throw() rejects with the exact value passed, even when it is not an Error', async () => {
-    // §Z137-C names BOTH ports as owners of "throw(e) rejects with e verbatim". The sibling
+    // Both ports own "throw(e) rejects with e verbatim". The sibling
     // above passes an Error, whose identity a `e instanceof Error ? e : new Error(String(e))`
     // coercion preserves — so only a non-Error case can witness the contract on this port.
     const port = createLocalAgentPort(() =>

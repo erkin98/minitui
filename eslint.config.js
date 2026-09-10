@@ -3,7 +3,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
-import { policyPlugin } from './config/eslint-policy.js';
+import { policyPlugin, TEST_FILE_GLOBS } from './config/eslint-policy.js';
 
 const noDynamicFunctionGlobal = [
   'error',
@@ -13,36 +13,88 @@ const noDynamicFunctionGlobal = [
   },
 ];
 
+// The exec-moat import ban (only @minitui/exec may reach the subprocess / OS-sandbox / MCP capabilities).
+const EXEC_MOAT_IMPORT_PATHS = [
+  { name: 'child_process', message: 'Exec-moat: only @minitui/exec may import child_process.' },
+  {
+    name: 'node:child_process',
+    message: 'Exec-moat: only @minitui/exec may import child_process.',
+  },
+  {
+    name: '@anthropic-ai/sandbox-runtime',
+    message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
+  },
+  {
+    name: '@modelcontextprotocol/client',
+    message: 'Exec-moat: only @minitui/exec may import the MCP client.',
+  },
+];
+const EXEC_MOAT_IMPORT_PATTERNS = [
+  {
+    group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
+    message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
+  },
+];
+// The SDK wall (only @minitui/agent-core may import the model SDK — the parallel of the exec-moat, and a
+// PR-6 deliverable). Banned everywhere the wide block below applies; agent-core is re-permitted by
+// agentCoreImportRule (which drops these paths, keeping the exec-moat ones). Kept in the SAME
+// no-restricted-imports rule as the exec-moat paths because ESLint flat config replaces (not merges) a
+// repeated rule across overlapping file globs — two separate blocks would clobber each other's paths.
+const AI_SDK_IMPORT_PATHS = [
+  { name: 'ai', message: 'SDK wall: only @minitui/agent-core may import the model SDK (ai).' },
+  {
+    name: '@ai-sdk/anthropic',
+    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/*.',
+  },
+];
+const AI_SDK_IMPORT_PATTERNS = [
+  {
+    group: ['@ai-sdk/*'],
+    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/* modules.',
+  },
+];
+// The renderer swap-boundary wall (only @minitui/renderer-ink + @minitui/cli may import React/Ink and the
+// Ink renderer — the single place the declarative spec becomes a real terminal UI; a PR-7 deliverable).
+// @json-render/CORE is deliberately ABSENT (spec/catalog/renderer-core adopt it); only @json-render/INK
+// (the React binding) is walled. Banned everywhere the wide block applies; rendererInkImportRule
+// re-permits it for renderer-ink (and cli). Same-rule placement + the clobber note above apply.
+const REACT_INK_IMPORT_PATHS = [
+  { name: 'react', message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.' },
+  {
+    name: 'react-dom',
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
+  },
+  { name: 'ink', message: 'Swap boundary: only @minitui/renderer-ink + cli may import Ink.' },
+  {
+    name: '@json-render/ink',
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import @json-render/ink.',
+  },
+];
+const REACT_INK_IMPORT_PATTERNS = [
+  {
+    group: ['react/*'],
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
+  },
+  { group: ['ink/*'], message: 'Swap boundary: only @minitui/renderer-ink + cli may import Ink.' },
+  // NOTE: the wall bans the REACT root `@json-render/ink` (in PATHS above) but NOT its `/server`
+  // subpath — `@json-render/ink/server` is the deliberately React-FREE entry `@minitui/catalog` adopts
+  // for its schema-bridge (a load-bearing non-renderer import). A `@json-render/ink/*` pattern here
+  // would wrongly wall that off; the exact-root ban is what the swap boundary needs.
+];
+
 // Shared by both exec-moat capability blocks below (the widened glob over real code and
 // the narrow list over the boundary-fixture files that exercise this wall) so the two
-// stay identical by construction instead of by manual upkeep.
+// stay identical by construction instead of by manual upkeep. The import ban carries BOTH the
+// exec-moat paths and the SDK-wall paths (see AI_SDK_IMPORT_PATHS above).
 const execMoatCapabilityRules = {
   'no-restricted-imports': [
     'error',
     {
-      paths: [
-        {
-          name: 'child_process',
-          message: 'Exec-moat: only @minitui/exec may import child_process.',
-        },
-        {
-          name: 'node:child_process',
-          message: 'Exec-moat: only @minitui/exec may import child_process.',
-        },
-        {
-          name: '@anthropic-ai/sandbox-runtime',
-          message: 'Exec-moat: only @minitui/exec may import the OS sandbox runtime.',
-        },
-        {
-          name: '@modelcontextprotocol/client',
-          message: 'Exec-moat: only @minitui/exec may import the MCP client.',
-        },
-      ],
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
       patterns: [
-        {
-          group: ['@modelcontextprotocol/*', '@anthropic-ai/sandbox-runtime/*'],
-          message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
-        },
+        ...EXEC_MOAT_IMPORT_PATTERNS,
+        ...AI_SDK_IMPORT_PATTERNS,
+        ...REACT_INK_IMPORT_PATTERNS,
       ],
     },
   ],
@@ -50,6 +102,34 @@ const execMoatCapabilityRules = {
   'no-eval': 'error',
   'no-implied-eval': 'error',
   'no-restricted-globals': noDynamicFunctionGlobal,
+};
+
+// @minitui/agent-core is the ONE package permitted the model SDK. Re-set no-restricted-imports (in a
+// block placed AFTER the wide exec-moat block, so it wins for agent-core) to DROP the SDK-wall ban only —
+// keeping child_process / MCP / sandbox AND React/Ink banned (agent-core is not a renderer and reaches
+// execution only through the injected ToolDispatchPort, never a subprocess directly).
+const agentCoreImportRule = {
+  'no-restricted-imports': [
+    'error',
+    {
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
+      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+    },
+  ],
+};
+
+// @minitui/renderer-ink + @minitui/cli are the ONLY packages permitted React/Ink (the swap boundary).
+// Re-set no-restricted-imports (AFTER the wide block, so it wins for them) to DROP the React/Ink ban only —
+// keeping child_process / MCP / sandbox AND the model SDK banned (a renderer is not the exec moat and not
+// the agent loop).
+const rendererInkImportRule = {
+  'no-restricted-imports': [
+    'error',
+    {
+      paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS],
+      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...AI_SDK_IMPORT_PATTERNS],
+    },
+  ],
 };
 
 // Local-only ignores (untracked working-copy trees). This checkout can double as a
@@ -61,6 +141,25 @@ try {
   ({ default: localIgnores } = await import('./eslint.ignores.local.mjs'));
 } catch {
   localIgnores = [];
+}
+
+// Floor on the local-only ignores loaded above: this config and eslint.ignores.local.mjs are
+// both untracked, so an entry there could silently disable linting on a real repo tree — the
+// vacuous-gate failure the policy fixtures exist to prevent, one level up. Reject any local
+// ignore that targets a tracked tree; the repo's own intentional ignores live in the config's
+// ignores block below, not here.
+// Match a repo tree as a path SEGMENT anywhere in the glob, not just at the start — so a
+// non-anchored form (`**/packages/**`) or an absolute path (`/home/.../packages/**`) that would
+// still ignore tracked files is flagged, not only the bare `packages/**` form.
+const REPO_TREES = /(^|\/)(packages|apps|test|scripts|config)(\/|$)/;
+// Positive control (lint-test-policy.mjs idiom): prove the floor can fire on BOTH the anchored
+// and the embedded-segment forms, else a broken pattern would let a real overreach pass green.
+if (!REPO_TREES.test('packages/**') || !REPO_TREES.test('**/packages/**')) {
+  throw new Error('eslint.ignores.local repo-tree floor is vacuous');
+}
+const overreach = localIgnores.filter((p) => typeof p !== 'string' || REPO_TREES.test(p));
+if (overreach.length) {
+  throw new Error(`eslint.ignores.local.mjs may not ignore a repo tree: ${overreach.join(', ')}`);
 }
 
 export default tseslint.config(
@@ -92,7 +191,7 @@ export default tseslint.config(
   // other half — replacement-mock bans; this is the type/async half.)
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
+    files: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'],
     plugins: { import: importPlugin, minitui: policyPlugin },
     languageOptions: {
       parserOptions: {
@@ -190,13 +289,12 @@ export default tseslint.config(
     //                 Kept as the SOLE no-restricted-imports / no-restricted-capability-load
     //                 cover for any future top-level test file — the later test-file block
     //                 carries only eval / globals / vitest-replacement-api, not those two.
-    files: ['packages/**/*.{ts,tsx,mts}', 'apps/**/*.{ts,tsx,mts}', 'test/**/*.{ts,tsx,mts}'],
-    ignores: [
-      'packages/exec/**',
-      'packages/*/scripts/**',
-      'scripts/**',
-      'test/eslint-boundary-fixture/**',
+    files: [
+      'packages/**/*.{ts,tsx,mts,cts}',
+      'apps/**/*.{ts,tsx,mts,cts}',
+      'test/**/*.{ts,tsx,mts,cts}',
     ],
+    ignores: ['packages/*/scripts/**', 'scripts/**', 'test/eslint-boundary-fixture/**'],
     rules: execMoatCapabilityRules,
   },
   {
@@ -213,8 +311,98 @@ export default tseslint.config(
       'test/eslint-boundary-fixture/illegal-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-implied-eval-capability.ts',
       'test/eslint-boundary-fixture/illegal-test-file-capability.test.ts',
+      'test/eslint-boundary-fixture/illegal-ai-sdk-import.ts',
+      'test/eslint-boundary-fixture/illegal-react-import.ts',
     ],
     rules: execMoatCapabilityRules,
+  },
+  {
+    // @minitui/agent-core is the ONE package permitted the model SDK — re-permit `ai`/`@ai-sdk/*` here
+    // (this block is AFTER the wide exec-moat block, so it wins) while keeping the exec-moat bans. The
+    // other execMoatCapabilityRules keys (capability-load / eval / globals) are separate rule ids that
+    // merge, so only no-restricted-imports is overridden.
+    files: ['packages/agent-core/**/*.{ts,tsx,mts}'],
+    rules: agentCoreImportRule,
+  },
+  {
+    // @minitui/renderer-ink + @minitui/cli are the ONLY packages permitted React/Ink (the swap
+    // boundary) — re-permit react/ink/@json-render/ink here (AFTER the wide block, so it wins) while
+    // keeping the exec-moat + SDK-wall bans.
+    files: ['packages/renderer-ink/**/*.{ts,tsx,mts}', 'packages/cli/**/*.{ts,tsx,mts}'],
+    rules: rendererInkImportRule,
+  },
+  // (a) @minitui/exec is the ONE package permitted the exec-moat capabilities (child_process / the
+  // OS sandbox runtime / the MCP client). AFTER the wide capability block (so it wins), DROP only the
+  // exec-moat import bans while KEEPING the model SDK and React/Ink banned — exec is neither the agent
+  // loop nor a renderer. no-eval / no-implied-eval / no-restricted-globals / capability-load come from
+  // the wide block (exec is no longer in its ignores). Mirrors agentCoreImportRule / rendererInkImportRule.
+  {
+    files: [
+      'packages/exec/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/exec-walls/react-import.ts',
+      'test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...AI_SDK_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
+          patterns: [...AI_SDK_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+        },
+      ],
+    },
+  },
+  // (b) intra-exec child_process wall: only exec/ (the spawner) and sandbox/ (the wrapper) may reach
+  // the builtin; permission/, mcp/, dispatch/ may NOT — dispatch/ routes through the sandbox-wrapped
+  // runner, mcp/ through the sandbox-wrapped stdio transport. This REPLACES (a) for these files, so it
+  // re-carries the SDK + React/Ink bans TOGETHER with the two child_process paths (a superset) — but
+  // NOT the MCP/sandbox paths (mcp/ legitimately imports the MCP client). child_process is a NODE
+  // BUILTIN, so the biting rule is no-restricted-imports (import/no-restricted-paths can never match a
+  // bare builtin — a vacuous gate here). The no-restricted-syntax arm closes the dynamic forms.
+  {
+    files: [
+      'packages/exec/src/permission/**/*.{ts,tsx,mts}',
+      'packages/exec/src/mcp/**/*.{ts,tsx,mts}',
+      'packages/exec/src/dispatch/**/*.{ts,tsx,mts}',
+      'test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts',
+      'test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'child_process',
+              message:
+                'Only exec/ and sandbox/ may spawn; route through the sandbox-wrapped runner.',
+            },
+            {
+              name: 'node:child_process',
+              message:
+                'Only exec/ and sandbox/ may spawn; route through the sandbox-wrapped runner.',
+            },
+            ...AI_SDK_IMPORT_PATHS,
+            ...REACT_INK_IMPORT_PATHS,
+          ],
+          patterns: [...AI_SDK_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'ImportExpression[source.value=/^(node:)?child_process$/]',
+          message:
+            'Only exec/ and sandbox/ may spawn; dynamic import of child_process is walled — route through the sandbox-wrapped runner.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='require'] > Literal[value=/^(node:)?child_process$/]",
+          message:
+            'Only exec/ and sandbox/ may spawn; require of child_process is walled — route through the sandbox-wrapped runner.',
+        },
+      ],
+    },
   },
   {
     files: [
@@ -226,12 +414,7 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      '**/*.test.{ts,tsx}',
-      '**/*.spec.{ts,tsx}',
-      '**/test/**/*.{ts,tsx}',
-      '**/__tests__/**/*.{ts,tsx}',
-    ],
+    files: TEST_FILE_GLOBS,
     rules: {
       'minitui/no-vitest-replacement-api': 'error',
       'no-eval': 'error',
@@ -257,8 +440,7 @@ export default tseslint.config(
       'vitest.determinism.test.ts',
       '**/tsup.config.ts',
       '**/vitest.config.ts',
-      '**/test/**/*.{ts,tsx}',
-      '**/__tests__/**/*.{ts,tsx}',
+      ...TEST_FILE_GLOBS,
     ],
     ...tseslint.configs.disableTypeChecked,
   },

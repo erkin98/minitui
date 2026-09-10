@@ -8,6 +8,7 @@ export const CONSUMED_KINDS: ReadonlySet<EventType> = createReadonlySet([
   EventType.RUN_FINISHED,
   EventType.RUN_ERROR,
   EventType.TEXT_MESSAGE_CONTENT,
+  EventType.TOOL_CALL_START,
   EventType.TOOL_CALL_RESULT,
   EventType.STATE_SNAPSHOT,
   EventType.STATE_DELTA,

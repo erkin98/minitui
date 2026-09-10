@@ -1,6 +1,13 @@
 import importPlugin from 'eslint-plugin-import';
 import tseslint from 'typescript-eslint';
 
+// SCOPE: this package-local flat config REPLACES the repo-root eslint.config.js when lint runs
+// from this directory (`pnpm --filter @minitui/renderer-core lint`), so it carries ONLY the
+// import-boundary ban below. The repo-root `pnpm lint` is the AUTHORITATIVE gate — it layers the
+// type-aware, acyclic-DAG, complexity, and naming rules over every package, and is what the
+// pre-commit gates run. The per-package `--filter` lint is a fast boundary-only convenience, not
+// the complete check; rely on root `pnpm lint` for full coverage.
+
 // Package-local EXTERNAL-module ban: the bare npm specifiers no-restricted-paths
 // cannot match (they have no path under ./packages). Everything React/Ink/json-render-ink/
 // OpenTUI/Node-exec/MCP/sandbox/AI-SDK is forbidden inside renderer-core — an ERROR, not a warning.

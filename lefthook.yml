@@ -16,7 +16,7 @@ pre-commit:
       # dir (helpers/fixtures/setup the script also scans), so pre-commit covers the same
       # set as the CI witness. Single-string brace glob with the alternatives inlined —
       # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).
-      glob: '{*.test.ts,*.test.tsx,**/test/**/*.ts,**/test/**/*.tsx,**/__tests__/**/*.ts,**/__tests__/**/*.tsx}'
+      glob: '{*.test.ts,*.test.tsx,*.test.mts,*.test.cts,**/test/**/*.ts,**/test/**/*.tsx,**/test/**/*.mts,**/test/**/*.cts,**/__tests__/**/*.ts,**/__tests__/**/*.tsx,**/__tests__/**/*.mts,**/__tests__/**/*.cts}'
       run: pnpm run lint:test-policy
     syncpack:
       glob: '**/package.json'
@@ -28,17 +28,35 @@ pre-push:
     lint:
       # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
       # rule change or a file touched outside the hook can leave the tree reding with
-      # every commit green. No CI backstop exists until plan 17 lands .github/workflows.
+      # every commit green. No CI backstop exists yet (no .github/workflows).
       # First in the sequence because parallel:false makes order execution order, and the
       # cheapest failure should surface before the multi-minute test/build/pack commands.
       run: pnpm run lint
     format:
       run: pnpm run format:check
     policy-fixtures:
-      # The 52-fixture proof that the capability/replacement-mock AST rules actually
+      # The policy-fixture proof that the capability/replacement-mock AST rules actually
       # bite. Enforced here, not only in the un-hooked `pnpm lint`, so
       # a regressed rule cannot reach the remote green.
       run: pnpm run lint:policy-fixtures
+    syncpack:
+      # Repo-wide version-consistency check. Pre-commit's copy fires only when a
+      # package.json is staged, so manifest drift committed with --no-verify would
+      # otherwise reach the remote unchecked. Cheapest of the type/version gates,
+      # so it runs before them.
+      run: pnpm exec syncpack lint
+    typecheck:
+      # Same turbo typecheck as pre-commit, re-run repo-wide as the last gate before
+      # the remote: a commit made with --no-verify, or a tree drifted since the last
+      # hook run, must not push type errors.
+      run: pnpm run typecheck
+    typecheck-composite:
+      # The composite build (tsc -b) — the second cycle detector across project
+      # references — runs in no other hook, so this is its only enforcement point.
+      # Ordered after typecheck above: its turbo ^build produces the upstream
+      # dist/index.d.ts that exports resolve to; a cold raw tsc -b fails because
+      # tsc emits to dist-types/, never dist/.
+      run: pnpm run typecheck:tsc
     test:
       run: pnpm run test:all
     coverage:

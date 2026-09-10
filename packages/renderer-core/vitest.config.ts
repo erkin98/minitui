@@ -5,7 +5,7 @@ export default mergeConfig(
   sharedVitestConfig,
   defineProject({
     test: {
-      name: 'renderer-core',
+      name: '@minitui/renderer-core',
       environment: 'node',
       include: ['test/**/*.test.ts'],
     },

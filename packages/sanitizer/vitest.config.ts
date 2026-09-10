@@ -5,7 +5,7 @@ export default mergeConfig(
   sharedVitestConfig,
   defineProject({
     test: {
-      name: 'sanitizer',
+      name: '@minitui/sanitizer',
       environment: 'node',
       include: ['test/**/*.test.ts'],
     },

@@ -1,0 +1,46 @@
+{
+  "name": "@minitui/renderer-ink",
+  "version": "0.0.0",
+  "private": false,
+  "dependencies": {
+    "@json-render/core": "catalog:",
+    "@json-render/ink": "catalog:",
+    "@minitui/catalog": "workspace:*",
+    "@minitui/renderer-core": "workspace:*",
+    "@minitui/sanitizer": "workspace:*",
+    "@minitui/types": "workspace:*",
+    "fast-json-patch": "catalog:",
+    "ink": "catalog:",
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "eslint": "catalog:",
+    "ink-testing-library": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}

@@ -5,7 +5,7 @@ export default mergeConfig(
   sharedVitestConfig,
   defineProject({
     test: {
-      name: 'transport',
+      name: '@minitui/transport',
       environment: 'node',
       include: ['test/**/*.test.ts'],
     },

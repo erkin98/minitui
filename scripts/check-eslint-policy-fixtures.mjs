@@ -11,6 +11,11 @@ const expectedByFile = new Map([
   // reaching package source, which is the state a cold clone is in without the root
   // tsconfig `paths` mapping.
   ['test/eslint-boundary-fixture/illegal-by-name-import.ts', ['import/no-restricted-paths']],
+  // Exercises the from './packages' + `except` zone shape all real package zones use — the
+  // two entries above prove only bare file-target zones with no except list. The boundaries
+  // config re-targets the live spec zone at this fixture; sanitizer sits outside that
+  // zone's allowed set, so exactly one restricted-paths error is expected.
+  ['test/eslint-boundary-fixture/illegal-package-zone-import.ts', ['import/no-restricted-paths']],
   [
     'test/eslint-boundary-fixture/illegal-dynamic-capability.ts',
     ['minitui/no-restricted-capability-load'],
@@ -42,12 +47,27 @@ const expectedByFile = new Map([
   ['test/eslint-boundary-fixture/illegal-eval-capability.ts', ['no-eval']],
   ['test/eslint-boundary-fixture/illegal-implied-eval-capability.ts', ['no-implied-eval']],
   ['test/eslint-boundary-fixture/illegal-test-file-capability.test.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/illegal-ai-sdk-import.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/illegal-react-import.ts', ['no-restricted-imports']],
+  // The exec import walls: (a) exec keeps the SDK + React/Ink bans, (b) only exec/+sandbox/ may
+  // reach child_process (static + dynamic forms). Each fixture fires exactly the rule its block
+  // carries; an unregistered fixture would red this completeness gate.
+  ['test/eslint-boundary-fixture/exec-walls/react-import.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts', ['no-restricted-imports']],
+  ['test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts', ['no-restricted-syntax']],
   [
     'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
     ['minitui/sanitizer-local-imports-only'],
   ],
   [
     'test/eslint-boundary-fixture/illegal-vitest-alias.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  // The .mts witness: proves the widened test-file glob reaches an .mts test, so the
+  // replacement-API ban covers ESM/CJS test extensions, not only .ts/.tsx.
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-mock.test.mts',
     ['minitui/no-vitest-replacement-api'],
   ],
   [
@@ -228,7 +248,7 @@ const tsFilesUnder = (rel) =>
   readdirSync(join(root, rel), { withFileTypes: true }).flatMap((entry) => {
     if (entry.isDirectory())
       return BUILD_OUTPUT.has(entry.name) ? [] : tsFilesUnder(`${rel}/${entry.name}`);
-    return entry.name.endsWith('.ts') ? [`${rel}/${entry.name}`] : [];
+    return /\.(ts|tsx|mts|cts)$/.test(entry.name) ? [`${rel}/${entry.name}`] : [];
   });
 
 const fixtureDirs = FIXTURE_ROOTS.flatMap((rootDir) =>
