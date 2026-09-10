@@ -70,4 +70,16 @@ describe('pending channel', () => {
     ch.disposeAll('shutting down');
     expect(await p).toEqual({ kind: 'reject', feedback: 'shutting down' });
   });
+
+  it('disposeAll also clears the buffer so a reconnecting subscriber never re-sees a disposed request', async () => {
+    // disposeAll must drop the buffered request, not only reject the waiter — otherwise a UI that
+    // subscribes after a dispose replays the stale consent as if it were still live.
+    const ch = createPendingChannel();
+    ch.ask(req('stale'));
+    ch.disposeAll('gone');
+    ch.ask(req('fresh'));
+    const iter = ch.requests[Symbol.asyncIterator]();
+    const first = await iter.next();
+    expect(first.value!.id).toBe('fresh');
+  });
 });

@@ -8,6 +8,11 @@ export const CommandRootSchema = z
   .object({
     name: z.string(),
     argv: z.array(z.string()).readonly(),
+    // Set true (never false) on an OPAQUE root — a spawner (`sh -c`) or an arg-runner peeled to an
+    // empty inner command (`env -S 'curl …'`, bare `sudo`) — whose real payload the AST cannot see.
+    // The consumers treat it as ask, non-YOLO-liftable. Omitted on a resolvable root, so such a
+    // root's shape stays {name, argv}.
+    opaque: z.boolean().optional(),
   })
   .readonly();
 export type CommandRoot = z.infer<typeof CommandRootSchema>;

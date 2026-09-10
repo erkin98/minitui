@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,10 +16,18 @@ const exec = (resolvedCommand: string): PermissionRequest => ({
   resolvedPaths: [],
 });
 
+let savedXdg: string | undefined;
+
 beforeEach(async () => {
   // isolate the grants file per test
+  savedXdg = process.env.XDG_DATA_HOME;
   const dir = await mkdtemp(join(tmpdir(), 'minitui-engine-'));
   process.env.XDG_DATA_HOME = dir;
+});
+afterEach(() => {
+  // restore the environment so this suite does not leak XDG_DATA_HOME into sibling suites
+  if (savedXdg === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = savedXdg;
 });
 
 describe('createPermissionEngine', () => {

@@ -18,7 +18,9 @@ export function grantsFilePath(): string {
 export async function loadGrants(file = grantsFilePath()): Promise<readonly PermissionRule[]> {
   try {
     const parsed = GrantsSchema.safeParse(JSON.parse(await readFile(file, 'utf8')));
-    return parsed.success ? parsed.data : []; // corrupt => empty, never allow-everything
+    // corrupt => empty (never allow-everything); pin every persisted grant to the user layer on read
+    // so a tampered on-disk `managed`/`project` layer cannot outrank a live project/user deny.
+    return (parsed.success ? parsed.data : []).map((r) => ({ ...r, layer: 'user' as const }));
   } catch {
     return []; // missing => empty
   }

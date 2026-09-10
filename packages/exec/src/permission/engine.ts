@@ -9,7 +9,7 @@ import type {
 import { sanitize } from '@minitui/sanitizer';
 import { parseShellCommand } from './shell/roots.js';
 import { ensureParserReady } from './shell/parser.js';
-import { OPAQUE_SPAWNERS, STDIN_RUNNERS } from './shell/wrappers.js';
+import { STDIN_RUNNERS } from './shell/wrappers.js';
 import { checkHardFloor } from './hard-floor.js';
 import { resolveStatic, denyRuleFor, unsafeToolArgs, identityMismatch } from './decision.js';
 import { defaultResolveExecutable, type ResolveExecutable } from './resolve-exec.js';
@@ -153,7 +153,7 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
     //    hard-denied at step 0.5, mirroring parseError, so it is absent here.)
     const uncertain =
       parsed.roots.length === 0 ||
-      parsed.roots.some((r) => OPAQUE_SPAWNERS.has(r.name)) ||
+      parsed.roots.some((r) => r.opaque === true) || // opaque root: a spawner or a wrapper peeled to an empty inner command — the payload the AST can't see, never YOLO-lifted
       parsed.roots.some((r) => STDIN_RUNNERS.has(r.name)) || // xargs feeds its target from stdin — invisible to the name-based floor, never YOLO-lifted
       parsed.roots.some((r) => unsafeToolArgs(r)) || // git global-opt / ffmpeg net-input never YOLO-lifted
       parsed.roots.some((r) => identityMismatch(r, { rules }, resolveExecutable)); // a swapped-identity grant is host-uncertainty, never YOLO-lifted

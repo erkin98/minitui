@@ -60,12 +60,12 @@ const SECRET_PATTERNS = [
   /(^|\/)\.ssh($|\/)/,
   /(^|\/)\.aws($|\/)/,
   /(^|\/)\.gnupg($|\/)/,
-  /(^|\/)id_rsa($|$)/,
-  /(^|\/)id_ed25519($|$)/,
+  /(^|\/)id_rsa($|\/)/,
+  /(^|\/)id_ed25519($|\/)/,
   /(^|\/)\.env(\.[^/]*)?($|\/)/, // .env AND .env.local / .env.production
-  /(^|\/)\.netrc($|$)/,
-  /(^|\/)\.npmrc($|$)/,
-  /(^|\/)credentials($|$)/,
+  /(^|\/)\.netrc($|\/)/,
+  /(^|\/)\.npmrc($|\/)/,
+  /(^|\/)credentials($|\/)/,
   /\.pem($|\/)/, // any *.pem key/cert anywhere on the path
 ];
 
@@ -75,13 +75,16 @@ function isSecretPath(p: string): boolean {
 }
 
 // Normalize an rm operand so glob/relative evasions of a WHOLE home/root wipe collapse to the bare
-// target before matching: a trailing `/*` or `/.` is stripped (`rm -rf /*` wipes `/`), then the path
-// is posix-normalized (`//` -> `/`, drop a trailing slash). Subpaths of home stay subpaths (not
-// floored); only the root collapses to a floored form.
+// target before matching: reduce to the longest leading glob-free prefix — everything before the
+// first `*`, `?`, or `[` — so a nested wildcard (`/*/`, `/*/*`, `/home/*/`, `~/*/`) collapses onto the
+// root it would expand across, not just a single trailing `/*`. Then posix-normalize (`//` -> `/`,
+// drop a trailing slash). Subpaths of home stay subpaths (not floored); only the root floors.
 function normalizeRmOperand(token: string): string {
-  const stripped = normalizeCommandToken(token).replace(/\/(\*|\.)$/, '/'); // /* or /. suffix -> parent
-  if (stripped.length <= 1) return stripped;
-  return posix.normalize(stripped).replace(/(?!^)\/+$/, ''); // // -> /, drop a trailing slash (keep root /)
+  const raw = normalizeCommandToken(token);
+  const g = raw.search(/[*?[]/); // first glob metachar
+  const prefix = g === -1 ? raw : raw.slice(0, g);
+  if (prefix.length <= 1) return prefix; // '', '/', '~' pass through
+  return posix.normalize(prefix).replace(/(?!^)\/+$/, ''); // // -> /, drop a trailing slash (keep root /)
 }
 
 function rmHitsHomeOrRoot(root: CommandRoot): boolean {
