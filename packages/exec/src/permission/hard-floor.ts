@@ -5,7 +5,7 @@ import { normalizeCommandToken, STDIN_RUNNERS } from './shell/wrappers.js';
 
 // Egress binaries — never permitted, regardless of approval mode. A broad network-tool denylist;
 // keeping it at curl/wget only would be bypassed by nc/ssh/httpie in one keystroke. This is
-// belt-and-suspenders over the OS sandbox (invariant (d), the real egress control), NOT a complete boundary.
+// belt-and-suspenders over the OS sandbox (the real egress control), NOT a complete boundary.
 const EGRESS = new Set([
   'curl',
   'wget',

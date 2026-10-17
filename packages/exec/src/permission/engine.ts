@@ -17,7 +17,7 @@ import type { RuleSet } from './rules.js';
 import { createPendingChannel } from './pending.js';
 
 // exec is the SOLE owner + definer of PermissionEngine — @minitui/types never exports it (it lives
-// in exec). Re-exported from permission/index.ts (Task 15) for sibling-package imports.
+// in exec). Re-exported from permission/index.ts for sibling-package imports.
 export interface PermissionEngine {
   // the interface other packages wire through PermissionGatePort
   check(req: PermissionRequest): Promise<Decision>;
@@ -38,7 +38,7 @@ export interface EngineOptions {
 }
 
 // Strip ANSI/OSC from every host-resolved string before it reaches the consent UI
-// (SECURITY-invariant (e): consent shows HOST-RESOLVED values, never raw escape sequences).
+// (SECURITY: consent shows HOST-RESOLVED values, never raw escape sequences).
 // This consent-boundary sanitize is load-bearing (do NOT weaken): rather than depend on every
 // render call-site remembering to parse, minitui routes EVERY consent string through the one
 // zero-dep sanitizer here. Keep it.
@@ -116,7 +116,7 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
     //     cannot see what a substitution expands to, and collectRoots is structurally blind to
     //     substitution bodies (the hidden `rm -rf ~` in `ffmpeg -i $(rm -rf ~).mp4` never reaches the
     //     hard floor) — a human `ask` would rubber-stamp an effect the host has admitted it cannot
-    //     resolve (defeats invariant (e)). Hard-deny forces the agent to rewrite without substitution.
+    //     resolve (defeats host-resolved consent). Hard-deny forces a rewrite without substitution.
     if (parsed.hasSubstitution) {
       return {
         kind: 'deny',

@@ -1,5 +1,5 @@
-// @minitui/exec public barrel. Permission-engine exports are added by this plan's Task 15;
-// local-runner/sandbox/dispatch exports are added by later slices.
+// @minitui/exec public barrel. Permission-engine exports live in permission/index.ts;
+// local-runner/sandbox/dispatch exports are appended as they land.
 export {
   createPermissionEngine,
   parseShellCommand,
@@ -12,7 +12,7 @@ export {
 // type re-export use `export type` (NodeNext verbatimModuleSyntax).
 export type { PathRule, PermissionEngine } from './permission/index.js';
 
-// --- sandbox slice (appended) ---
+// --- sandbox (appended) ---
 export { createSandboxManager } from './sandbox/index.js';
 export { SandboxUnavailableError, SandboxViolationError } from './errors.js';
 export type {

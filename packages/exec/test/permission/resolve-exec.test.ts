@@ -20,7 +20,7 @@ afterEach(async () => {
 
 // POSIX which-semantics + realpath + X_OK. Windows executable resolution (PATHEXT) is not modeled by
 // the default — on Windows it returns undefined and the grant safely falls back to name-only match, so
-// these POSIX-shaped assertions are skipped there rather than flaking a Windows CI lane (lesson #40).
+// these POSIX-shaped assertions are skipped there rather than flaking a Windows CI lane.
 describe.skipIf(process.platform === 'win32')(
   'defaultResolveExecutable — which-semantics + realpath',
   () => {

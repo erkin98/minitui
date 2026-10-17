@@ -159,7 +159,7 @@ describe('toAppEvent (single normalization chokepoint)', () => {
   });
 
   it('routes RAW to visibility reading the REAL payload field `event` (never value/name) and honors a BFF-set visClass', () => {
-    // real wire shape (repos/ag-ui core RawEventSchema): { type, event, source? };
+    // real wire shape (ag-ui core RawEventSchema): { type, event, source? };
     // visClass is a minitui/BFF extension no stock AG-UI producer sets.
     const ev = toAppEvent({
       type: EventType.RAW,

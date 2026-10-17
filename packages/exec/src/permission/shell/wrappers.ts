@@ -123,7 +123,7 @@ const OPERAND_OPTS: Record<string, ReadonlySet<string>> = {
 // `5` and the hard floor would never see the rm. NOTE `docker` (subcommand + image positional
 // grammar) is deliberately NOT modeled: its inner command runs inside the container, not on the
 // host, so mis-rooting it to `run` is host-safe and the OS sandbox is the real containment; a
-// host-affecting `docker run -v /:/host …` is a mount escape beyond argv parsing (invariant (d)).
+// host-affecting `docker run -v /:/host …` is a mount escape beyond argv parsing.
 const LEADING_POSITIONALS: Record<string, number> = { timeout: 1, chroot: 1 };
 
 // Does this runner's option token consume the FOLLOWING token as its operand? Only a KNOWN bare-form

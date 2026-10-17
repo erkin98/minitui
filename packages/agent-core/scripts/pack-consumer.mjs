@@ -4,7 +4,7 @@
 // (unlike zod / @json-render, which resolve offline). `pnpm store add` primes the content store but not
 // that mirror. Resolve the offline-metadata story (does a fresh-clone `pnpm install` populate
 // `metadata/@ai-sdk`? if not, pin the SDK deps to packed tarballs like the workspace deps) before adding
-// this to `pack:check`. See WHATS-LEFT. Structure below mirrors the spec pack-consumer.
+// this to `pack:check`. Structure below mirrors the spec pack-consumer.
 //
 // Published-artifact gate: pack agent-core (+ its one internal workspace dep @minitui/types) → assert
 // tar (4 files) + manifest → install into a throwaway strict consumer with --offline → tsc (types:[],

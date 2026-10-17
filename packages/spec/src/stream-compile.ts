@@ -17,7 +17,7 @@ function decodeToken(token: string): string {
  * Reject a model-authored patch whose RFC-6901 `path`/`from` walks a reserved
  * prototype segment BEFORE it reaches the sink. The adopted compiler routes
  * add/replace/move/copy through json-render's `addByPath`/`setByPath`
- * (repos/json-render/packages/core/src/types.ts:346,396) — an `in`-guarded write
+ * (the adopted core package's `types.ts`) — an `in`-guarded write
  * that follows the prototype chain, so a line `{"op":"add","path":"/__proto__/x"}`
  * would mutate `Object.prototype` process-wide, UPSTREAM of the catalog gate (this
  * drains the model stream FIRST in composeValidation). This is the SPEC twin of

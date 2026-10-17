@@ -47,7 +47,7 @@ let parserPromise: Promise<Parser> | undefined;
 let readyParser: Parser | undefined;
 
 // Cap a single parse so a pathological input can never hang the host. web-tree-sitter exposes
-// NO setTimeoutMicros (verified absent in repos/tree-sitter/lib/binding_web/src/parser.ts); the
+// NO supported setTimeoutMicros (deprecated since 0.25 in the pinned version); the
 // only per-parse bound is ParseOptions.progressCallback, which fires periodically with
 // { currentOffset, hasError } (no time) and cancels the parse when it returns true. We measure a
 // wall-clock deadline ourselves. 50ms is generous for a shell line yet bounded.
@@ -57,7 +57,7 @@ let parseBudgetMs = DEFAULT_PARSE_BUDGET_MS;
 // Under a SEA single-file binary there is no on-disk module-relative wasm — `import.meta.url`
 // resolves to nothing inside the blob. Node's SEA API embeds the two wasm files as assets (the SEA
 // build's sea-config) and returns their bytes via `node:sea.getRawAsset`; `Language.load`/`Parser.init` both
-// accept bytes (`repos/tree-sitter` language.ts:232, parser.ts:114). In dev / npm installs
+// accept bytes (web-tree-sitter `Language.load` and `Parser.init`). In dev / npm installs
 // `sea.isSea()` is false, so we fall back to the disk path (grammar) and package-resolved runtime.
 // Any failure returns undefined → the disk path is tried → a broken load still fails closed below.
 async function seaWasmBytes(assetName: string): Promise<Uint8Array | undefined> {
@@ -114,7 +114,7 @@ export function parseToTree(command: string): { root: SyntaxNode } | { parseErro
     // rootNode.hasError is the built-in whole-subtree check (catches anonymous ERROR/MISSING
     // nodes a namedChildren walk would miss); a null tree means cancel/no-language — both closed.
     // A budget-cancelled parse leaves the parser mid-state: web-tree-sitter RESUMES where it left
-    // off on the next parse unless reset (repos/tree-sitter/.../parser.ts:261-271), which would
+    // off on the next parse unless reset (web-tree-sitter `Parser.reset`), which would
     // contaminate the NEXT command on this module-memoized instance — the security chokepoint.
     // reset() before every fail-closed return so each command parses from a clean slate.
     if (!tree?.rootNode || tree.rootNode.hasError) {

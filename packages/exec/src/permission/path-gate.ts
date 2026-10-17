@@ -2,7 +2,7 @@ import { posix } from 'node:path';
 
 // This is a LEXICAL, advisory path gate — an allow-matched path can still be a symlink/hardlink
 // resolving outside the allowed root, which no string match detects.
-// The OS sandbox (the sandbox slice, invariant (d)) is the real containment; minitui additionally keeps the
+// The OS sandbox is the real containment; minitui additionally keeps the
 // stronger stance that file targets are HOST-resolved from spec pointer-holes, never agent-named
 // raw absolute paths. Defense-in-depth, not sufficient on its own.
 export interface PathRule {
