@@ -6,7 +6,7 @@ export interface ToolCallRequest {
   readonly args: Readonly<Record<string, JsonValue>>;
 }
 
-// Local vocabulary; unit 11's provider seam maps it onto the AI SDK's tool-result
+// Local vocabulary; the provider seam maps it onto the AI SDK's tool-result
 // part: content -> output{type:'text'}, error/isError -> {type:'error-text'},
 // denied -> {type:'execution-denied'}.
 export interface ToolCallResult {

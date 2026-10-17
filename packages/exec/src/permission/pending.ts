@@ -1,6 +1,6 @@
 import type { PermissionRequest, PermissionReply } from '@minitui/types';
 
-// The channel surfaces the raw reply verdict; the engine (Task 13) turns 'always' into a grant
+// The channel surfaces the raw reply verdict; the engine turns 'always' into a grant
 // from its own parsed command. Resolution mirrors the canonical PermissionReply union minus 'id'.
 export interface PendingResolution {
   readonly kind: 'once' | 'always' | 'reject';

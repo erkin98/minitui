@@ -17,8 +17,8 @@ type _RejectsIncompleteWireEvent = Assert<
 // against packages/types/src/events.ts): RUN_STARTED/RUN_FINISHED carry threadId+runId NATIVELY
 // (required fields, not synthesized) and TOOL_CALL_START carries toolCallName, never
 // toolName (the schema's negative test rejects toolName outright). The only field genuinely
-// absent from minitui's wire is messageId (TEXT_MESSAGE_CONTENT is just { type, delta }) — Slice
-// 1 does not synthesize it: local-agent.ts feeds this union straight through
+// absent from minitui's wire is messageId (TEXT_MESSAGE_CONTENT is just { type, delta }) — this
+// port does not synthesize it: local-agent.ts feeds this union straight through
 // toAppEvent, never crossing the AG-UI adapter boundary). Zero casts in the fixtures.
 async function* scripted(): AsyncGenerator<AgentEvent> {
   yield { type: 'RUN_STARTED', threadId: 't', runId: 'r' };

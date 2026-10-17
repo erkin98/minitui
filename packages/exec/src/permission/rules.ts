@@ -12,7 +12,7 @@ const LAYER_RANK: Record<PermissionRule['layer'], number> = { managed: 3, projec
 const EFFECT_RANK: Record<Effect, number> = { deny: 2, ask: 1, allow: 0 };
 
 // The winning RULE for a value — layer precedence with managed-deny absolute. This is the single
-// precedence implementation; effectFor (below) and decision.ts's denyRuleFor (Task 10) both project
+// precedence implementation; effectFor (below) and decision.ts's denyRuleFor both project
 // off it, so the engine's deny reason can never disagree with the effect resolveStatic saw.
 export function matchedRule(set: RuleSet, value: string): PermissionRule | undefined {
   const matched = set.rules.filter((r) => matchPattern(r.pattern, value));

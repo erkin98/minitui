@@ -7,11 +7,11 @@ import { loadGrants, appendGrant } from './persist.js';
 export { parseShellCommand } from './shell/roots.js';
 export { checkHardFloor } from './hard-floor.js';
 export { ensureParserReady } from './shell/parser.js';
-// PermissionEngine is exec-owned, defined in engine.ts (Task 13); re-exported here so sibling
+// PermissionEngine is exec-owned, defined in engine.ts; re-exported here so sibling
 // packages (by relative path) resolve it from permission/index.ts, never from '@minitui/types'
 // (which does not export it).
 export type { PermissionEngine } from './engine.js';
-// path-gate surface (Task 11) — cli builds its write-path gate over these.
+// path-gate surface — cli builds its write-path gate over these.
 // `PathRule` is a type, so it re-exports with `export type` (NodeNext verbatimModuleSyntax).
 export { checkPathRules } from './path-gate.js';
 export type { PathRule } from './path-gate.js';

@@ -70,7 +70,7 @@ export class AgentSession {
     this.threadId = randomUUID();
     // provider supplies the day-1 model handle and is the swap point for a non-SDK provider. specSink is
     // LIVE here — emitSpec() below is its call path. visibility and clock are accepted as required seam
-    // deps but are not read on this path yet (visibility drives observation routing in a later slice); a
+    // deps but are not read on this path yet (visibility will drive observation routing); a
     // field is added the same change that first reads them, so no unread state lingers here.
     this.#provider = deps.provider;
     this.#toolDispatch = deps.toolDispatch;

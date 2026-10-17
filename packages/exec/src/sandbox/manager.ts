@@ -31,7 +31,7 @@ let currentSession: SandboxSession | undefined;
 let initPromise: Promise<SandboxSession> | undefined;
 
 /**
- * Initialize the single global sandbox exactly once per process. This first slice never opens
+ * Initialize the single global sandbox exactly once per process. This version never opens
  * egress interactively, so the ask callback denies every connection — a second belt next to the
  * config's strict allowlist. The log monitor is the only producer of the violation store and only
  * runs on macOS, so it is enabled solely on darwin (elsewhere the store stays empty by construction).
