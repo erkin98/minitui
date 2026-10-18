@@ -10,9 +10,10 @@
 // machine gate; seeding the whole matrix here closes that hole. A zone is INERT until
 // its target package dir exists (no-restricted-paths matches nothing inside a
 // non-existent dir), then activates automatically as each package is brought on
-// disk. No later change edits this table except the `apps/cli` zone — apps/cli
-// is outside the `packages/*` glob seeded here, so that one zone is appended
-// separately (the only gate for the cli -> not-test-kit/integration-tests edge).
+// disk. The scripts zone below is not a package zone: it keeps package source out of the
+// wall-exempt scripts directories. Beyond it, no later change edits this table except the
+// `apps/cli` zone — apps/cli is outside the `packages/*` glob seeded here, so that one zone
+// is appended separately (the only gate for the cli -> not-test-kit/integration-tests edge).
 //
 // Encoding (verified against eslint-plugin-import 2.31.0 `no-restricted-paths`):
 // from='./packages' bars EVERY internal package; `except` re-permits the package's OWN
@@ -96,6 +97,14 @@ export const BOUNDARY_ZONES = [
   pkgZone('renderer-ink', 'types', 'renderer-core', 'catalog', 'sanitizer'),
   pkgZone('library', 'types', 'spec'),
   pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink'),
+  // Package source may not import from a wall-exempt scripts directory: those directories (and the
+  // repo-level scripts/) lift the capability walls, so reaching one from shipped source would
+  // launder a walled import through it. Tests keep their access (the sanitizer leaf test loads its script).
+  {
+    target: './packages/*/src/**/*',
+    from: ['./packages/*/scripts/**/*', './scripts/**/*'],
+    message: 'package source may not import from a wall-exempt scripts directory.',
+  },
   // Witness for the pkgZone encoding itself. The two fixture zones at the top are bare
   // file-target zones with no `except`, so they prove nothing about the from:'./packages'
   // + except shape every real package zone uses — a plugin upgrade whose except handling
