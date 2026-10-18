@@ -3,7 +3,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
-import { policyPlugin, TEST_FILE_GLOBS } from './config/eslint-policy.js';
+import { policyPlugin, SOURCE_EXT, TEST_FILE_GLOBS } from './config/eslint-policy.js';
 
 const noDynamicFunctionGlobal = [
   'error',
@@ -35,8 +35,8 @@ const EXEC_MOAT_IMPORT_PATTERNS = [
     message: 'Exec-moat: only @minitui/exec may import MCP-client / OS-sandbox modules.',
   },
 ];
-// The SDK wall (only @minitui/agent-core may import the model SDK — the parallel of the exec-moat, and a
-// PR-6 deliverable). Banned everywhere the wide block below applies; agent-core is re-permitted by
+// The SDK wall (only @minitui/agent-core may import the model SDK — the parallel of the exec-moat).
+// Banned everywhere the wide block below applies; agent-core is re-permitted by
 // agentCoreImportRule (which drops these paths, keeping the exec-moat ones). Kept in the SAME
 // no-restricted-imports rule as the exec-moat paths because ESLint flat config replaces (not merges) a
 // repeated rule across overlapping file globs — two separate blocks would clobber each other's paths.
@@ -46,15 +46,32 @@ const AI_SDK_IMPORT_PATHS = [
     name: '@ai-sdk/anthropic',
     message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/*.',
   },
+  // The `ai/*` pattern below also matches this name, so the path only adds a second report with the
+  // spawn-specific message (the registry's counted rows witness both entries). agent-core, which does not
+  // carry this array, keeps its own entry for the same transport.
+  {
+    name: 'ai/mcp-stdio',
+    message: 'The SDK stdio MCP transport spawns a child process: MCP belongs to @minitui/exec.',
+  },
 ];
 const AI_SDK_IMPORT_PATTERNS = [
   {
-    group: ['@ai-sdk/*'],
-    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/* modules.',
+    group: ['@ai-sdk/*', 'ai/*'],
+    message: 'SDK wall: only @minitui/agent-core may import @ai-sdk/* or ai/* modules.',
   },
 ];
+// The SDK ships an MCP client that spawns processes, and MCP belongs to @minitui/exec. agent-core owns
+// the SDK, so its rule bans the client by name; scripts/check-eslint-policy-fixtures.mjs enumerates the
+// installed SDK's root exports and fails on an MCP export missing from this list.
+const AI_MCP_IMPORT_NAMES = [
+  'experimental_createMCPClient',
+  'experimental_MCPClient',
+  'experimental_MCPClientConfig',
+  'MCPClientError',
+  'MCPTransport',
+];
 // The renderer swap-boundary wall (only @minitui/renderer-ink + @minitui/cli may import React/Ink and the
-// Ink renderer — the single place the declarative spec becomes a real terminal UI; a PR-7 deliverable).
+// Ink renderer — the single place the declarative spec becomes a real terminal UI).
 // @json-render/CORE is deliberately ABSENT (spec/catalog/renderer-core adopt it); only @json-render/INK
 // (the React binding) is walled. Banned everywhere the wide block applies; rendererInkImportRule
 // re-permits it for renderer-ink (and cli). Same-rule placement + the clobber note above apply.
@@ -76,6 +93,10 @@ const REACT_INK_IMPORT_PATTERNS = [
     message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
   },
   { group: ['ink/*'], message: 'Swap boundary: only @minitui/renderer-ink + cli may import Ink.' },
+  {
+    group: ['react-dom/*'],
+    message: 'Swap boundary: only @minitui/renderer-ink + cli may import React.',
+  },
   // NOTE: the wall bans the REACT root `@json-render/ink` (in PATHS above) but NOT its `/server`
   // subpath — `@json-render/ink/server` is the deliberately React-FREE entry `@minitui/catalog` adopts
   // for its schema-bridge (a load-bearing non-renderer import). A `@json-render/ink/*` pattern here
@@ -107,13 +128,31 @@ const execMoatCapabilityRules = {
 // @minitui/agent-core is the ONE package permitted the model SDK. Re-set no-restricted-imports (in a
 // block placed AFTER the wide exec-moat block, so it wins for agent-core) to DROP the SDK-wall ban only —
 // keeping child_process / MCP / sandbox AND React/Ink banned (agent-core is not a renderer and reaches
-// execution only through the injected ToolDispatchPort, never a subprocess directly).
+// execution only through the injected ToolDispatchPort, never a subprocess directly). Within the SDK
+// itself only the `ai` root is adopted, and its own MCP client is banned by name.
 const agentCoreImportRule = {
   'no-restricted-imports': [
     'error',
     {
-      paths: [...EXEC_MOAT_IMPORT_PATHS, ...REACT_INK_IMPORT_PATHS],
-      patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
+      paths: [
+        ...EXEC_MOAT_IMPORT_PATHS,
+        ...REACT_INK_IMPORT_PATHS,
+        {
+          name: 'ai',
+          importNames: AI_MCP_IMPORT_NAMES,
+          message: 'The SDK MCP client spawns processes: MCP belongs to @minitui/exec.',
+        },
+        {
+          name: 'ai/mcp-stdio',
+          message:
+            'The SDK stdio MCP transport spawns a child process: MCP belongs to @minitui/exec.',
+        },
+      ],
+      patterns: [
+        ...EXEC_MOAT_IMPORT_PATTERNS,
+        ...REACT_INK_IMPORT_PATTERNS,
+        { group: ['ai/*'], message: 'Only the ai root is adopted: no ai/* subpath.' },
+      ],
     },
   ],
 };
@@ -162,6 +201,12 @@ if (overreach.length) {
   throw new Error(`eslint.ignores.local.mjs may not ignore a repo tree: ${overreach.join(', ')}`);
 }
 
+// Resolves '@minitui/*' through the root solution tsconfig, for the DAG rule in both the TypeScript and
+// the JavaScript block.
+const importResolverSettings = {
+  'import/resolver': { typescript: { project: ['./tsconfig.json'] } },
+};
+
 export default tseslint.config(
   {
     // The planted-violation fixture is INTENTIONALLY a permanent boundary violation.
@@ -191,6 +236,17 @@ export default tseslint.config(
   // other half — replacement-mock bans; this is the type/async half.)
   ...tseslint.configs.recommendedTypeChecked,
   {
+    // JavaScript files take the same plugins and the DAG rule: without them the policy rules named below
+    // are unknown to a .js/.mjs file (and a forbidden edge would pass in one). They carry no type
+    // information, so none of the type-aware rules are enabled here.
+    files: ['**/*.{js,jsx,mjs,cjs}'],
+    plugins: { import: importPlugin, minitui: policyPlugin },
+    settings: importResolverSettings,
+    rules: {
+      'import/no-restricted-paths': restrictedPathsRule(BOUNDARY_ZONES),
+    },
+  },
+  {
     files: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'],
     plugins: { import: importPlugin, minitui: policyPlugin },
     languageOptions: {
@@ -204,11 +260,7 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
-    settings: {
-      'import/resolver': {
-        typescript: { project: ['./tsconfig.json'] },
-      },
-    },
+    settings: importResolverSettings,
     rules: {
       // THE acyclic-DAG gate. Error-level, hard CI gate. Zones in config/eslint-boundaries.js.
       'import/no-restricted-paths': restrictedPathsRule(BOUNDARY_ZONES),
@@ -216,6 +268,12 @@ export default tseslint.config(
       // legible and survives a preset swap: no dangling promises, no `any` escape hatch.
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
+      // A triple-slash types/path/lib reference hands a package a type dependency that no import wall
+      // sees (a React type in a renderer-agnostic package, the vitest globals in a test).
+      '@typescript-eslint/triple-slash-reference': [
+        'error',
+        { types: 'never', path: 'never', lib: 'never' },
+      ],
       // Cyclomatic-complexity ceiling — catches tangled functions by branch count, the
       // companion to the 800-line file ceiling. 15, not the more
       // common 10, stays a real gate for the ~200 ordinary functions. POLICY: the ceiling
@@ -279,21 +337,17 @@ export default tseslint.config(
     // Which arm each lint:policy-fixtures witness proves:
     //   apps/**     — proven by apps/eslint-policy-fixture/src/* (drop this arm and the
     //                 fixture gate reds: those fixtures match no other arm).
-    //   packages/** — the LIVE moat over real package src + tests. It has no dedicated
-    //                 fixture (fixtures live under apps/ and test/), so it is not witnessed
-    //                 by removing-reds-the-gate; it is instead witnessed by construction —
-    //                 it applies the SAME execMoatCapabilityRules object the apps/ and test/
-    //                 fixtures prove fires. Defense-in-depth, not a vacuous gate.
+    //   packages/** — the LIVE moat over real package src + tests. A mapped fixture proves
+    //                 only the rule object, so this arm, each re-permit block below and
+    //                 each package's DAG zone are proven by the witness rows in
+    //                 scripts/check-eslint-policy-fixtures.mjs, which lint code against a
+    //                 real file of every package: removing one turns that registry red.
     //   test/**     — currently redundant: real package tests match the packages/** arm, and
     //                 the top-level test/ tree holds only the ignored boundary-fixture dir.
     //                 Kept as the SOLE no-restricted-imports / no-restricted-capability-load
     //                 cover for any future top-level test file — the later test-file block
     //                 carries only eval / globals / vitest-replacement-api, not those two.
-    files: [
-      'packages/**/*.{ts,tsx,mts,cts}',
-      'apps/**/*.{ts,tsx,mts,cts}',
-      'test/**/*.{ts,tsx,mts,cts}',
-    ],
+    files: [`packages/**/*.${SOURCE_EXT}`, `apps/**/*.${SOURCE_EXT}`, `test/**/*.${SOURCE_EXT}`],
     ignores: ['packages/*/scripts/**', 'scripts/**', 'test/eslint-boundary-fixture/**'],
     rules: execMoatCapabilityRules,
   },
@@ -313,32 +367,48 @@ export default tseslint.config(
       'test/eslint-boundary-fixture/illegal-test-file-capability.test.ts',
       'test/eslint-boundary-fixture/illegal-ai-sdk-import.ts',
       'test/eslint-boundary-fixture/illegal-react-import.ts',
+      'test/eslint-boundary-fixture/illegal-mjs-capability.mjs',
     ],
     rules: execMoatCapabilityRules,
   },
   {
     // @minitui/agent-core is the ONE package permitted the model SDK — re-permit `ai`/`@ai-sdk/*` here
     // (this block is AFTER the wide exec-moat block, so it wins) while keeping the exec-moat bans. The
-    // other execMoatCapabilityRules keys (capability-load / eval / globals) are separate rule ids that
-    // merge, so only no-restricted-imports is overridden.
-    files: ['packages/agent-core/**/*.{ts,tsx,mts}'],
-    rules: agentCoreImportRule,
+    // other execMoatCapabilityRules keys (eval / globals) are separate rule ids that merge, so only
+    // no-restricted-imports and the capability-load options are overridden. The SDK stays walled as a
+    // dynamic value load (a lazy `import('ai')` would reach the SDK's MCP client past the static ban) and
+    // is legal in type position only.
+    files: [`packages/agent-core/**/*.${SOURCE_EXT}`],
+    // The pack-consumer script spawns a package manager by design; scripts directories are wall-exempt.
+    ignores: ['packages/*/scripts/**'],
+    rules: {
+      ...agentCoreImportRule,
+      'minitui/no-restricted-capability-load': ['error', { allowTypeFamilies: ['model-sdk'] }],
+    },
   },
   {
     // @minitui/renderer-ink + @minitui/cli are the ONLY packages permitted React/Ink (the swap
     // boundary) — re-permit react/ink/@json-render/ink here (AFTER the wide block, so it wins) while
-    // keeping the exec-moat + SDK-wall bans.
-    files: ['packages/renderer-ink/**/*.{ts,tsx,mts}', 'packages/cli/**/*.{ts,tsx,mts}'],
-    rules: rendererInkImportRule,
+    // keeping the exec-moat + SDK-wall bans. The capability-load option re-permits the same family for
+    // dynamic and type-position loads.
+    files: [`packages/renderer-ink/**/*.${SOURCE_EXT}`, `apps/cli/**/*.${SOURCE_EXT}`],
+    ignores: ['packages/*/scripts/**'],
+    rules: {
+      ...rendererInkImportRule,
+      'minitui/no-restricted-capability-load': ['error', { allowFamilies: ['react-ink'] }],
+    },
   },
   // (a) @minitui/exec is the ONE package permitted the exec-moat capabilities (child_process / the
   // OS sandbox runtime / the MCP client). AFTER the wide capability block (so it wins), DROP only the
   // exec-moat import bans while KEEPING the model SDK and React/Ink banned — exec is neither the agent
   // loop nor a renderer. no-eval / no-implied-eval / no-restricted-globals / capability-load come from
   // the wide block (exec is no longer in its ignores). Mirrors agentCoreImportRule / rendererInkImportRule.
+  // The static-capability rule keeps the sandbox runtime and the MCP client out of exec's static value
+  // imports: only the lazy load in sandbox/ and type-only imports reach the runtime, and the MCP client
+  // is re-permitted for the mcp directories in the next block.
   {
     files: [
-      'packages/exec/**/*.{ts,tsx,mts}',
+      `packages/exec/**/*.${SOURCE_EXT}`,
       'test/eslint-boundary-fixture/exec-walls/react-import.ts',
       'test/eslint-boundary-fixture/exec-walls/ai-sdk-import.ts',
     ],
@@ -350,6 +420,18 @@ export default tseslint.config(
           patterns: [...AI_SDK_IMPORT_PATTERNS, ...REACT_INK_IMPORT_PATTERNS],
         },
       ],
+      'minitui/no-static-capability-import': 'error',
+    },
+  },
+  // The MCP client is a static import of the mcp directories (source and tests); the allow list names
+  // its scope only, so the sandbox runtime stays walled there.
+  {
+    files: [
+      `packages/exec/src/mcp/**/*.${SOURCE_EXT}`,
+      `packages/exec/test/mcp/**/*.${SOURCE_EXT}`,
+    ],
+    rules: {
+      'minitui/no-static-capability-import': ['error', { allow: ['@modelcontextprotocol'] }],
     },
   },
   // (b) intra-exec child_process wall: only exec/ (the spawner) and sandbox/ (the wrapper) may reach
@@ -361,9 +443,9 @@ export default tseslint.config(
   // bare builtin — a vacuous gate here). The no-restricted-syntax arm closes the dynamic forms.
   {
     files: [
-      'packages/exec/src/permission/**/*.{ts,tsx,mts}',
-      'packages/exec/src/mcp/**/*.{ts,tsx,mts}',
-      'packages/exec/src/dispatch/**/*.{ts,tsx,mts}',
+      `packages/exec/src/permission/**/*.${SOURCE_EXT}`,
+      `packages/exec/src/mcp/**/*.${SOURCE_EXT}`,
+      `packages/exec/src/dispatch/**/*.${SOURCE_EXT}`,
       'test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts',
       'test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts',
     ],
@@ -414,7 +496,7 @@ export default tseslint.config(
   // paths keep the re-permit non-vacuous — the legal runtime import lints clean, the banned MCP sibling reds.
   {
     files: [
-      'packages/exec/src/sandbox/**/*.{ts,mts}',
+      `packages/exec/src/sandbox/**/*.${SOURCE_EXT}`,
       'test/eslint-boundary-fixture/exec-walls/sandbox-asrt-dynimport.ts',
       'test/eslint-boundary-fixture/exec-walls/sandbox-mcp-dynimport.ts',
     ],
@@ -427,12 +509,20 @@ export default tseslint.config(
   },
   {
     files: [
-      'packages/sanitizer/src/**/*.{ts,tsx,mts}',
+      `packages/sanitizer/src/**/*.${SOURCE_EXT}`,
       'test/eslint-boundary-fixture/illegal-sanitizer-import.ts',
     ],
     rules: {
       'minitui/sanitizer-local-imports-only': 'error',
     },
+  },
+  {
+    // Outside the test globs (source, package-root files, vitest configs, the root setup file, scripts)
+    // only the vitest import arm applies, under its own rule id so the test block below keeps the full
+    // rule and is not inheriting a narrower option set.
+    files: [`**/*.${SOURCE_EXT}`],
+    ignores: TEST_FILE_GLOBS,
+    rules: { 'minitui/no-vitest-replacement-import': 'error' },
   },
   {
     files: TEST_FILE_GLOBS,
@@ -452,6 +542,7 @@ export default tseslint.config(
     // service" under the type-aware preset above.
     files: [
       '**/*.js',
+      '**/*.jsx',
       '**/*.mjs',
       '**/*.cjs',
       'vitest.config.ts',
