@@ -1,21 +1,20 @@
 import { describe, it, expect } from 'vitest';
+import { ACTION_KINDS, PermissionDescriptorSchema } from '@minitui/types';
 import {
   applyResourceTemplate,
   resolvePointer,
-  type ActionKind,
   type PermissionDescriptor,
 } from '../src/contract/action-kind.js';
 
 describe('ActionKind / PermissionDescriptor re-export', () => {
   it('exposes the four kinds and the descriptor shape', () => {
-    const k: ActionKind = 'exec-local';
     const pd: PermissionDescriptor = {
       danger: true,
       resourceTemplate: 'ffmpeg -i ${/inputs/0} -i ${/inputs/1}',
       summaryTemplate: 'Merge 2 videos',
     };
-    expect(k).toBe('exec-local');
-    expect(pd.danger).toBe(true);
+    expect(ACTION_KINDS).toContain('exec-local');
+    expect(PermissionDescriptorSchema.safeParse(pd).success).toBe(true);
   });
 });
 

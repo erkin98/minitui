@@ -1,7 +1,16 @@
 import { z, type ZodType } from 'zod';
-import { defineCatalog, type PromptOptions } from '@json-render/core';
-import { ACTION_KINDS, type CatalogVisibilitySource } from '@minitui/types';
-import { inkSchema, type ComponentDefinition, type ActionDefinition } from './schema-bridge.js';
+import { defineCatalog, defineSchema, type PromptOptions } from '@json-render/core';
+import {
+  ACTION_KINDS,
+  PermissionDescriptorSchema,
+  type CatalogVisibilitySource,
+} from '@minitui/types';
+import {
+  inkSchema,
+  standardComponentDefinitions,
+  type ComponentDefinition,
+  type ActionDefinition,
+} from './schema-bridge.js';
 import type { MinituiComponentDef, TrustTier } from './contract/catalog-component.js';
 import { requiresPermission, type MinituiActionDef } from './contract/catalog-action.js';
 import type { ActionKind, PermissionDescriptor } from './contract/action-kind.js';
@@ -55,6 +64,20 @@ function assertClosedSchema(context: string, schema: ZodType): void {
     const input = schema.def.in;
     if (input instanceof z.ZodType) assertClosedSchema(context, input);
   }
+  // Last arm, so the messages above keep their wording: props and params are a top-level object.
+  // Anything else (any, unknown, optional, lazy, a union, a string) is not a closed key set.
+  if (!(schema instanceof z.ZodObject)) {
+    throw new Error(`${context}: must be a top-level z.object — declare explicit keys.`);
+  }
+  // The gate checks the keys present, so the object has to have a partial form; an object with a
+  // refinement does not.
+  try {
+    schema.partial();
+  } catch {
+    throw new Error(
+      `${context}: an object with a refinement cannot be made partial — remove the refinement.`,
+    );
+  }
 }
 
 // Fail-closed action ingest: an unrecognized kind or a gate-less non-render-local
@@ -69,6 +92,26 @@ function assertActionDef(name: string, def: MinituiActionDef): void {
     throw new Error(
       `Catalog action "${name}": kind "${def.kind}" requires a PermissionDescriptor.`,
     );
+  }
+  if (def.permission !== undefined) assertPermission(name, def.permission);
+}
+
+// A permission that is not a descriptor, or a template hole that does not name a state pointer,
+// is a definition error: the host resolves ${/pointer} holes only, so any other hole never resolves.
+function assertPermission(name: string, permission: unknown): void {
+  const parsed = PermissionDescriptorSchema.safeParse(permission);
+  if (!parsed.success) {
+    throw new Error(`Catalog action "${name}": the permission is not a descriptor.`);
+  }
+  for (const template of [parsed.data.resourceTemplate, parsed.data.summaryTemplate]) {
+    const hole = [...template.matchAll(/\$\{([^}]*)\}/g)].find(
+      (m) => !(m[1] ?? '').startsWith('/'),
+    );
+    if (hole !== undefined) {
+      throw new Error(
+        `Catalog action "${name}": the permission template hole ${hole[0]} must start with a slash.`,
+      );
+    }
   }
 }
 
@@ -128,6 +171,15 @@ function assertSecretVisibility(name: string, def: MinituiComponentDef): void {
   }
 }
 
+// The adopted default rules teach standard components by name. A rule that names one this catalog
+// does not register would send the model to a type the allowlist then refuses, so it is dropped
+// whole. Words are matched whole, so a longer word that merely contains a name is not a hit.
+function namesUnregisteredComponent(rule: string, registered: ReadonlySet<string>): boolean {
+  return (rule.match(/[A-Za-z0-9_]+/g) ?? []).some(
+    (word) => Object.hasOwn(standardComponentDefinitions, word) && !registered.has(word),
+  );
+}
+
 export function defineMinituiCatalog(args: {
   id: string;
   components: Record<string, MinituiComponentDef>;
@@ -158,7 +210,16 @@ export function defineMinituiCatalog(args: {
   // this one definition. componentNames/actionNames are read off the input Record keys
   // (the same source defineCatalog receives) so the moat index can never drift from what
   // defineCatalog allowlisted.
-  const base = defineCatalog(inkSchema, {
+  // The schema carries the adopted spec definition, the default rules that fit this catalog, and
+  // no built-in action lines: the actions the model may bind are the registered ones only.
+  const registered = new Set(Object.keys(args.components));
+  const schema = defineSchema(() => inkSchema.definition, {
+    defaultRules: (inkSchema.defaultRules ?? []).filter(
+      (rule) => !namesUnregisteredComponent(rule, registered),
+    ),
+    builtInActions: [],
+  });
+  const base = defineCatalog(schema, {
     components: baseComponents,
     actions: baseActions,
   });

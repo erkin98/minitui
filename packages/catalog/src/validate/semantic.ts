@@ -2,44 +2,52 @@ import { z, type ZodType } from 'zod';
 import type { JsonValue } from '@minitui/types';
 import type { AppSpec, SpecElement } from '../contract/spec.js';
 import type { MinituiCatalog } from '../define-catalog.js';
+import { standardComponentDefinitions } from '../schema-bridge.js';
+import { boundIssue } from '../sanitize/index.js';
 import { applyResourceTemplate, resolvePointer } from '../contract/action-kind.js';
-import { collectBindings, actionNamesOf } from '../allowlist.js';
+import {
+  collectBindings,
+  actionNamesOf,
+  screenSpec,
+  GATE_INTERNAL_ERROR_MESSAGE,
+} from '../allowlist.js';
 
 export type SemanticIssue = {
   readonly code:
     | 'danger-without-confirm'
     | 'bad-binding'
     | 'bad-props'
+    | 'bad-params'
     | 'off-grammar-operator'
-    | 'missing-required-prop';
+    | 'missing-required-prop'
+    | 'malformed-spec'
+    | 'malformed-binding'
+    | 'non-canonical-key'
+    | 'gate-internal-error';
   readonly elementKey: string;
   readonly message: string;
 };
 
 // json-render dynamic pointer refs: { $state: '/ptr' } (read) and
 // { $bindState: '/ptr' } (two-way write-back). Both are pointers into the
-// bound state document. $item/$index/$cond are repeat/conditional-scoped
-// markers the renderer resolves — the gate skips their values but keeps their keys.
-function stateRefPointer(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
+// bound state document, and one record may hold both. $item/$index/$cond are
+// repeat/conditional-scoped markers the renderer resolves — the gate skips their
+// values but keeps their keys.
+function stateRefPointers(value: unknown): readonly string[] {
+  if (typeof value !== 'object' || value === null) return [];
   const v = value as Record<string, unknown>;
-  if (typeof v.$state === 'string') return v.$state;
-  if (typeof v.$bindState === 'string') return v.$bindState;
-  return undefined;
-}
-
-function isDynamicMarker(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) return false;
-  return Object.keys(value).some((k) => k.startsWith('$'));
+  return [v.$state, v.$bindState].filter(
+    (pointer): pointer is string => typeof pointer === 'string',
+  );
 }
 
 // Recursively collect every { $state } / { $bindState } pointer in a value.
 // json-render's resolvePropValue recurses into plain objects and arrays, so
 // nested refs are live grammar — walk them all.
 function collectStateRefs(value: unknown, out: string[] = []): readonly string[] {
-  const pointer = stateRefPointer(value);
-  if (pointer !== undefined) {
-    out.push(pointer);
+  const pointers = stateRefPointers(value);
+  if (pointers.length > 0) {
+    out.push(...pointers);
     return out;
   }
   if (Array.isArray(value)) {
@@ -71,8 +79,8 @@ const COND_BRANCH_KEYS: ReadonlySet<string> = new Set(['$then', '$else']);
 // recurses into conditional branches, plain objects, and arrays and CALLS the
 // function a $computed names, so the gate fails closed on such an operator
 // wherever it hides. A conditional resolves only its chosen branch (its condition
-// is a separate visibility grammar checked elsewhere), so only the branches are
-// walked. A terminal marker normally holds a scalar the renderer reads directly;
+// uses the visibility grammar, which this gate does not validate), so only the branches
+// are walked. A terminal marker normally holds a scalar the renderer reads directly;
 // if its payload is instead a non-scalar (a mistyped marker), the renderer does not
 // treat it as a marker and recurses into it, so the gate walks that payload too —
 // only a scalar payload terminates safe, and the dead-code siblings of a scalar
@@ -94,6 +102,24 @@ function isRendererDirectMarker(record: Record<string, unknown>): boolean {
   );
 }
 
+// A conditional with both branches is read by the renderer as one value; an incomplete one is not.
+const isCompleteCond = (record: Record<string, unknown>): boolean =>
+  '$cond' in record && '$then' in record && '$else' in record;
+
+// True when a value holds, at any depth, a record the renderer resolves as one value: a typed
+// pointer, template or item marker, `$index` true, or a complete conditional. Such a value is only
+// known at render time, so the checks made at generation leave it alone.
+function containsMarker(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsMarker);
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    isRendererDirectMarker(record) ||
+    isCompleteCond(record) ||
+    Object.values(record).some(containsMarker)
+  );
+}
+
 function hasOffGrammarOperator(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasOffGrammarOperator);
   if (typeof value !== 'object' || value === null) return false;
@@ -107,10 +133,10 @@ function hasOffGrammarOperator(value: unknown): boolean {
   }
   // A COMPLETE $cond ($cond + $then + $else all present) is a marker the renderer reads:
   // it resolves the chosen branch and never touches other siblings, so walk the two
-  // branches only (the $cond condition is a separate visibility grammar checked
-  // elsewhere). An INCOMPLETE $cond is NOT a marker to the renderer — it resolves the
+  // branches only (the $cond condition uses the visibility grammar, which this gate
+  // does not validate). An INCOMPLETE $cond is NOT a marker to the renderer — it resolves the
   // record as a generic object — so it must fall through to the walk-all below.
-  if ('$cond' in record && '$then' in record && '$else' in record) {
+  if (isCompleteCond(record)) {
     return hasOffGrammarOperator(record.$then) || hasOffGrammarOperator(record.$else);
   }
   // A WELL-FORMED terminal marker (the renderer's OWN type guard: a string payload for
@@ -194,27 +220,150 @@ function collectMissingRequired(
   return issues;
 }
 
-// A resourceTemplate still containing a ${/ptr} hole after resolution failed.
+// The ${/ptr} holes a resourceTemplate still contains after resolution: the pointers that failed.
 // ${/ptr} is minitui's HOST-side consent-template grammar (applyResourceTemplate)
 // — json-render never resolves it, so only resourceTemplates are scanned for it.
-function hasUnresolvedHole(text: string, state: JsonValue): boolean {
-  return /\$\{\/[^}]*\}/.test(applyResourceTemplate(text, state));
+function unresolvedPointers(text: string, state: JsonValue): readonly string[] {
+  return [...applyResourceTemplate(text, state).matchAll(/\$\{(\/[^}]*)\}/g)].map(
+    (match) => match[1] ?? '',
+  );
 }
 
-// Validate the PRESENT props: for a Zod object, .partial() so omitted nullable
-// keys don't false-positive (std defs require nullable keys present, specs omit
-// them) while .strict()'s unknown-key rejection survives .partial() — an extra or
-// mistyped prop still fails. Dynamic-marker values are blanked to undefined (the
-// renderer resolves their runtime type) but their KEYS stay, so an UNKNOWN
-// dynamic-valued key is still rejected. Non-object schemas fall back to a plain parse.
-function checkProps(schema: ZodType, props: SpecElement['props']): { readonly success: boolean } {
-  if (schema instanceof z.ZodObject) {
-    const staticProps = Object.fromEntries(
-      Object.entries(props).map(([k, v]) => [k, isDynamicMarker(v) ? undefined : v]),
-    );
-    return schema.partial().safeParse(staticProps);
+// The props that fail the component schema, named (empty when they pass). The names are the keys of
+// an unknown-key issue, otherwise the first segment of each issue's path. For a Zod object,
+// .partial() so omitted nullable keys don't false-positive (std defs require nullable keys
+// present, specs omit them) while .strict()'s unknown-key rejection survives .partial() — an
+// extra or mistyped prop still fails. Dynamic-marker values are blanked to undefined (the
+// renderer resolves their runtime type) but their KEYS stay, so an UNKNOWN dynamic-valued key is
+// still rejected. Non-object schemas fall back to a plain parse.
+function failingProps(schema: ZodType, props: SpecElement['props']): readonly string[] {
+  const result =
+    schema instanceof z.ZodObject
+      ? schema
+          .partial()
+          .safeParse(
+            Object.fromEntries(
+              Object.entries(props).map(([k, v]) => [k, containsMarker(v) ? undefined : v]),
+            ),
+          )
+      : schema.safeParse(props);
+  if (result.success) return [];
+  const names = result.error.issues.flatMap((issue) =>
+    issue.code === 'unrecognized_keys' ? issue.keys : [String(issue.path[0] ?? 'props')],
+  );
+  return [...new Set(names)];
+}
+
+// The state pointers inside one named prop or param value. An empty pointer names the whole state
+// document, which no prop or param may bind to; any other pointer must resolve against the state.
+function checkPointers(
+  value: unknown,
+  surface: { readonly noun: 'Prop' | 'Action param'; readonly refusal: 'bad-props' | 'bad-params' },
+  name: string,
+  key: string,
+  state: JsonValue,
+): readonly SemanticIssue[] {
+  return collectStateRefs(value).flatMap((pointer): readonly SemanticIssue[] => {
+    if (pointer === '') {
+      return [
+        {
+          code: surface.refusal,
+          elementKey: key,
+          message: `${surface.noun} "${name}" on "${key}" binds to the whole state document (an empty pointer) — name a path.`,
+        },
+      ];
+    }
+    if (resolvePointer(state, pointer) !== undefined) return [];
+    return [
+      {
+        code: 'bad-binding',
+        elementKey: key,
+        message: `${surface.noun} binding "${pointer}" on "${key}" does not resolve against the bound state.`,
+      },
+    ];
+  });
+}
+
+const PROP_SURFACE = { noun: 'Prop', refusal: 'bad-props' } as const;
+const PARAM_SURFACE = { noun: 'Action param', refusal: 'bad-params' } as const;
+
+// The size, padding, margin and gap props of the adopted components, and the largest number a spec
+// may give one. The adopted schema bounds only a positive size, so a negative or huge value would
+// reach the terminal layout engine unchecked.
+const LAYOUT_BOUND = 1000;
+const LAYOUT_PROPS: ReadonlySet<string> = new Set([
+  'width',
+  'height',
+  'minWidth',
+  'minHeight',
+  'padding',
+  'paddingX',
+  'paddingY',
+  'paddingTop',
+  'paddingBottom',
+  'paddingLeft',
+  'paddingRight',
+  'margin',
+  'marginX',
+  'marginY',
+  'marginTop',
+  'marginBottom',
+  'marginLeft',
+  'marginRight',
+  'gap',
+  'columnGap',
+  'rowGap',
+]);
+
+function layoutIssues(el: SpecElement, key: string): readonly SemanticIssue[] {
+  if (!Object.hasOwn(standardComponentDefinitions, el.type)) return [];
+  return Object.entries(el.props)
+    .filter(
+      ([name, value]) =>
+        LAYOUT_PROPS.has(name) && typeof value === 'number' && Math.abs(value) > LAYOUT_BOUND,
+    )
+    .map(([name]) => ({
+      code: 'bad-props',
+      elementKey: key,
+      message: `Prop "${name}" on "${key}" is outside the layout bound of ${LAYOUT_BOUND}.`,
+    }));
+}
+
+const quoted = (names: readonly string[]): string => names.map((name) => `"${name}"`).join(', ');
+
+// The params of a binding checked against the action's schema, for what is known at generation.
+// A value that holds a marker is only known at render time, so it counts as present and is not
+// type-checked; every other value is parsed against the partial schema, and a key the schema
+// requires must be an own key of the params. A schema that is not a plain object has no partial
+// form and is left to the check at press time.
+function checkParams(
+  actionName: string,
+  catalog: MinituiCatalog,
+  params: Readonly<Record<string, JsonValue>> | undefined,
+  key: string,
+): readonly SemanticIssue[] {
+  const schema = catalog.actionDefs.get(actionName)?.params;
+  if (!(schema instanceof z.ZodObject)) return [];
+  const given = params ?? {};
+  const literal = Object.fromEntries(
+    Object.entries(given).map(([k, v]) => [k, containsMarker(v) ? undefined : v]),
+  );
+  const failed = schema.partial().safeParse(literal);
+  const named = failed.success
+    ? []
+    : failed.error.issues.map((issue) =>
+        issue.code === 'unrecognized_keys'
+          ? issue.keys.join(', ')
+          : issue.path.map(String).join('.') || 'params',
+      );
+  for (const [paramKey, field] of Object.entries(schema.shape)) {
+    if (isContentRequired(field) && !Object.hasOwn(given, paramKey)) named.push(paramKey);
   }
-  return schema.safeParse(props);
+  return named.map((name) => ({
+    code: 'bad-params',
+    elementKey: key,
+    message: `Action param "${name}" for "${actionName}" on "${key}" is missing or does not match the action's params.`,
+  }));
 }
 
 // Action-level semantic checks for one bound action name: (1) a render-local
@@ -241,11 +390,13 @@ function checkAction(
     });
   }
 
-  if (permission !== undefined && hasUnresolvedHole(permission.resourceTemplate, state)) {
+  const unresolved =
+    permission === undefined ? [] : unresolvedPointers(permission.resourceTemplate, state);
+  if (permission !== undefined && unresolved.length > 0) {
     issues.push({
       code: 'bad-binding',
       elementKey: key,
-      message: `resourceTemplate for "${actionName}" has a binding that does not resolve against the bound state.`,
+      message: `resourceTemplate for "${actionName}" (${permission.resourceTemplate}) has a binding that does not resolve against the bound state: ${unresolved.join(', ')}.`,
     });
   }
   return issues;
@@ -265,6 +416,31 @@ export function checkSemantics(
   catalog: MinituiCatalog,
   state: JsonValue,
 ): readonly SemanticIssue[] {
+  return gatedIssues(spec, catalog, state).map(boundIssue);
+}
+
+function gatedIssues(
+  spec: AppSpec,
+  catalog: MinituiCatalog,
+  state: JsonValue,
+): readonly SemanticIssue[] {
+  try {
+    const screened = screenSpec(spec);
+    if (screened.length > 0) {
+      return screened.map(({ code, elementKey, message }) => ({ code, elementKey, message }));
+    }
+    return semanticIssues(spec, catalog, state);
+  } catch {
+    return [{ code: 'gate-internal-error', elementKey: '', message: GATE_INTERNAL_ERROR_MESSAGE }];
+  }
+}
+
+// The semantic checks, run only on a spec the screen has passed.
+function semanticIssues(
+  spec: AppSpec,
+  catalog: MinituiCatalog,
+  state: JsonValue,
+): readonly SemanticIssue[] {
   const issues: SemanticIssue[] = [];
 
   // SpecElement has no inline `key` (identity is the map key — json-render's
@@ -279,13 +455,15 @@ export function checkSemantics(
     // a custom def.
     const compDef = catalog.componentDefs.get(el.type);
     if (compDef !== undefined) {
-      if (!checkProps(compDef.props, el.props).success) {
+      const failing = failingProps(compDef.props, el.props);
+      if (failing.length > 0) {
         issues.push({
           code: 'bad-props',
           elementKey: key,
-          message: `Props for "${el.type}" failed the component schema (unknown or mistyped prop).`,
+          message: `Props for "${el.type}" failed the component schema (unknown or mistyped prop): ${quoted(failing)}.`,
         });
       }
+      issues.push(...layoutIssues(el, key));
       // Genuinely-required content (a non-nullable, default-less prop) the spec
       // omits — a nullable-required or defaulted std styling prop stays omittable.
       issues.push(...collectMissingRequired(compDef.props, el.props, el.type, key));
@@ -298,14 +476,8 @@ export function checkSemantics(
     // (2) bad binding: every { $state }/{ $bindState } pointer in props must
     // resolve against the bound state document (the gate's own `state` arg — the
     // wire AppSpec is state-free).
-    for (const pointer of collectStateRefs(el.props)) {
-      if (resolvePointer(state, pointer) === undefined) {
-        issues.push({
-          code: 'bad-binding',
-          elementKey: key,
-          message: `Prop binding "${pointer}" on "${key}" does not resolve against the bound state.`,
-        });
-      }
+    for (const [propKey, value] of Object.entries(el.props)) {
+      issues.push(...checkPointers(value, PROP_SURFACE, propKey, key, state));
     }
 
     for (const binding of collectBindings(el)) {
@@ -316,18 +488,13 @@ export function checkSemantics(
 
       // (2) dynamic action params: { $state } refs must resolve (the gate
       // inspects dynamic params, not just action names).
-      for (const pointer of collectStateRefs(binding.params ?? {})) {
-        if (resolvePointer(state, pointer) === undefined) {
-          issues.push({
-            code: 'bad-binding',
-            elementKey: key,
-            message: `Action param binding "${pointer}" on "${key}" does not resolve against the bound state.`,
-          });
-        }
+      for (const [paramKey, value] of Object.entries(binding.params ?? {})) {
+        issues.push(...checkPointers(value, PARAM_SURFACE, paramKey, key, state));
       }
 
       for (const actionName of actionNamesOf(binding)) {
         issues.push(...checkAction(actionName, catalog, key, state));
+        issues.push(...checkParams(actionName, catalog, binding.params, key));
       }
     }
   }
