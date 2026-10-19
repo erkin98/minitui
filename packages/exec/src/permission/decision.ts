@@ -33,22 +33,29 @@ function gitGlobalOptionUnsafe(root: CommandRoot): boolean {
 }
 
 // Options after the git subcommand that run a program, with the option written as given: a long option
-// matches itself or itself followed by '='; a short option also matches with its value attached
+// matches itself, itself followed by '=', or an abbreviation of it (git takes any unambiguous prefix of a
+// long option, so '--upload-p=x' is '--upload-pack=x'; a prefix of three characters or more counts, and
+// an ambiguous one is an error in git anyway); a short option also matches with its value attached
 // ('-cname=val', '-xcmd'). The first key applies to every subcommand. The scan of the global options
 // before the subcommand is the one above. Recorded limit: other ways git runs a program (aliases and hooks
 // in a repository's own config, filter-branch, mergetool, a pager set in config) are not modelled; the
 // sandbox is the control.
 const UNSAFE_GIT_SUBCOMMAND_OPTS: Readonly<Record<string, readonly string[]>> = {
   '*': ['--upload-pack', '--receive-pack', '--exec', '--extcmd'],
-  clone: ['-c', '--config', '-u'],
+  // --template takes hooks from another directory, which git then runs
+  clone: ['-c', '--config', '-u', '--template'],
+  init: ['--template'],
+  grep: ['-O', '--open-files-in-pager'],
   rebase: ['-x'],
   difftool: ['-x'],
 };
 
-const gitOptionHit = (token: string, option: string): boolean =>
-  option.length === 2
-    ? token.startsWith(option)
-    : token === option || token.startsWith(`${option}=`);
+function gitOptionHit(token: string, option: string): boolean {
+  if (option.length === 2) return token.startsWith(option);
+  if (!token.startsWith('--')) return false;
+  const name = token.split('=', 1)[0] ?? token;
+  return name.length >= 3 && option.startsWith(name);
+}
 
 function gitSubcommandUnsafe(root: CommandRoot): boolean {
   if (root.name !== 'git') return false;
@@ -87,14 +94,22 @@ const FFMPEG_WRAPPER_PREFIXES = [
   'unix:',
 ];
 
+// A wrapper prefix starts the argument or follows a filtergraph separator (`movie=cache:x`, `a,tee:x`).
+const FFMPEG_WRAPPER = new RegExp(
+  `(^|[=,;\\s])(${FFMPEG_WRAPPER_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+  'i',
+);
+
+// A filtergraph unescapes a backslash before any character, so `http\:\/\/host` is `http://host` there;
+// the argument is judged after that unescape. Recorded limit: the input formats that read further inputs
+// from a list (`-f concat`, `-f hls`, `-f lavfi`) are not flagged: `-f concat` is the ordinary merge
+// input, ffmpeg's own protocol whitelist covers a local list file, and the sandbox is the control.
 function ffmpegNetworkInput(root: CommandRoot): boolean {
   if (root.name !== 'ffmpeg' && root.name !== 'ffprobe') return false;
   return root.argv.slice(1).some((arg) => {
     if (arg.startsWith('-')) return false;
-    const lower = arg.toLowerCase();
-    return (
-      lower.includes('://') || FFMPEG_WRAPPER_PREFIXES.some((prefix) => lower.startsWith(prefix))
-    );
+    const text = arg.replace(/\\(.)/gs, '$1').toLowerCase();
+    return text.includes('://') || FFMPEG_WRAPPER.test(text);
   });
 }
 

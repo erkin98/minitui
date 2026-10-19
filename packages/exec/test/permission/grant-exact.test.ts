@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine, type PermissionEngine } from '../../src/permission/engine.js';
-import { appendGrant, loadGrants } from '../../src/permission/persist.js';
+import { appendGrant, loadGrants, readGrants } from '../../src/permission/persist.js';
 import type {
   ApprovalMode,
   PermissionReply,
@@ -229,5 +229,27 @@ describe('a persisted exact grant behaves the same after a reload', () => {
     });
     expect(await verdict(second, 'rm -rf build')).toBe('allow');
     expect(await verdict(second, 'rm -rf build ~/Documents')).toBe('ask');
+  });
+});
+
+describe('a cascade grant is only minted for a bare command name', () => {
+  it('a command word holding a space gets no wildcard-capable rule and cannot poison the grants file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'minitui-bare-'));
+    const file = join(dir, 'grants.json');
+    const appends: Promise<void>[] = [];
+    const engine = createEngine({
+      initialRules: { rules: [] },
+      onGrant: (rule) => appends.push(appendGrant(rule, file)),
+      resolveExecutable: resolver('/usr/bin').resolve,
+    });
+    expect(await answer(engine, '"my tool" -x', broad)).toBe('allow');
+    await Promise.all(appends);
+    const loaded = await readGrants(file);
+    expect(loaded.status === 'invalid').toBe(false);
+    for (const grant of loaded.grants) {
+      expect(grant.exact === true || !/[\s*]/.test(grant.pattern)).toBe(true);
+    }
+    // whatever was minted does not cover a different argument list
+    expect(await verdict(engine, '"my tool" -y')).toBe('ask');
   });
 });

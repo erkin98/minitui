@@ -359,3 +359,63 @@ describe('git: an option that runs a program asks, in every mode', () => {
     expect(await yoloVerdict(command, 'git')).toBe('allow');
   });
 });
+
+describe('git: an abbreviated long option runs the program too', () => {
+  it.each([
+    'git fetch --upload-p=x origin',
+    'git fetch --upload-pa x origin',
+    'git clone --conf a=b u d',
+    'git clone --upl=x u d',
+    'git push --receive-p=x origin',
+    'git push --exe=x origin',
+    'git rebase --exe=x main',
+    'git difftool --extc=x',
+  ])('is asked: %s', async (command) => {
+    await expectAskEverywhere(command, 'git');
+  });
+
+  it.each([
+    'git grep -Omake pattern',
+    'git grep --open-files-in-pager=less pattern',
+    'git clone --template=/tmp/t u d',
+    'git init --template=/tmp/t',
+  ])('options that run a program or take hooks from elsewhere are asked: %s', async (command) => {
+    await expectAskEverywhere(command, 'git');
+  });
+
+  it.each([
+    'git fetch --recurse-submodules origin',
+    'git diff --exit-code',
+    'git log --oneline',
+    'git rebase --continue',
+    'git push --force-with-lease origin',
+    'git clone --depth 1 u d',
+    'git grep -n pattern',
+    'git init',
+  ])('control: keeps its verdict: %s', async (command) => {
+    expect(staticVerdict(command, 'git')).toBe('allow');
+    expect(await yoloVerdict(command, 'git')).toBe('allow');
+  });
+});
+
+describe('ffmpeg: an escaped or embedded fetching input asks', () => {
+  it.each([
+    String.raw`ffmpeg -f lavfi -i 'movie=http\:\/\/host\/x' out.mp4`,
+    String.raw`ffmpeg -i a.mp4 -vf 'movie=http\://host/x' out.mp4`,
+    'ffmpeg -i a.mp4 -vf movie=cache:x.mp4 out.mp4',
+    'ffmpeg -i a.mp4 -filter_complex amovie=concatf:list.txt out.mp4',
+    'ffmpeg -i a.mp4 -vf movie=a.mp4,movie=tee:x out.mp4',
+  ])('is asked: %s', async (command) => {
+    await expectAskEverywhere(command, 'ffmpeg');
+  });
+
+  it.each([
+    'ffmpeg -i a.mp4 -vf scale=1280:720 out.mp4',
+    "ffmpeg -i a.mp4 -i b.mp4 -filter_complex '[0:v][1:v]concat=n=2:v=1[v]' -map '[v]' out.mp4",
+    'ffmpeg -f concat -i list.txt -c copy out.mp4',
+    'ffmpeg -i a.mp4 -vf drawtext=text=hello out.mp4',
+  ])('control: keeps its verdict: %s', async (command) => {
+    expect(staticVerdict(command, 'ffmpeg')).toBe('allow');
+    expect(await yoloVerdict(command, 'ffmpeg')).toBe('allow');
+  });
+});
