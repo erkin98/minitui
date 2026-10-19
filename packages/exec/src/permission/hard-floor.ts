@@ -59,6 +59,8 @@ interface Floor {
   readonly host: Host;
   readonly fold: boolean;
   readonly homes: ReadonlySet<string>;
+  // the directories that hold home directories: `homes` without this host's own home
+  readonly parents: ReadonlySet<string>;
   readonly store: string;
 }
 
@@ -69,8 +71,10 @@ function floorFor(host: Host): Floor {
   const homes = new Set(
     [...homeRoots(host.home, host.platform)].map((p) => (folds ? foldCase(p) : p)),
   );
+  const ownHome = host.home.replace(/\/+$/, '');
+  const parents = new Set([...homes].filter((p) => p !== (folds ? foldCase(ownHome) : ownHome)));
   const store = storeDir(process.env, host.home);
-  return { host, fold: folds, homes, store: folds ? foldCase(store) : store };
+  return { host, fold: folds, homes, parents, store: folds ? foldCase(store) : store };
 }
 
 // HOME_ROOT above is textual-only, but roots.ts and the runner fill consent+exec holes with the
@@ -81,6 +85,17 @@ function floorFor(host: Host): Floor {
 function isFlooredPath(floor: Floor, token: string): boolean {
   const n = fold(floor, normalizeCommandToken(token).replace(/\/+$/, ''));
   return n !== '' && floor.homes.has(n);
+}
+
+// Another account's home directory: a resolved path exactly one level below a directory that holds
+// home directories (the parent of this host's home, /home, /Users). Deleting it is as catastrophic as
+// deleting the user's own. `/home/x/build` is a subpath of it and is not floored, and a child of the
+// root (`/x`) is never swept in, because `/` is not one of those parents. A shared directory such as
+// /home/shared or /Users/Shared is floored too (recorded cost: no gated command may delete it).
+function isSiblingHome(floor: Floor, absolute: string): boolean {
+  const n = fold(floor, absolute.replace(/\/+$/, ''));
+  const slash = n.lastIndexOf('/');
+  return slash > 0 && slash < n.length - 1 && floor.parents.has(n.slice(0, slash));
 }
 
 // Secret locations — never touched (read OR written), regardless of approval mode.
@@ -304,7 +319,7 @@ function dotDotHitsFloored(floor: Floor, operand: string): boolean {
   const absolute = anchoredAbsolute(floor, operand);
   if (absolute === undefined) return false;
   const resolved = posix.normalize(absolute).replace(/(?!^)\/+$/, '');
-  return resolved === '/' || isFlooredPath(floor, resolved);
+  return resolved === '/' || isFlooredPath(floor, resolved) || isSiblingHome(floor, resolved);
 }
 
 // `~name` followed by anything but a slash (`~root`, `~+`, `~-`) with a `..` component: the home it
@@ -320,7 +335,9 @@ function rmOperandHits(floor: Floor, token: string): boolean {
   const reduced = normalizeRmOperand(operand);
   // textual home/root form, a host-resolved floored directory, OR ~user (another user's whole home)
   if (HOME_ROOT.some((re) => re.test(reduced)) || isFlooredPath(floor, reduced)) return true;
-  if (/^~[^/]+$/.test(reduced)) return true;
+  if (/^~[^/]+$/.test(reduced) || (reduced.startsWith('/') && isSiblingHome(floor, reduced))) {
+    return true;
+  }
   return (
     globHitsFloored(floor, operand) || dotDotHitsFloored(floor, operand) || userHomeDotDot(operand)
   );

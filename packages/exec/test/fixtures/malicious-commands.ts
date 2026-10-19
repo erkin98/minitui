@@ -96,6 +96,18 @@ export const MALICIOUS_COMMANDS = [
     expectedMessage: 'recursive delete of home or root is never permitted',
   },
   {
+    label: 'rm another user home',
+    command: 'rm -rf /home/x',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
+    label: 'rm another user home on the macOS parent',
+    command: 'rm -rf /Users/x/',
+    expect: 'deny',
+    expectedMessage: 'recursive delete of home or root is never permitted',
+  },
+  {
     label: 'read ssh key',
     command: 'cat ~/.ssh/id_rsa',
     expect: 'deny',
