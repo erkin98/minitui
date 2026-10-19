@@ -165,6 +165,41 @@ describe('the home directories beside the user own are denied for rm', () => {
     expect(floor(command, linuxHost).blocked).toBe(true);
   });
 
+  // A glob that expands to a child of a parent directory is floored whatever component holds the
+  // glob; a glob below that depth only reaches subpaths of another home.
+  const globbed = [
+    'rm -rf /ho*/x',
+    'rm -rf /h*/x',
+    'rm -rf /ho?e/x',
+    'rm -rf /ho[m]e/x',
+    'rm -rf /*/x',
+    'rm -rf /ho*/x*',
+    'rm -rf /Us*/x',
+    'rm -rf /home/x*',
+    'rm -rf ~/../x*',
+    'rm -rf ~/../*',
+  ];
+  it.each(globbed)('is denied when a glob expands to it: %s', (command) => {
+    expect(floor(command, linuxHost).blocked).toBe(true);
+  });
+
+  it.each([
+    'rm -rf /ho*/x/docs',
+    'rm -rf /t*/x',
+    'rm -rf /home/erkin/b*/x',
+    'rm -rf /home/erkin/b*',
+    'rm -rf ~/b*/x',
+  ])('keeps a glob below that depth allowed: %s', (command) => {
+    expect(floor(command, linuxHost).blocked).toBe(false);
+  });
+
+  it('does not floor the children of the user own home when that home is itself /home', () => {
+    const bare: Host = { home: '/home', platform: 'linux' };
+    expect(floor('rm -rf /home/x', bare).blocked).toBe(false);
+    expect(floor('rm -rf /home', bare).blocked).toBe(true);
+    expect(floor('rm -rf /Users/x', bare).blocked).toBe(true);
+  });
+
   it('is denied through the engine in both modes by an absolute spelling', async () => {
     expect(await bothModes('rm -rf /home/x', 'rm')).toEqual(['deny', 'deny']);
     expect(await bothModes('rm -rf /Users/x', 'rm')).toEqual(['deny', 'deny']);
@@ -217,7 +252,7 @@ describe('the floor knows the host', () => {
     // an irregular bracket never reaches across a separator, so the components after it still count
     expect(floor('rm -rf /ho[[:lower:]]e/[e]rkin', linuxHost).blocked).toBe(true);
     expect(floor('rm -rf /ho[[=m=]]e/e[r]kin', linuxHost).blocked).toBe(true);
-    expect(floor('rm -rf /ho[[:lower:]]e/[x]rkin', linuxHost).blocked).toBe(false);
+    expect(floor('rm -rf /ho[[:lower:]]e/[x]rkin/build', linuxHost).blocked).toBe(false);
   });
   it('floors glob forms of the home directory on a linux host', () => {
     expect(floor('rm -rf /home/erki*', linuxHost).blocked).toBe(true);

@@ -91,7 +91,11 @@ function isFlooredPath(floor: Floor, token: string): boolean {
 // home directories (the parent of this host's home, /home, /Users). Deleting it is as catastrophic as
 // deleting the user's own. `/home/x/build` is a subpath of it and is not floored, and a child of the
 // root (`/x`) is never swept in, because `/` is not one of those parents. A shared directory such as
-// /home/shared or /Users/Shared is floored too (recorded cost: no gated command may delete it).
+// /home/shared or /Users/Shared is floored too (recorded cost: no gated command may delete it). When
+// the user's own home is itself /home or /Users, that directory is not a parent here: its children are
+// subpaths of the user's home, which stay allowed. The comparison is lexical, as for the user's own
+// home: an alias of a parent (a firmlink such as /System/Volumes/Data/Users, a /home that is a link)
+// is not resolved, and the sandbox write-deny is the control for those spellings.
 function isSiblingHome(floor: Floor, absolute: string): boolean {
   const n = fold(floor, absolute.replace(/\/+$/, ''));
   const slash = n.lastIndexOf('/');
@@ -307,8 +311,19 @@ function normalizeRmOperand(raw: string): string {
 // extractor's opaque ask, not a deny.
 function globHitsFloored(floor: Floor, operand: string): boolean {
   if (!operand.startsWith('/') || !GLOB_CHAR.test(operand)) return false;
-  const re = globToRegExp(operand.replace(/\/+$/, ''), floor.fold);
-  return [...floor.homes].some((home) => re.test(home));
+  const pattern = operand.replace(/\/+$/, '');
+  const re = globToRegExp(pattern, floor.fold);
+  return [...floor.homes].some((home) => re.test(home)) || globBeneathParent(floor, pattern);
+}
+
+// The same pattern read one level up: when everything before its last component can be one of the
+// directories that hold home directories, the pattern expands to a child of it, which is another
+// account's home (`/ho*/x`, `/h?me/x*`). A glob any deeper only reaches subpaths of a home.
+function globBeneathParent(floor: Floor, pattern: string): boolean {
+  const slash = pattern.lastIndexOf('/');
+  if (slash <= 0 || slash === pattern.length - 1) return false;
+  const head = globToRegExp(pattern.slice(0, slash), floor.fold);
+  return [...floor.parents].some((parent) => head.test(parent));
 }
 
 // An operand anchored at `~`, `$HOME`, `${HOME}` or `/` is resolved lexically, `.` and `..` included,
