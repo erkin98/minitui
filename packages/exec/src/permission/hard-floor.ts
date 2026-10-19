@@ -305,6 +305,17 @@ function normalizeRmOperand(raw: string): string {
   return posix.normalize(prefix).replace(/(?!^)\/+$/, ''); // // -> /, drop a trailing slash (keep root /)
 }
 
+// A glob component that leads with a literal dot (or a bracket holding one) and can spell `..`: `.?`,
+// `.*`, `.[.]`. A shell that matches the dot entries expands it to the parent directory, which the
+// lexical collapse of a resolved operand cannot see (`/tmp/.?/home/x` is `/home/x`).
+function globMayBeDotDot(floor: Floor, component: string): boolean {
+  if (!GLOB_CHAR.test(component)) return false;
+  const leadsWithDot =
+    component.startsWith('.') || (component.startsWith('[') && component.includes('.'));
+  if (!leadsWithDot) return false;
+  return globToRegExp(component, floor.fold).test('..');
+}
+
 // A glob operand matched as a PATTERN against the directories that must never be wiped, in addition
 // to the prefix reduction above: `/ho*` and `/hom?` expand to `/home`, `/h*/*` and `/home/erki*` to
 // the home directory. Only an absolute operand is matched, so `rm -rf *` in a working directory is the
@@ -355,6 +366,10 @@ function userHomeDotDot(operand: string): boolean {
 function rmOperandHits(floor: Floor, token: string): boolean {
   const operand = normalizeCommandToken(token);
   if (textIsUnresolved(operand)) return true;
+  // an anchored operand with a component that can spell `..` cannot be resolved lexically: refused
+  if (ANCHORED.test(operand) && operand.split('/').some((c) => globMayBeDotDot(floor, c))) {
+    return true;
+  }
   const reduced = normalizeRmOperand(operand);
   // textual home/root form, a host-resolved floored directory, OR ~user (another user's whole home)
   if (HOME_ROOT.some((re) => re.test(reduced)) || isFlooredPath(floor, reduced)) return true;
