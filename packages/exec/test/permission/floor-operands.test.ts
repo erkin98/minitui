@@ -139,6 +139,76 @@ describe('home and root wipes by glob or dot-dot are denied', () => {
   });
 });
 
+// Another account's home directory is a direct child of a directory that holds home directories:
+// the parent of this host's home, /home and /Users. Deleting one is as catastrophic as deleting the
+// user's own, so it is floored in every spelling that resolves to it, and only exactly one level
+// below those parents: a subpath of another home is an ordinary path.
+describe('the home directories beside the user own are denied for rm', () => {
+  const denied = [
+    'rm -rf ~/../x',
+    'rm -rf ~/../x/',
+    'rm -rf $HOME/../x',
+    'rm -rf ${HOME}/../x',
+    'rm -rf ~/y/../../x',
+    'rm -rf /home/x',
+    'rm -rf /home/x/',
+    'rm -rf /home//x',
+    'rm -rf /home/./x',
+    'rm -rf /home/erkin/../x',
+    'rm -rf /home/x/*',
+    'rm -r -f /home/x',
+    'rm -rf -- /home/x',
+    'rm --recursive --force /home/x',
+    'rm -rf /Users/x',
+  ];
+  it.each(denied)('is denied on a linux host: %s', (command) => {
+    expect(floor(command, linuxHost).blocked).toBe(true);
+  });
+
+  it('is denied through the engine in both modes by an absolute spelling', async () => {
+    expect(await bothModes('rm -rf /home/x', 'rm')).toEqual(['deny', 'deny']);
+    expect(await bothModes('rm -rf /Users/x', 'rm')).toEqual(['deny', 'deny']);
+  });
+
+  it('floors the literal parents on a host whose home is /root', () => {
+    expect(floor('rm -rf /home/x', rootHost).blocked).toBe(true);
+    expect(floor('rm -rf /Users/x', rootHost).blocked).toBe(true);
+  });
+
+  it('floors a sibling of a home that sits outside /home and /Users', () => {
+    const srvHost: Host = { home: '/srv/people/erkin', platform: 'linux' };
+    expect(floor('rm -rf /srv/people/bob', srvHost).blocked).toBe(true);
+    expect(floor('rm -rf ~/../bob', srvHost).blocked).toBe(true);
+    expect(floor('rm -rf /srv/people/bob/build', srvHost).blocked).toBe(false);
+  });
+
+  it('folds case on a darwin host and not on a linux host', () => {
+    expect(floor('rm -rf /users/X', darwinHost).blocked).toBe(true);
+    expect(floor('rm -rf /USERS/x', darwinHost).blocked).toBe(true);
+    expect(floor('rm -rf /users/x', linuxHost).blocked).toBe(false);
+  });
+
+  it('floors a shared directory under the parent too (recorded cost)', () => {
+    expect(floor('rm -rf /Users/Shared', darwinHost).blocked).toBe(true);
+    expect(floor('rm -rf /home/shared', linuxHost).blocked).toBe(true);
+  });
+
+  const allowed = [
+    'rm -rf ~/../x/docs',
+    'rm -rf ~/../x/../y/docs',
+    'rm -rf /home/x/docs',
+    'rm -rf /home/x/docs/',
+    'rm -rf /home/erkin/build',
+    'rm -rf ~/x',
+    'rm -rf /tmp/x',
+    'rm -rf /srv/x',
+    'rm -rf /x',
+  ];
+  it.each(allowed)('keeps a subpath or an unrelated directory allowed: %s', (command) => {
+    expect(floor(command, linuxHost).blocked).toBe(false);
+  });
+});
+
 describe('the floor knows the host', () => {
   it('floors /home on a host whose home is /root (a guard: the literal is always in the set)', () => {
     expect(floor('rm -rf /home', rootHost).blocked).toBe(true);
