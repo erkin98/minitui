@@ -1,7 +1,7 @@
 import { basename, posix } from 'node:path';
 import type { ParsedCommand, CommandRoot } from '@minitui/types';
 import { ARG_RUNNERS, normalizeCommandToken, STDIN_RUNNERS } from './shell/wrappers.js';
-import { currentHost, foldsCase, homeRoots, type Host } from './shell/host.js';
+import { currentHost, foldCase, foldsCase, homeRoots, type Host } from './shell/host.js';
 import { textIsUnresolved } from './shell/operands.js';
 import {
   HOME_SECRET_DIRS,
@@ -62,15 +62,15 @@ interface Floor {
   readonly store: string;
 }
 
-const fold = (floor: Floor, text: string): string => (floor.fold ? text.toLowerCase() : text);
+const fold = (floor: Floor, text: string): string => (floor.fold ? foldCase(text) : text);
 
 function floorFor(host: Host): Floor {
   const folds = foldsCase(host.platform);
   const homes = new Set(
-    [...homeRoots(host.home, host.platform)].map((p) => (folds ? p.toLowerCase() : p)),
+    [...homeRoots(host.home, host.platform)].map((p) => (folds ? foldCase(p) : p)),
   );
   const store = storeDir(process.env, host.home);
-  return { host, fold: folds, homes, store: folds ? store.toLowerCase() : store };
+  return { host, fold: folds, homes, store: folds ? foldCase(store) : store };
 }
 
 // HOME_ROOT above is textual-only, but roots.ts and the runner fill consent+exec holes with the
@@ -119,15 +119,19 @@ const GLOB_TARGETS: ReadonlyArray<readonly string[]> = [
 const GLOB_CHAR = /[*?[]/;
 const ANCHORED = /^(~|\$HOME|\$\{HOME\}|\/)/;
 
+// A class inside a bracket expression: `[:name:]`, `[=c=]` or `[.c.]`.
+const CLASS_OPEN = /^\[([:=.])/;
+
 // The index of the `]` that closes the bracket expression opening at `start`, or -1. A `]` right after
-// the opening (or after a leading `!` or `^`) is a member, and `[:name:]` is a character class.
+// the opening (or after a leading `!` or `^`) is a member, and `[:name:]`, `[=c=]` and `[.c.]` are classes.
 function bracketEnd(pattern: string, start: number): number {
   let j = start + 1;
   if (pattern[j] === '!' || pattern[j] === '^') j++;
   if (pattern[j] === ']') j++;
   while (j < pattern.length) {
-    if (pattern.startsWith('[:', j)) {
-      const close = pattern.indexOf(':]', j + 2);
+    const open = CLASS_OPEN.exec(pattern.slice(j));
+    if (open) {
+      const close = pattern.indexOf(`${open[1]}]`, j + 2);
       if (close === -1) return -1;
       j = close + 2;
     } else if (pattern[j] === ']') return j;
@@ -181,7 +185,10 @@ function globWindowHits(
     if (component === undefined) return false;
     if (!GLOB_CHAR.test(component)) {
       if (fold(floor, component) !== fold(floor, name)) return false;
-    } else if (hasLiteralChar(component) && globToRegExp(component, floor.fold).test(name)) {
+    } else if (
+      hasLiteralChar(component) &&
+      globToRegExp(fold(floor, component), floor.fold).test(name)
+    ) {
       hasGlob = true;
     } else return false;
   }
