@@ -4,7 +4,7 @@ import { runTurns, runProviderStream } from '../src/session/stream-turns.js';
 import { createAsyncEventQueue } from '../src/events/event-stream.js';
 import { createConversation } from '../src/session/conversation.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
-import type { ToolDispatchPort, ToolCallResult } from '../src/ports/index.js';
+import { fixedClock, type ToolDispatchPort, type ToolCallResult } from '../src/ports/index.js';
 import type { ModelProvider } from '../src/provider/provider-port.js';
 
 // Fake streamText that (1) calls a registered tool's execute, then (2) emits a real fullStream.
@@ -685,6 +685,8 @@ describe('stream-turns', () => {
         tools,
         model: 'test-model',
         streamMaxRetries: 2,
+        // a virtual clock: its waits return at once, so the re-run does not sleep for real
+        clock: fixedClock(0),
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];

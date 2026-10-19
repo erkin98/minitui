@@ -3,7 +3,9 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import type { ModelProvider } from './provider-port.js';
 import type { ProviderChunk, ProviderRequest } from './provider-types.js';
 import type { FinishReason } from '../session/finish-reason.js';
-import { CONTEXT_OVERFLOW_RE } from '../errors.js';
+import { noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
+import { toRunError } from '../errors.js';
+import { routeProviderWarnings, streamErrorHandler } from '../session/model-diagnostics.js';
 
 type StreamTextFn = typeof realStreamText;
 
@@ -35,16 +37,14 @@ function parseRetryAfterMs(message: string): number | undefined {
 }
 
 /**
- * Classify an SDK error into the ProviderChunk error taxonomy: a context-window overflow is fatal
- * (retriable:false — re-feeding the same too-long history loops forever); everything else is retriable
- * and carries a parsed retry-after when the provider supplied one. Surfaced in-band so the seam has one
- * uniform error shape.
+ * Classify an SDK error into the ProviderChunk error taxonomy with the package's one classifier
+ * (toRunError): a context-window overflow or a rejected request is fatal (retriable:false), everything
+ * else is retriable and carries a parsed retry-after when the provider supplied one. Surfaced in-band so
+ * the seam has one uniform error shape.
  */
 function classifyStreamError(err: unknown): Extract<ProviderChunk, { type: 'error' }> {
-  const message = err instanceof Error ? err.message : String(err);
-  if (CONTEXT_OVERFLOW_RE.test(message)) {
-    return { type: 'error', message, retriable: false };
-  }
+  const { message, retriable } = toRunError(err);
+  if (!retriable) return { type: 'error', message, retriable: false };
   const retryAfterMs = parseRetryAfterMs(message);
   return retryAfterMs === undefined
     ? { type: 'error', message, retriable: true }
@@ -74,9 +74,10 @@ function approvalToolCall(part: Record<string, unknown>): {
  * into the minitui-owned ProviderChunk. This file is the only place SDK stream-part types are read.
  */
 export function createAiSdkProvider(
-  opts: { apiKey?: string; streamTextImpl?: StreamTextFn } = {},
+  opts: { apiKey?: string; streamTextImpl?: StreamTextFn; diagnostics?: DiagnosticsPort } = {},
 ): ModelProvider {
   const streamText = opts.streamTextImpl ?? realStreamText;
+  const diagnostics = opts.diagnostics ?? noopDiagnostics;
   const anthropic = createAnthropic(opts.apiKey ? { apiKey: opts.apiKey } : {});
 
   return {
@@ -86,6 +87,7 @@ export function createAiSdkProvider(
     usesSdkLoop: true,
     // eslint-disable-next-line complexity -- exhaustive closed-union switch over the SDK stream-part arms
     async *streamChat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
+      routeProviderWarnings(diagnostics);
       const result = streamText({
         model: anthropic(req.config.model),
         // `system` is the current SDK option name; a future major renames it — update this one call site
@@ -100,6 +102,7 @@ export function createAiSdkProvider(
           ? { maxOutputTokens: req.config.maxOutputTokens }
           : {}),
         abortSignal: signal,
+        onError: streamErrorHandler(diagnostics, undefined),
       });
 
       for await (const part of result.fullStream as AsyncIterable<{

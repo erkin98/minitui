@@ -18,18 +18,32 @@ export interface VisibilityChannel {
   projectForModel(state: Readonly<Record<string, unknown>>): Record<string, unknown>;
 }
 
-export function createVisibilityChannel(classes: VisibilityMap): VisibilityChannel {
-  // Freeze a private copy so the channel's view cannot drift after construction.
-  const map: VisibilityMap = Object.freeze({ ...classes });
+// An object with no prototype: a key such as `toString` or `__proto__` is an ordinary own key (or absent),
+// never an inherited member and never a setter on the prototype chain.
+const bare = (): Record<string, unknown> => Object.create(null) as Record<string, unknown>;
 
-  const classOf = (fieldKey: string): VisibilityClass => map[fieldKey] ?? 'localOnly';
+export function createVisibilityChannel(classes: VisibilityMap): VisibilityChannel {
+  // Freeze a private prototype-less copy of the OWN entries, so the channel's view cannot drift after
+  // construction and an inherited entry never counts.
+  const copy = bare();
+  for (const [key, value] of Object.entries(classes)) copy[key] = value;
+  const map = Object.freeze(copy);
+
+  // Fail private: a class counts only when its key is an own key of the copy and its value is one of the
+  // three known classes. Anything else (an unknown name, an inherited name, `'public'`, `0`, `null`) is localOnly.
+  const classOf = (fieldKey: string): VisibilityClass => {
+    if (!Object.hasOwn(map, fieldKey)) return 'localOnly';
+    const declared = map[fieldKey];
+    return declared === 'modelVisible' || declared === 'modelOnly' ? declared : 'localOnly';
+  };
   const isModelVisible = (fieldKey: string): boolean => classOf(fieldKey) !== 'localOnly';
 
   return {
     classOf,
     isModelVisible,
     projectForModel(state) {
-      const out: Record<string, unknown> = {};
+      // Prototype-less, so a state key named `__proto__` becomes an ordinary own key of the projection.
+      const out = bare();
       for (const [k, v] of Object.entries(state)) {
         if (isModelVisible(k)) out[k] = v;
       }
@@ -68,11 +82,16 @@ function toChannelClass(cat: CatalogVisibilityClass | undefined): VisibilityClas
  * channel with createVisibilityChannel(catalogVisibilityToChannel(catalog)).
  */
 export function catalogVisibilityToChannel(catalog: CatalogVisibilitySource): VisibilityMap {
-  const map: Record<string, VisibilityClass> = {};
+  const map: Record<string, VisibilityClass> = Object.create(null) as Record<
+    string,
+    VisibilityClass
+  >;
   // Fail-private on a component/action name collision: a localOnly (secret / host-only) mapping is
-  // NEVER widened to modelVisible (the moat) — the more-private class always wins.
+  // NEVER widened to modelVisible (the moat) — the more-private class always wins. The prior entry is
+  // read as an own key only, so an inherited name never counts as one.
   const put = (key: string, cls: VisibilityClass): void => {
-    map[key] = map[key] === 'localOnly' || cls === 'localOnly' ? 'localOnly' : 'modelVisible';
+    const prior = Object.hasOwn(map, key) ? map[key] : undefined;
+    map[key] = prior === 'localOnly' || cls === 'localOnly' ? 'localOnly' : 'modelVisible';
   };
   for (const component of catalog.componentNames)
     put(component, toChannelClass(catalog.visibilityOf(component)));

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { APICallError } from 'ai';
 import { createAiSdkProvider, createAnthropicModel } from '../src/provider/ai-sdk-provider.js';
 import type { ProviderChunk, ProviderRequest } from '../src/provider/provider-types.js';
 import { runProviderStream } from '../src/session/stream-turns.js';
@@ -172,6 +173,21 @@ describe('ai-sdk-provider', () => {
     expect(out).toEqual([
       { type: 'error', message: 'maximum context length exceeded', retriable: false },
     ]);
+  });
+
+  it('classifies a rejected request (status 401) as not retriable, through the one classifier', async () => {
+    const unauthorized = new APICallError({
+      message: 'invalid x-api-key',
+      url: 'https://example.invalid/v1/messages',
+      requestBodyValues: {},
+      statusCode: 401,
+    });
+    const p = createAiSdkProvider({
+      streamTextImpl: fakeStreamText([{ type: 'error', error: unauthorized }]),
+    });
+    const out: ProviderChunk[] = [];
+    for await (const c of p.streamChat(req, new AbortController().signal)) out.push(c);
+    expect(out).toEqual([{ type: 'error', message: 'invalid x-api-key', retriable: false }]);
   });
 
   it('stops emitting once the signal aborts', async () => {

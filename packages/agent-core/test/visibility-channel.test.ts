@@ -4,6 +4,7 @@ import {
   catalogVisibilityToChannel,
   type VisibilityChannel,
   type VisibilityClass,
+  type VisibilityMap,
   type CatalogVisibilityClass,
   type CatalogVisibilitySource,
 } from '../src/visibility/visibility-channel.js';
@@ -100,5 +101,102 @@ describe('catalogVisibilityToChannel (catalog metadata is the runtime authority)
 
   it('fails private for an undeclared name (unknown -> localOnly)', () => {
     expect(createVisibilityChannel(map).classOf('mysteryField')).toBe('localOnly');
+  });
+});
+
+// Names an ordinary object already answers to, and one that is special as an own key. A map or a state
+// that needs an own `__proto__` key is built with JSON.parse; an object literal does not create one.
+const INHERITED_NAMES = ['toString', 'valueOf', 'hasOwnProperty', 'constructor', '__proto__'];
+
+function mapWithEntry(name: string, value: unknown): VisibilityMap {
+  return JSON.parse(`{"${name}":${JSON.stringify(value)}}`);
+}
+
+describe('visibility fails private', () => {
+  const empty = createVisibilityChannel({});
+
+  it.each(INHERITED_NAMES)(
+    'treats %s on an empty map as localOnly and not model-visible',
+    (name) => {
+      expect(empty.classOf(name)).toBe('localOnly');
+      expect(empty.isModelVisible(name)).toBe(false);
+    },
+  );
+
+  it('projects a state carrying every inherited name as own keys to an empty prototype-less object', () => {
+    const state: Record<string, unknown> = JSON.parse(
+      `{${INHERITED_NAMES.map((n) => `"${n}":{"x":1}`).join(',')}}`,
+    );
+    expect(Object.keys(state)).toHaveLength(INHERITED_NAMES.length);
+    const projected = empty.projectForModel(state);
+    expect(Object.keys(projected)).toEqual([]);
+    expect(Object.getPrototypeOf(projected)).toBeNull();
+  });
+
+  it.each(INHERITED_NAMES)('honours an own map entry named %s', (name) => {
+    const channel = createVisibilityChannel(mapWithEntry(name, 'modelVisible'));
+    expect(channel.classOf(name)).toBe('modelVisible');
+    const state: Record<string, unknown> = JSON.parse(`{"${name}":"kept"}`);
+    const projected = channel.projectForModel(state);
+    expect(Object.hasOwn(projected, name)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(projected, name)?.value).toBe('kept');
+  });
+
+  it.each<[string, unknown]>([
+    ['public', 'public'],
+    ['an empty string', ''],
+    ['zero', 0],
+    ['LOCALONLY', 'LOCALONLY'],
+    ['null', null],
+    ['an object', {}],
+    ['true', true],
+  ])('treats the class value %s as localOnly', (_label, value) => {
+    const channel = createVisibilityChannel(mapWithEntry('field', value));
+    expect(channel.classOf('field')).toBe('localOnly');
+    expect(channel.isModelVisible('field')).toBe(false);
+  });
+
+  it('does not leak a map entry that is inherited', () => {
+    const inherited: VisibilityMap = Object.create({ field: 'modelVisible' });
+    const channel = createVisibilityChannel(inherited);
+    expect(channel.classOf('field')).toBe('localOnly');
+  });
+
+  describe('the catalog adapter', () => {
+    const source = (
+      components: Record<string, CatalogVisibilityClass>,
+      actions: Record<string, CatalogVisibilityClass>,
+    ): CatalogVisibilitySource => ({
+      componentNames: Object.keys(components),
+      actionNames: Object.keys(actions),
+      visibilityOf: (c) => (Object.hasOwn(components, c) ? components[c] : undefined),
+      callableFromOf: (a) => (Object.hasOwn(actions, a) ? actions[a] : undefined),
+    });
+
+    it.each(INHERITED_NAMES)(
+      'maps a remote-only component named %s to modelVisible as an own key',
+      (name) => {
+        const components: Record<string, CatalogVisibilityClass> = JSON.parse(
+          `{"${name}":"remoteOnly"}`,
+        );
+        const map = catalogVisibilityToChannel(source(components, {}));
+        expect(Object.hasOwn(map, name)).toBe(true);
+        expect(Object.getOwnPropertyDescriptor(map, name)?.value).toBe('modelVisible');
+        expect(Object.getPrototypeOf(map)).toBeNull();
+      },
+    );
+
+    it('never widens a local-only component that shares a name with a remote-only action', () => {
+      for (const name of INHERITED_NAMES) {
+        const components: Record<string, CatalogVisibilityClass> = JSON.parse(
+          `{"${name}":"localOnly"}`,
+        );
+        const actions: Record<string, CatalogVisibilityClass> = JSON.parse(
+          `{"${name}":"remoteOnly"}`,
+        );
+        const map = catalogVisibilityToChannel(source(components, actions));
+        expect(Object.getOwnPropertyDescriptor(map, name)?.value, name).toBe('localOnly');
+      }
+    });
   });
 });
