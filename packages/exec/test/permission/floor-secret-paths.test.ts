@@ -136,6 +136,30 @@ describe('home secret locations the floor names', () => {
   });
 });
 
+describe('secret locations on a host that folds case', () => {
+  const darwin = { home: '/Users/t', platform: 'darwin' } as const;
+  const onDarwin = (command: string) =>
+    checkHardFloor(parseShellCommand(command, darwin), undefined, darwin).blocked;
+  it.each([
+    ['cat ~/.SSH/config'],
+    ['cat ~/.Config/GH/hosts.yml'],
+    ['cat ~/.GIT-Credentials'],
+    ['cat ~/.NetRC'],
+    ['cat ~/ID_RSA'],
+    ['cat ~/.ENV.Local'],
+    ['cat x.PEM'],
+    ['dd if=.ENV of=/tmp/x'],
+    ['cat $HOME/.SSH/config'],
+    ['cat ~/.SS?/known_hosts'],
+  ])('blocks %s on darwin', (command) => {
+    expect(onDarwin(command)).toBe(true);
+  });
+  it('keeps the case-sensitive verdict on a host that does not fold', () => {
+    expect(blocked('cat ~/.SSH/config')).toBe(false);
+    expect(blocked('cat x.PEM')).toBe(false);
+  });
+});
+
 describe('the lists', () => {
   it('names the home directories', () => {
     expect([...HOME_SECRET_DIRS]).toEqual([

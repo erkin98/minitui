@@ -119,6 +119,31 @@ const GLOB_TARGETS: ReadonlyArray<readonly string[]> = [
 const GLOB_CHAR = /[*?[]/;
 const ANCHORED = /^(~|\$HOME|\$\{HOME\}|\/)/;
 
+// The index of the `]` that closes the bracket expression opening at `start`, or -1. A `]` right after
+// the opening (or after a leading `!` or `^`) is a member, and `[:name:]` is a character class.
+function bracketEnd(pattern: string, start: number): number {
+  let j = start + 1;
+  if (pattern[j] === '!' || pattern[j] === '^') j++;
+  if (pattern[j] === ']') j++;
+  while (j < pattern.length) {
+    if (pattern.startsWith('[:', j)) {
+      const close = pattern.indexOf(':]', j + 2);
+      if (close === -1) return -1;
+      j = close + 2;
+    } else if (pattern[j] === ']') return j;
+    else j++;
+  }
+  return -1;
+}
+
+// One bracket expression as a regular expression. A negated set (`[!x]`, `[^x]`) and a set holding a
+// character class (`[[:lower:]]`) match any single character of a component: over-approximating is the
+// safe side for a pattern that is only ever used to deny.
+function bracketSource(body: string): string {
+  if (/^[!^]/.test(body) || body.includes('[')) return '[^/]';
+  return `[${body.replace(/[\\\]]/g, '\\$&')}]`;
+}
+
 // A path component with glob characters as a regular expression over one component.
 function globToRegExp(pattern: string, ignoreCase: boolean): RegExp {
   let source = '';
@@ -127,10 +152,10 @@ function globToRegExp(pattern: string, ignoreCase: boolean): RegExp {
     if (c === '*') source += '[^/]*';
     else if (c === '?') source += '[^/]';
     else if (c === '[') {
-      const end = pattern.indexOf(']', i + 2);
+      const end = bracketEnd(pattern, i);
       if (end === -1) source += '\\[';
       else {
-        source += `[${pattern.slice(i + 1, end).replace(/\\/g, '\\\\')}]`;
+        source += bracketSource(pattern.slice(i + 1, end));
         i = end;
       }
     } else source += c.replace(/[.+^${}()|\\/]/g, '\\$&');
@@ -196,9 +221,12 @@ function underStore(floor: Floor, token: string): boolean {
 
 function isSecretPath(floor: Floor, p: string): boolean {
   const n = normalizeCommandToken(p);
+  // The names are listed in lower case, so a host that folds case compares the folded text. The anchored
+  // forms (`$HOME`) keep their case.
+  const folded = fold(floor, n);
   return (
-    LISTED_LOCATIONS.some((re) => re.test(n)) ||
-    basenameHit(n) ||
+    LISTED_LOCATIONS.some((re) => re.test(folded)) ||
+    basenameHit(folded) ||
     globSecretHit(floor, n) ||
     underStore(floor, n)
   );

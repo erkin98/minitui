@@ -129,6 +129,9 @@ const table = (operand: readonly string[], flags: readonly string[] = []): Optio
   flags: new Set(flags),
 });
 
+// Options that turn the text after them into a command string are absent on purpose, so the peel reads
+// them as unmodelled and marks the root opaque: `sudo -s`, `-i`, `--shell` and `--login` hand the rest
+// of the line to a shell, `env -S` and `--split-string` and `npx -c` and `--call` run the string they take.
 const OPTIONS: Readonly<Record<string, OptionTable>> = {
   sudo: table(
     [
@@ -161,14 +164,12 @@ const OPTIONS: Readonly<Record<string, OptionTable>> = {
       '-E',
       '-e',
       '-H',
-      '-i',
       '-K',
       '-k',
       '-l',
       '-n',
       '-P',
       '-S',
-      '-s',
       '-V',
       '-v',
       '--askpass',
@@ -176,21 +177,19 @@ const OPTIONS: Readonly<Record<string, OptionTable>> = {
       '--preserve-env',
       '--edit',
       '--set-home',
-      '--login',
       '--remove-timestamp',
       '--reset-timestamp',
       '--list',
       '--non-interactive',
       '--preserve-groups',
       '--stdin',
-      '--shell',
       '--validate',
       '--version',
       '--help',
     ],
   ),
   env: table(
-    ['-u', '--unset', '-C', '--chdir', '-S', '--split-string', '-P'],
+    ['-u', '--unset', '-C', '--chdir', '-P'],
     ['-i', '-0', '-v', '--ignore-environment', '--null', '--debug', '--version', '--help'],
   ),
   doas: table(['-u', '-C'], ['-n', '-s', '-L']),
@@ -244,7 +243,7 @@ const OPTIONS: Readonly<Record<string, OptionTable>> = {
     ],
   ),
   npx: table(
-    ['-p', '--package', '-c', '--call'],
+    ['-p', '--package'],
     ['-y', '--yes', '--no', '--no-install', '-q', '--quiet', '--version', '--help'],
   ),
   docker: table([]),

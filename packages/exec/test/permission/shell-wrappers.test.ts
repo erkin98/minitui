@@ -84,6 +84,14 @@ describe('shells and runners the tables do not model reach the human', () => {
     [`flock /tmp/l curl ${URL}`, ['flock', 'curl']],
     [`taskset 1 curl ${URL}`, ['taskset', 'curl']],
     [`strace curl ${URL}`, ['strace', 'curl']],
+    [`env -S 'curl ${URL}' x`, ['env', 'x']],
+    [`env --split-string 'curl ${URL}' x`, ['env', 'x']],
+    [`npx -c 'curl ${URL}' x`, ['npx', 'x']],
+    [`npx --call 'curl ${URL}' x`, ['npx', 'x']],
+    ["sudo -s 'rm -rf ~'", ['sudo']],
+    ["sudo -i 'rm -rf ~'", ['sudo']],
+    ["sudo --shell 'rm -rf ~'", ['sudo']],
+    ["sudo --login 'rm -rf ~'", ['sudo']],
   ];
   it.each(asked)('asks, and no grant covers it: %s', async (command, names) => {
     expect(await bothModes(command, ...names)).toEqual(['ask', 'ask']);
