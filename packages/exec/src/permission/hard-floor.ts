@@ -119,24 +119,27 @@ const GLOB_TARGETS: ReadonlyArray<readonly string[]> = [
 const GLOB_CHAR = /[*?[]/;
 const ANCHORED = /^(~|\$HOME|\$\{HOME\}|\/)/;
 
-// A glob component as tokens. The floor only ever uses a glob to DENY, so every construct it does not
-// model exactly is widened, never narrowed: a negated set (`[!x]`, `[^x]`) and a set the regular
-// expression engine rejects (`[z-a]`) match any one character, and an irregular bracket (a `[` or a
-// backslash inside it, which covers `[:class:]`, `[=c=]`, `[.c.]` and an unclosed one) matches any run
-// of characters up to the last `]` of the pattern, which holds whatever the shell takes its extent to be.
+// A glob as tokens. The floor only ever uses a glob to DENY, so every construct it does not model exactly
+// is widened, never narrowed: a negated set (`[!x]`, `[^x]`) and a set the regular expression engine
+// rejects (`[z-a]`) match any one character, and an irregular bracket (a `[` or a backslash inside it,
+// which covers `[:class:]`, `[=c=]`, `[.c.]` and an unclosed class) matches any run of characters up to
+// the last `]` of its path component. A path is expanded one component at a time and no bracket reaches
+// across a `/`, so the scan of a bracket stops at the end of its component.
 type GlobToken =
   | { readonly kind: 'literal'; readonly text: string }
   | { readonly kind: 'many' }
   | { readonly kind: 'one' }
-  | { readonly kind: 'set'; readonly source: string };
+  // `selective`: a short explicit list of characters, which can spell part of a name (`[.]`, `[sS]`)
+  | { readonly kind: 'set'; readonly source: string; readonly selective: boolean };
 
-// The index of the `]` that closes a plain bracket expression opening at `start`, or -1 when the bracket
-// is irregular or never closes. A `]` right after the opening (or after a leading `!` or `^`) is a member.
-function plainSetEnd(pattern: string, start: number): number {
+// The index of the `]` that closes a plain bracket expression opening at `start` inside a component that
+// ends at `limit`, or -1 when the bracket is irregular or never closes. A `]` right after the opening (or
+// after a leading `!` or `^`) is a member.
+function plainSetEnd(pattern: string, start: number, limit: number): number {
   let j = start + 1;
   if (pattern[j] === '!' || pattern[j] === '^') j++;
   if (pattern[j] === ']') j++;
-  for (; j < pattern.length; j++) {
+  for (; j < limit; j++) {
     const ch = pattern[j];
     if (ch === ']') return j;
     if (ch === '[' || ch === '\\') return -1;
@@ -149,7 +152,7 @@ function setToken(body: string): GlobToken {
   const source = `[${body.replace(/[\\\]]/g, '\\$&')}]`;
   try {
     new RegExp(source);
-    return { kind: 'set', source };
+    return { kind: 'set', source, selective: body.length <= 4 && !body.includes('-') };
   } catch {
     return { kind: 'one' };
   }
@@ -162,8 +165,10 @@ function tokenizeGlob(pattern: string): GlobToken[] {
     if (c === '*') tokens.push({ kind: 'many' });
     else if (c === '?') tokens.push({ kind: 'one' });
     else if (c === '[') {
-      const end = plainSetEnd(pattern, i);
-      const last = pattern.lastIndexOf(']');
+      const slash = pattern.indexOf('/', i);
+      const limit = slash === -1 ? pattern.length : slash;
+      const end = plainSetEnd(pattern, i, limit);
+      const last = pattern.lastIndexOf(']', limit - 1);
       if (end !== -1) {
         tokens.push(setToken(pattern.slice(i + 1, end)));
         i = end;
@@ -192,11 +197,16 @@ function globToRegExp(pattern: string, ignoreCase: boolean): RegExp {
   return new RegExp(`^${source}$`, ignoreCase ? 'i' : '');
 }
 
-const hasLiteralChar = (component: string): boolean =>
-  tokenizeGlob(component).some((token) => token.kind === 'literal');
+// Whether a component can spell part of a name: a literal character or a short explicit set. A
+// component made only of wildcards, ranges and negations (`*`, `[a-z]*`, `[!.]*`) is not selective: it
+// would match the listed names by chance, and it is left to the extractor's opaque ask.
+const isSelective = (component: string): boolean =>
+  tokenizeGlob(component).some(
+    (token) => token.kind === 'literal' || (token.kind === 'set' && token.selective),
+  );
 
-// One window of path components against one listed name. Every glob component of the window must hold
-// a literal character and match its part of the name; every other component must equal it. At least
+// One window of path components against one listed name. Every glob component of the window must be
+// selective and match its part of the name; every other component must equal it. At least
 // one glob component is required: a window without one is an ordinary path, left to the list match.
 function globWindowHits(
   floor: Floor,
@@ -211,7 +221,7 @@ function globWindowHits(
     if (!GLOB_CHAR.test(component)) {
       if (fold(floor, component) !== fold(floor, name)) return false;
     } else if (
-      hasLiteralChar(component) &&
+      isSelective(component) &&
       globToRegExp(fold(floor, component), floor.fold).test(name)
     ) {
       hasGlob = true;

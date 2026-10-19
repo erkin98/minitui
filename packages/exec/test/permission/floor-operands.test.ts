@@ -99,6 +99,8 @@ describe('secret paths hidden by a glob or an attached assignment are denied', (
     ['cat ~/.ss[[:lower:]]/known_hosts', ['cat']],
     ['cat ~/.ss[[=h=]]/known_hosts', ['cat']],
     ['cat ~/.ss[[.h.]]/known_hosts', ['cat']],
+    ['cat ~/[.][s][s][h]/known_hosts', ['cat']],
+    ['cat ~/[.]s[sS]h/known_hosts', ['cat']],
     ['cat ~/.ss[[=h]/known_hosts', ['cat']],
     ['cat ~/.ss[[.h]/known_hosts', ['cat']],
     ['ls -d ~/.*', ['ls']],
@@ -140,6 +142,12 @@ describe('home and root wipes by glob or dot-dot are denied', () => {
 describe('the floor knows the host', () => {
   it('floors /home on a host whose home is /root (a guard: the literal is always in the set)', () => {
     expect(floor('rm -rf /home', rootHost).blocked).toBe(true);
+  });
+  it('reads each path component of a glob on its own', () => {
+    // an irregular bracket never reaches across a separator, so the components after it still count
+    expect(floor('rm -rf /ho[[:lower:]]e/[e]rkin', linuxHost).blocked).toBe(true);
+    expect(floor('rm -rf /ho[[=m=]]e/e[r]kin', linuxHost).blocked).toBe(true);
+    expect(floor('rm -rf /ho[[:lower:]]e/[x]rkin', linuxHost).blocked).toBe(false);
   });
   it('floors glob forms of the home directory on a linux host', () => {
     expect(floor('rm -rf /home/erki*', linuxHost).blocked).toBe(true);
@@ -219,6 +227,12 @@ describe('what cannot be resolved reaches the human', () => {
     ['rm -rf /ho[ab]e', ['rm']],
     ['rm -rf /ho[ab', ['rm']],
     ['rm -rf /ho[ab][cd]e', ['rm']],
+    ['ls ~/Videos/[!.]*', ['ls']],
+    ['ls ~/[a-z]*', ['ls']],
+    ['ls ~/[[:alpha:]]*', ['ls']],
+    ['ls ~/[0-9][0-9]', ['ls']],
+    ['ls ~/[abcdef]*', ['ls']],
+    ['ls ~/[a-d]*', ['ls']],
     ['rm -rf /ho[a\\]m]e', ['rm']],
     ['cat ~/.ss[\\h]/known_hosts', ['cat']],
     ['env PATH=/tmp/evil ffmpeg -i a.mp4 b.mp4', ['env', 'ffmpeg']],
