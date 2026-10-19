@@ -11,6 +11,11 @@ export interface Host {
 
 export const currentHost = (): Host => ({ home: homedir(), platform: process.platform });
 
+// Case folding for a file system that matches names without regard to case. Lower-casing alone leaves
+// characters such as U+017F (long s) apart from the ASCII letter they are the same name as; going
+// through upper case first joins them.
+export const foldCase = (text: string): string => text.toUpperCase().toLowerCase();
+
 // File systems that match names without regard to case.
 export const foldsCase = (platform: string): boolean =>
   platform === 'darwin' || platform === 'win32';

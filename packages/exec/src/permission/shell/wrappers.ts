@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { foldCase } from './host.js';
 
 // Opaque shell-spawners: the real payload is a quoted string the AST cannot see.
 // We gate the SPAWNER itself and force ask — we never strip-and-trust the inner string.
@@ -345,7 +346,7 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
   for (;;) {
     // normalise THEN basename so `"/bin/curl"` / `\curl` / `'sh'` resolve to their bare name
     const written = basename(normalizeCommandToken(cur[0] ?? ''));
-    const head = fold ? written.toLowerCase() : written;
+    const head = fold ? foldCase(written) : written;
     if (OPAQUE_SPAWNERS.has(head)) {
       return {
         name: head,

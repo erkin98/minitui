@@ -97,6 +97,8 @@ describe('secret paths hidden by a glob or an attached assignment are denied', (
     ['cat ~/.ssh*/known_hosts', ['cat']],
     ['cat ~/.ss[!x]/known_hosts', ['cat']],
     ['cat ~/.ss[[:lower:]]/known_hosts', ['cat']],
+    ['cat ~/.ss[[=h=]]/known_hosts', ['cat']],
+    ['cat ~/.ss[[.h.]]/known_hosts', ['cat']],
     ['ls -d ~/.*', ['ls']],
     ['dd if=.env of=/tmp/x', ['dd']],
   ];
@@ -113,6 +115,8 @@ describe('home and root wipes by glob or dot-dot are denied', () => {
     ['rm -rf /ho[!x]e', ['rm']],
     ['rm -rf /ho[^x]e', ['rm']],
     ['rm -rf /ho[[:lower:]]e', ['rm']],
+    ['rm -rf /ho[[=m=]]e', ['rm']],
+    ['rm -rf /ho[[.m.]]e', ['rm']],
     ['rm -rf /Users', ['rm']],
     ['rm -rf /Users/*/', ['rm']],
     ['rm -rf ~/..', ['rm']],
@@ -145,6 +149,14 @@ describe('the floor knows the host', () => {
   it('treats an upper-case shell as a spawner on a darwin host only', () => {
     expect(parseShellCommand('BASH -c x', darwinHost).roots[0]?.opaque).toBe(true);
     expect(parseShellCommand('BASH -c x', linuxHost).roots[0]?.opaque).not.toBe(true);
+  });
+  it('folds the characters a case-insensitive file system joins to ASCII letters', () => {
+    // U+017F (long s) is the same name as `s` on such a file system
+    expect(floor('\u017fudo rm -rf /', darwinHost).blocked).toBe(true);
+    expect(floor('\u017fcp a h:b', darwinHost).blocked).toBe(true);
+    expect(floor('rm -rf /\u017fers', darwinHost).blocked).toBe(false);
+    expect(floor('rm -rf /U\u017fer\u017f', darwinHost).blocked).toBe(true);
+    expect(floor('\u017fudo rm -rf /', linuxHost).blocked).toBe(false);
   });
   it('folds case on darwin and win32 and not on linux', () => {
     expect(foldsCase('darwin')).toBe(true);

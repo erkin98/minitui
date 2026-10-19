@@ -151,12 +151,16 @@ describe('secret locations on a host that folds case', () => {
     ['dd if=.ENV of=/tmp/x'],
     ['cat $HOME/.SSH/config'],
     ['cat ~/.SS?/known_hosts'],
+    ['cat ~/.\u017fsh/config'],
+    ['cat ~/.\u017fs?/config'],
+    ['cat ~/.\u212aube/config'],
   ])('blocks %s on darwin', (command) => {
     expect(onDarwin(command)).toBe(true);
   });
   it('keeps the case-sensitive verdict on a host that does not fold', () => {
     expect(blocked('cat ~/.SSH/config')).toBe(false);
     expect(blocked('cat x.PEM')).toBe(false);
+    expect(blocked('cat ~/.\u017fsh/config')).toBe(false);
   });
 });
 
