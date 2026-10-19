@@ -119,56 +119,81 @@ const GLOB_TARGETS: ReadonlyArray<readonly string[]> = [
 const GLOB_CHAR = /[*?[]/;
 const ANCHORED = /^(~|\$HOME|\$\{HOME\}|\/)/;
 
-// A class inside a bracket expression: `[:name:]`, `[=c=]` or `[.c.]`.
-const CLASS_OPEN = /^\[([:=.])/;
+// A glob component as tokens. The floor only ever uses a glob to DENY, so every construct it does not
+// model exactly is widened, never narrowed: a negated set (`[!x]`, `[^x]`) and a set the regular
+// expression engine rejects (`[z-a]`) match any one character, and an irregular bracket (a `[` or a
+// backslash inside it, which covers `[:class:]`, `[=c=]`, `[.c.]` and an unclosed one) matches any run
+// of characters up to the last `]` of the pattern, which holds whatever the shell takes its extent to be.
+type GlobToken =
+  | { readonly kind: 'literal'; readonly text: string }
+  | { readonly kind: 'many' }
+  | { readonly kind: 'one' }
+  | { readonly kind: 'set'; readonly source: string };
 
-// The index of the `]` that closes the bracket expression opening at `start`, or -1. A `]` right after
-// the opening (or after a leading `!` or `^`) is a member, and `[:name:]`, `[=c=]` and `[.c.]` are classes.
-function bracketEnd(pattern: string, start: number): number {
+// The index of the `]` that closes a plain bracket expression opening at `start`, or -1 when the bracket
+// is irregular or never closes. A `]` right after the opening (or after a leading `!` or `^`) is a member.
+function plainSetEnd(pattern: string, start: number): number {
   let j = start + 1;
   if (pattern[j] === '!' || pattern[j] === '^') j++;
   if (pattern[j] === ']') j++;
-  while (j < pattern.length) {
-    const open = CLASS_OPEN.exec(pattern.slice(j));
-    if (open) {
-      const close = pattern.indexOf(`${open[1]}]`, j + 2);
-      if (close === -1) return -1;
-      j = close + 2;
-    } else if (pattern[j] === ']') return j;
-    else j++;
+  for (; j < pattern.length; j++) {
+    const ch = pattern[j];
+    if (ch === ']') return j;
+    if (ch === '[' || ch === '\\') return -1;
   }
   return -1;
 }
 
-// One bracket expression as a regular expression. A negated set (`[!x]`, `[^x]`) and a set holding a
-// character class (`[[:lower:]]`) match any single character of a component: over-approximating is the
-// safe side for a pattern that is only ever used to deny.
-function bracketSource(body: string): string {
-  if (/^[!^]/.test(body) || body.includes('[')) return '[^/]';
-  return `[${body.replace(/[\\\]]/g, '\\$&')}]`;
+function setToken(body: string): GlobToken {
+  if (/^[!^]/.test(body)) return { kind: 'one' };
+  const source = `[${body.replace(/[\\\]]/g, '\\$&')}]`;
+  try {
+    new RegExp(source);
+    return { kind: 'set', source };
+  } catch {
+    return { kind: 'one' };
+  }
 }
+
+function tokenizeGlob(pattern: string): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === '*') tokens.push({ kind: 'many' });
+    else if (c === '?') tokens.push({ kind: 'one' });
+    else if (c === '[') {
+      const end = plainSetEnd(pattern, i);
+      const last = pattern.lastIndexOf(']');
+      if (end !== -1) {
+        tokens.push(setToken(pattern.slice(i + 1, end)));
+        i = end;
+      } else if (last > i) {
+        tokens.push({ kind: 'many' });
+        i = last;
+      } else tokens.push({ kind: 'literal', text: c });
+    } else tokens.push({ kind: 'literal', text: c });
+  }
+  return tokens;
+}
+
+const TOKEN_SOURCE = {
+  many: '[^/]*',
+  one: '[^/]',
+} as const;
 
 // A path component with glob characters as a regular expression over one component.
 function globToRegExp(pattern: string, ignoreCase: boolean): RegExp {
-  let source = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i]!;
-    if (c === '*') source += '[^/]*';
-    else if (c === '?') source += '[^/]';
-    else if (c === '[') {
-      const end = bracketEnd(pattern, i);
-      if (end === -1) source += '\\[';
-      else {
-        source += bracketSource(pattern.slice(i + 1, end));
-        i = end;
-      }
-    } else source += c.replace(/[.+^${}()|\\/]/g, '\\$&');
-  }
+  const source = tokenizeGlob(pattern)
+    .map((token) => {
+      if (token.kind === 'literal') return token.text.replace(/[.+^${}()|[\]\\/]/g, '\\$&');
+      return token.kind === 'set' ? token.source : TOKEN_SOURCE[token.kind];
+    })
+    .join('');
   return new RegExp(`^${source}$`, ignoreCase ? 'i' : '');
 }
 
 const hasLiteralChar = (component: string): boolean =>
-  component.replace(/\[[^\]]*\]|[*?]/g, '').length > 0;
+  tokenizeGlob(component).some((token) => token.kind === 'literal');
 
 // One window of path components against one listed name. Every glob component of the window must hold
 // a literal character and match its part of the name; every other component must equal it. At least
