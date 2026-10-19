@@ -176,6 +176,9 @@ try {
       '  buildCatalogPrompt,\n' +
       '  sanitize,\n' +
       '  sanitizeSpecStrings,\n' +
+      '  hasCanonicalKeys,\n' +
+      '  checkElementTree,\n' +
+      '  MAX_ELEMENT_DEPTH,\n' +
       '  videoMergeCatalog,\n' +
       "} from '@minitui/catalog';\n" +
       'import type {\n' +
@@ -195,6 +198,7 @@ try {
       '  SemanticIssue,\n' +
       '  ValidationIssue,\n' +
       '  ValidationResult,\n' +
+      '  ElementTreeIssue,\n' +
       "} from '@minitui/catalog';\n" +
       // Force every value re-export to resolve (TS2305 on any drop) without executing.
       'export const _values = [\n' +
@@ -203,14 +207,15 @@ try {
       '  standardComponentDefinitions, standardActionDefinitions, STD_ACTION_NAMES,\n' +
       '  defineMinituiCatalog, rejectOffCatalog, throwingFallback, checkSemantics,\n' +
       '  CATALOG_REPAIR_WORDING, runFullValidation, buildCatalogPrompt, sanitize,\n' +
-      '  sanitizeSpecStrings, videoMergeCatalog,\n' +
+      '  sanitizeSpecStrings, hasCanonicalKeys, checkElementTree, MAX_ELEMENT_DEPTH,\n' +
+      '  videoMergeCatalog,\n' +
       '] as const;\n' +
       // Type witnesses — one alias per public type name (TS2305 on any drop).
       'export type _T = [\n' +
       '  MinituiActionDef, MinituiComponentDef, TrustTier, ActionKind, PermissionDescriptor,\n' +
       '  VisibilityClass, ActionBinding, AppSpec, SpecElement, ComponentDefinition,\n' +
       '  ActionDefinition, MinituiCatalog, AllowlistIssue, SemanticIssue, ValidationIssue,\n' +
-      '  ValidationResult,\n' +
+      '  ValidationResult, ElementTreeIssue,\n' +
       '];\n' +
       // Force a couple of external re-export chains to resolve as VALUES.
       "export const _k: ActionKind = 'render-local';\n" +

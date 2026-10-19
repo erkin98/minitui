@@ -18,7 +18,7 @@ describe('MinituiActionDef', () => {
         summaryTemplate: 'Merge videos',
       },
     };
-    expect(merge.kind).toBe('exec-local');
+    expect(defineAction(merge)).toBe(merge);
     expect(merge.params.safeParse({ inputs: ['a.mp4'] }).success).toBe(true);
   });
 

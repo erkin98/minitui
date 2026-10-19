@@ -6,6 +6,7 @@ import {
   type TrustTier,
 } from '../src/contract/catalog-component.js';
 import { isWiderThan, DEFAULT_VISIBILITY, SECRET_VISIBILITY } from '../src/contract/visibility.js';
+import { defineMinituiCatalog } from '../src/define-catalog.js';
 
 describe('VisibilityClass (field-visibility contract)', () => {
   it('defaults to the a2ui clientOnly class and pins localOnly for secrets', () => {
@@ -28,8 +29,7 @@ describe('MinituiComponentDef', () => {
       description: 'A button',
       trustTier: 'interactive',
     };
-    expect(def.trustTier).toBe('interactive');
-    expect(def.slots).toEqual([]);
+    expect(defineComponent(def)).toBe(def);
     expect(def.props.safeParse({ label: 'Go' }).success).toBe(true);
   });
 
@@ -43,9 +43,8 @@ describe('MinituiComponentDef', () => {
       secret: true,
       capturesText: true, // a token field consumes typed characters — while focused it keeps `q` literal
     };
-    expect(secretField.visibility).toBe('localOnly');
-    expect(secretField.secret).toBe(true);
-    expect(secretField.capturesText).toBe(true);
+    expect(defineComponent(secretField)).toBe(secretField);
+    expect(secretField.props.safeParse({ token: 'abc' }).success).toBe(true);
   });
   it('a .strict() props schema rejects unknown props', () => {
     const def = defineComponent({
@@ -58,6 +57,13 @@ describe('MinituiComponentDef', () => {
   });
   it('TrustTier is the closed display|interactive union', () => {
     const tiers: TrustTier[] = ['display', 'interactive'];
-    expect(tiers).toHaveLength(2);
+    for (const trustTier of tiers) {
+      const catalog = defineMinituiCatalog({
+        id: 'tiers',
+        components: { C: { props: z.object({}).strict(), slots: [], description: 'c', trustTier } },
+        actions: {},
+      });
+      expect(catalog.tierOf('C')).toBe(trustTier);
+    }
   });
 });

@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { ACTION_KINDS } from '@minitui/types';
 import { defineMinituiCatalog } from '../src/define-catalog.js';
+import {
+  standardActionDefinitions,
+  standardComponentDefinitions,
+  type ActionDefinition,
+} from '../src/schema-bridge.js';
+import type { PermissionDescriptor } from '../src/contract/action-kind.js';
+import { defineComponent } from '../src/contract/catalog-component.js';
+import { defineAction } from '../src/contract/catalog-action.js';
 
 const cat = defineMinituiCatalog({
   id: 'demo',
@@ -137,14 +145,15 @@ describe('fail-closed build guards', () => {
     ).toThrowError(/record/);
   });
   it('rejects an unrecognized action kind — fail closed, no permissive default', () => {
+    // a kind read from JSON is the untrusted shape the runtime guard exists for
+    const illegalKind: 'exec-local' = JSON.parse('"yolo"');
     expect(() =>
       defineMinituiCatalog({
         id: 'bad',
         components: {},
         actions: {
-          // deliberately illegal literal: proves the RUNTIME guard — TS alone
-          // cannot stop a JSON-loaded or JS-authored catalog.
-          go: { ...okAction, kind: 'yolo' as unknown as 'exec-local' },
+          // proves the RUNTIME guard — TS alone cannot stop a JSON-loaded or JS-authored catalog.
+          go: { ...okAction, kind: illegalKind },
         },
       }),
     ).toThrowError(/kind/);
@@ -256,5 +265,115 @@ describe('ActionKind set imported from @minitui/types (no hand-copied drift)', (
         }),
       ).not.toThrow();
     }
+  });
+});
+
+describe('definition guard', () => {
+  const withProps = (props: z.ZodType) => () =>
+    defineMinituiCatalog({
+      id: 'guard',
+      components: { C: { props, slots: [], description: 'c', trustTier: 'display' } },
+      actions: {},
+    });
+  const withParams = (params: z.ZodType) => () =>
+    defineMinituiCatalog({
+      id: 'guard',
+      components: {},
+      actions: { a: { params, description: 'a', kind: 'render-local' } },
+    });
+  const withPermission = (permission: PermissionDescriptor) => () =>
+    defineMinituiCatalog({
+      id: 'guard',
+      components: {},
+      actions: {
+        a: { params: z.object({}), description: 'a', kind: 'exec-local', permission },
+      },
+    });
+  const open = z.record(z.string(), z.unknown());
+
+  it.each<[string, z.ZodType]>([
+    ['z.any()', z.any()],
+    ['z.unknown()', z.unknown()],
+    ['an optional record', open.optional()],
+    ['a nullable record', open.nullable()],
+    ['a defaulted record', open.default({})],
+    ['a lazy record', z.lazy(() => open)],
+    [
+      'a union of closed objects',
+      z.union([z.object({ a: z.string() }).strict(), z.object({ b: z.string() }).strict()]),
+    ],
+    ['a string', z.string()],
+  ])('refuses component props that are %s', (_name, props) => {
+    expect(withProps(props)).toThrowError(/"C" props.*z\.object/);
+  });
+
+  it.each<[string, z.ZodType, RegExp]>([
+    ['a record', open, /record/],
+    ['z.any()', z.any(), /"a" params.*z\.object/],
+    ['an optional record', open.optional(), /"a" params.*z\.object/],
+    ['a passthrough object', z.object({ a: z.string() }).passthrough(), /passthrough|catchall/],
+  ])('refuses action params that are %s', (_name, params, message) => {
+    expect(withParams(params)).toThrowError(message);
+  });
+
+  it('refuses an object with a refinement, which has no partial form', () => {
+    const refined = z
+      .object({ a: z.string() })
+      .strict()
+      .refine(() => true);
+    expect(withProps(refined)).toThrowError(/"C" props.*partial/);
+    expect(withParams(refined)).toThrowError(/"a" params.*partial/);
+  });
+
+  it('refuses a permission that is not a descriptor', () => {
+    expect(withPermission(JSON.parse('{}'))).toThrowError(/"a".*permission/);
+  });
+
+  it('refuses a template hole that does not name a pointer', () => {
+    const hole = { danger: true, resourceTemplate: 'ffmpeg ${codec}', summaryTemplate: 'Merge' };
+    expect(withPermission(hole)).toThrowError(/"a".*\$\{codec\}/);
+    const summary = { danger: true, resourceTemplate: 'ffmpeg', summaryTemplate: 'Use ${codec}' };
+    expect(withPermission(summary)).toThrowError(/"a".*\$\{codec\}/);
+  });
+
+  it('accepts every adopted standard component and action definition', () => {
+    const components = Object.fromEntries(
+      Object.entries(standardComponentDefinitions).map(([name, def]) => [
+        name,
+        defineComponent({ ...def, trustTier: 'display' }),
+      ]),
+    );
+    const local = (def: ActionDefinition) =>
+      defineAction({ ...def, kind: 'render-local' as const });
+    const actions = Object.fromEntries(
+      Object.entries(standardActionDefinitions).map(([name, def]) => [name, local(def)]),
+    );
+    expect(() => defineMinituiCatalog({ id: 'std', components, actions })).not.toThrow();
+  });
+
+  it('accepts a well-formed gated action with pointer holes', () => {
+    const permission = {
+      danger: true,
+      resourceTemplate: 'ffmpeg -i ${/inputs/0}',
+      summaryTemplate: 'Merge into ${/output}',
+    };
+    expect(withPermission(permission)).not.toThrow();
+  });
+
+  it('does not refuse a render-local action that carries a danger permission', () => {
+    expect(() =>
+      defineMinituiCatalog({
+        id: 'guard',
+        components: {},
+        actions: {
+          a: {
+            params: z.object({}),
+            description: 'a',
+            kind: 'render-local',
+            permission: { danger: true, resourceTemplate: 'x', summaryTemplate: 'y' },
+          },
+        },
+      }),
+    ).not.toThrow();
   });
 });

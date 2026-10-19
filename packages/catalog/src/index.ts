@@ -39,11 +39,18 @@ export {
   type ValidationResult,
 } from './validate/index.js';
 
+// the shared element-tree rule
+export {
+  checkElementTree,
+  MAX_ELEMENT_DEPTH,
+  type ElementTreeIssue,
+} from './validate/element-tree.js';
+
 // prompt
 export { buildCatalogPrompt } from './prompt.js';
 
 // sanitize (bind-time entry)
-export { sanitize, sanitizeSpecStrings } from './sanitize/index.js';
+export { sanitize, sanitizeSpecStrings, hasCanonicalKeys } from './sanitize/index.js';
 
 // catalogs
 export { videoMergeCatalog } from './catalogs/index.js';
