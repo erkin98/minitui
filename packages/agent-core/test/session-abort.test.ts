@@ -188,7 +188,7 @@ describe('cancel() reaches every turn, wherever it is', () => {
   });
 
   it('cancel() with two overlapping turns ends both', async () => {
-    const { model } = scriptedModel([{ end: 'hang' }, { end: 'hang' }]);
+    const { model, calls } = scriptedModel([{ end: 'hang' }, { end: 'hang' }]);
     const session = makeSession({ model, config: { idleTimeoutMs: 3000 } });
     let started = 0;
     const drain = async (): Promise<void> => {
@@ -198,7 +198,8 @@ describe('cancel() reaches every turn, wherever it is', () => {
     };
     const both = Promise.all([drain(), drain()]);
     while (started < 2) await new Promise((resolve) => setTimeout(resolve, 5));
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // both turns are inside their model call: wait for the calls, not for a fixed time
+    while (calls.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
     const cancelledAt = performance.now();
     session.cancel();
     await within(both, 6000, 'both turns');

@@ -216,14 +216,17 @@ describe('provider output reaches the diagnostics port, never the console', () =
   });
 });
 
-// The real clock, with a record of when each wait settled.
-function timedSystemClock(): { clock: Clock; settled: number[] } {
+// The real clock, with a record of when each wait started and settled.
+function timedSystemClock(): { clock: Clock; started: number[]; settled: number[] } {
+  const started: number[] = [];
   const settled: number[] = [];
   return {
+    started,
     settled,
     clock: {
       now: systemClock.now,
       sleep: async (ms, signal) => {
+        started.push(ms);
         await systemClock.sleep(ms, signal);
         settled.push(performance.now());
       },
@@ -279,12 +282,13 @@ describe('a re-run waits, on the injected clock', () => {
 
   it('real clock: cancel() during the second wait ends the turn and the wait promptly, after two calls', async () => {
     const { model, calls } = scriptedModel(Array.from({ length: 6 }, () => drop));
-    const { clock, settled } = timedSystemClock();
+    const { clock, started, settled } = timedSystemClock();
     const session = makeSession({ model, clock, config: { streamMaxRetries: 5 } });
     const turn = session.submit('go');
     const finished = collectWithin(turn, 5000);
     while (calls.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // cancel inside the second wait: wait until it has started, not for a fixed time
+    while (started.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
     const cancelledAt = performance.now();
     session.cancel();
     await finished;
