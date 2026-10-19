@@ -95,6 +95,8 @@ describe('secret paths hidden by a glob or an attached assignment are denied', (
   const rows: Array<[string, string[]]> = [
     ['cat ~/.ss?/id_rs?', ['cat']],
     ['cat ~/.ssh*/known_hosts', ['cat']],
+    ['cat ~/.ss[!x]/known_hosts', ['cat']],
+    ['cat ~/.ss[[:lower:]]/known_hosts', ['cat']],
     ['ls -d ~/.*', ['ls']],
     ['dd if=.env of=/tmp/x', ['dd']],
   ];
@@ -108,6 +110,9 @@ describe('home and root wipes by glob or dot-dot are denied', () => {
     ['rm -rf /ho*', ['rm']],
     ['rm -rf /hom?', ['rm']],
     ['rm -rf /h*/*', ['rm']],
+    ['rm -rf /ho[!x]e', ['rm']],
+    ['rm -rf /ho[^x]e', ['rm']],
+    ['rm -rf /ho[[:lower:]]e', ['rm']],
     ['rm -rf /Users', ['rm']],
     ['rm -rf /Users/*/', ['rm']],
     ['rm -rf ~/..', ['rm']],
@@ -192,6 +197,7 @@ describe('what cannot be resolved reaches the human', () => {
     ['ls ~/Videos/*', ['ls']],
     ['rm -rf ../../home', ['rm']],
     ['rm -rf ../build', ['rm']],
+    ['rm -rf /ho[ab]e', ['rm']],
     ['env PATH=/tmp/evil ffmpeg -i a.mp4 b.mp4', ['env', 'ffmpeg']],
     ['sudo PATH=/tmp/evil ffmpeg -i a.mp4 b.mp4', ['sudo', 'ffmpeg']],
   ];
