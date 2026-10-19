@@ -543,6 +543,27 @@ describe('CONSENT_FORBIDDEN', () => {
     expect(CONSENT_FORBIDDEN.test(text)).toBe(true);
   });
 
+  // Code points that draw as blank or as nothing but fall outside the control, format and
+  // separator categories. The unassigned rows use only code points that no Unicode release has
+  // assigned (U+0378, and the noncharacter U+FFFF), because the category of a newly assigned code
+  // point depends on the Unicode version of the running Node.
+  const blankLooking: Array<[string, string]> = [
+    ['a private-use code point (U+E000)', '\ue000'],
+    ['an unassigned code point (U+0378)', '\u0378'],
+    ['a noncharacter (U+FFFF)', '\uffff'],
+    ['a lone high surrogate', '\ud800'],
+    ['a lone low surrogate', '\udc00'],
+    ['Hangul choseong filler (U+115F)', '\u115f'],
+    ['Hangul jungseong filler (U+1160)', '\u1160'],
+    ['Hangul filler (U+3164)', '\u3164'],
+    ['halfwidth Hangul filler (U+FFA0)', '\uffa0'],
+    ['braille pattern blank (U+2800)', '\u2800'],
+    ['a blank hidden inside a word', 'ffm\u2800peg'],
+  ];
+  it.each(blankLooking)('matches %s', (_name, text) => {
+    expect(CONSENT_FORBIDDEN.test(text)).toBe(true);
+  });
+
   const plain: Array<[string, string]> = [
     ['Latin letters', 'ffmpeg'],
     ['Cyrillic letters', '\u041f\u0440\u0438\u0432\u0435\u0442'],
@@ -551,6 +572,16 @@ describe('CONSENT_FORBIDDEN', () => {
     ['a space', ' '],
     ['a digit', '0'],
     ['punctuation', '.,;:!?/-_'],
+    ['Hangul syllables', '\ud55c\uad6d\uc5b4'],
+    ['Thai letters', '\u0e44\u0e17\u0e22'],
+    ['a Devanagari word with vowel signs', '\u0928\u092e\u0938\u094d\u0924\u0947'],
+    ['an Arabic letter with a vowel mark (U+064E)', '\u0628\u064e'],
+    ['a Latin letter with a combining accent', 'e\u0301'],
+    ['an emoji written with a variation selector (U+FE0F)', '\u2764\ufe0f'],
+    ['an emoji', String.fromCodePoint(0x1f600)],
+    ['the ideographic space (U+3000)', '\u3000'],
+    ['the no-break space (U+00A0)', '\u00a0'],
+    ['the replacement character (U+FFFD)', '\ufffd'],
   ];
   it.each(plain)('does not match %s', (_name, text) => {
     expect(CONSENT_FORBIDDEN.test(text)).toBe(false);

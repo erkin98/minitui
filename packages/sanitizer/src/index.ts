@@ -15,11 +15,17 @@ import {
 import { splitTail } from './stream-grammar.js';
 
 // The one place the class of text that cannot be shown for approval is written: control characters,
-// format characters (including the zero-width joiners and the bidirectional controls) and the line and
-// paragraph separators. A string holding a member is refused at a consent boundary instead of being
-// shown. The sanitiser's own functions do not read it and their output is unchanged. No `g` or `y` flag,
-// so `test` keeps no state between calls.
-export const CONSENT_FORBIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+// format characters (including the zero-width joiners and the bidirectional controls), the line and
+// paragraph separators, and the code points that draw as blank or as nothing without being any of those:
+// private-use, unassigned and surrogate code points, the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0)
+// and the braille blank (U+2800). A string holding a member is refused at a consent boundary instead of
+// being shown. Variation selectors, spaces and combining marks are deliberately not members: they are
+// part of ordinary text (emoji written with U+FE0F, CJK spaces, Indic and Arabic vowel signs). The
+// unassigned category follows the Unicode version of the running Node. The sanitiser's own functions do
+// not read this class and their output is unchanged. No `g` or `y` flag, so `test` keeps no state
+// between calls.
+export const CONSENT_FORBIDDEN =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u115f\u1160\u3164\uffa0\u2800]/u;
 
 export interface SanitizeOptions {
   /**
