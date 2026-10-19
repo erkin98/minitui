@@ -103,4 +103,36 @@ describe('ConsentOverlay', () => {
     });
     expect(ctrl.decisions).toEqual([{ kind: 'deny' }]);
   });
+
+  // The template of the headline may still hold holes that nobody has filled yet. The overlay shows
+  // the headline as given: it neither evaluates a hole nor removes the text around it.
+  const holes = (headline: string): PermissionRequest => ({
+    id: 'holes',
+    descriptor: { danger: false, resourceTemplate: 'ffmpeg', summaryTemplate: headline },
+    resolvedCommand: 'ffmpeg -i a.mp4 out.mp4',
+    resolvedPaths: ['/work/a.mp4'],
+  });
+
+  it('shows a headline with unresolved holes exactly as given', () => {
+    const { lastFrame } = render(
+      <ConsentOverlay controller={makeController(holes('Merge ${/inputs/0} into ${/output}'))} />,
+    );
+    expect(lastFrame() ?? '').toContain('Merge ${/inputs/0} into ${/output}');
+  });
+
+  it('shows the mark for a control character before a hole and keeps the text after it', () => {
+    const control = String.fromCodePoint(0x202e);
+    const mark = String.fromCodePoint(0xfffd);
+    const dollar = String.fromCharCode(36); // the hole opener is a dollar sign and a brace
+    const holeA = dollar + '{/inputs/0}';
+    const holeB = dollar + '{/output}';
+    const { lastFrame } = render(
+      <ConsentOverlay
+        controller={makeController(holes('Merge ' + control + holeA + ' into ' + holeB))}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Merge ' + mark + holeA + ' into ' + holeB);
+    expect(frame).not.toContain(control);
+  });
 });

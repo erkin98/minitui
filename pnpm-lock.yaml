@@ -315,6 +315,9 @@ importers:
       '@minitui/types':
         specifier: workspace:*
         version: link:../types
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.19
       fast-json-patch:
         specifier: 'catalog:'
         version: 3.1.1
