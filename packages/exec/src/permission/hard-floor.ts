@@ -326,14 +326,22 @@ function globBeneathParent(floor: Floor, pattern: string): boolean {
   return [...floor.parents].some((parent) => head.test(parent));
 }
 
+// The lexically resolved absolute form of an operand anchored at `~`, `$HOME`, `${HOME}` or `/`: the
+// home written in, `.` and `..` collapsed (a glob character is ordinary text to the collapse), a trailing
+// slash dropped; undefined for any other operand. The glob checks read this form, so a `..` ahead of a
+// glob (`/tmp/../ho*/x`, `~/../../ho*`) cannot hide what the glob expands to.
+function resolvedOperand(floor: Floor, operand: string): string | undefined {
+  const absolute = anchoredAbsolute(floor, operand);
+  return absolute === undefined ? undefined : posix.normalize(absolute).replace(/(?!^)\/+$/, '');
+}
+
 // An operand anchored at `~`, `$HOME`, `${HOME}` or `/` is resolved lexically, `.` and `..` included,
 // and compared with the floored set: `~/..` is `/home`, `~/x/../..` too. A relative operand has no
 // anchor, so the extractor makes its root opaque instead.
 function dotDotHitsFloored(floor: Floor, operand: string): boolean {
   if (!operand.split('/').includes('..')) return false;
-  const absolute = anchoredAbsolute(floor, operand);
-  if (absolute === undefined) return false;
-  const resolved = posix.normalize(absolute).replace(/(?!^)\/+$/, '');
+  const resolved = resolvedOperand(floor, operand);
+  if (resolved === undefined) return false;
   return resolved === '/' || isFlooredPath(floor, resolved) || isSiblingHome(floor, resolved);
 }
 
@@ -354,7 +362,9 @@ function rmOperandHits(floor: Floor, token: string): boolean {
     return true;
   }
   return (
-    globHitsFloored(floor, operand) || dotDotHitsFloored(floor, operand) || userHomeDotDot(operand)
+    globHitsFloored(floor, resolvedOperand(floor, operand) ?? operand) ||
+    dotDotHitsFloored(floor, operand) ||
+    userHomeDotDot(operand)
   );
 }
 
