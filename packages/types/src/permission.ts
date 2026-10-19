@@ -8,10 +8,17 @@ export const CommandRootSchema = z
   .object({
     name: z.string(),
     argv: z.array(z.string()).readonly(),
-    // Set true (never false) on an OPAQUE root — a spawner (`sh -c`) or an arg-runner peeled to an
-    // empty inner command (`env -S 'curl …'`, bare `sudo`) — whose real payload the AST cannot see.
-    // The consumers treat it as ask, non-YOLO-liftable. Omitted on a resolvable root, so such a
-    // root's shape stays {name, argv}.
+    // `opaque: true` on a root means the host cannot fully account for what that root runs or touches.
+    // Producers, in the root extractor only: a spawner, a shell or a command-string builtin; an
+    // argument runner peeled to an empty inner command; a root with an unresolved operand (an
+    // expansion other than exact `$HOME`, or an unquoted glob or brace expansion); every root in the
+    // scope of a leading or standalone assignment; the inner root behind a wrapper option the table
+    // does not model; a `NAME=value` operand skipped by the `env` or `sudo` peel; the synthetic root
+    // of a redirect with no command. Consumers: such a root asks; no approval mode lifts it; an allow
+    // rule or a grant never satisfies it; a deny rule still fires first; `always` on an uncertain ask
+    // allows this request and mints no grant. The hard floor runs on every root and accepts a
+    // hand-built parsed command with literal argv and no `opaque`. Omitted on a resolvable root, so
+    // such a root's shape stays {name, argv}.
     opaque: z.boolean().optional(),
   })
   .readonly();
@@ -76,6 +83,9 @@ export const PermissionRuleSchema = z
     // Resolved absolute executable path the grant was approved for;
     // undefined for operator config rules + legacy grants (name-only match).
     identity: z.string().optional(),
+    // Present (and then always true) only on a narrow grant: one approved command, matched by string
+    // equality after the deny pass. Never false, and absent on cascade grants and operator rules.
+    exact: z.literal(true).optional(),
   })
   .readonly();
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;

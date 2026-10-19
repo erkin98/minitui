@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { JsonValueSchema, type DiagnosticsPort } from '@minitui/types';
 import { formatUnknown } from '../format-unknown.js';
+import { reportWarning } from '../report-warning.js';
 import {
   assertCanonicalStateValue,
   getIn,
@@ -30,21 +31,17 @@ export function createDataStore(opts?: {
   let delivering = false;
   let state: JsonValue = JsonValueSchema.parse({});
 
-  const report = (message: string, error: unknown): void => {
-    try {
-      // `cause` carries the raw thrown value across the diagnostics boundary
-      // (a ZodError's issues, an Error's stack, ...) so a real sink can inspect
-      // it; `error` keeps the existing formatted-string summary unchanged.
-      diagnostics?.warn(message, { error: formatUnknown(error), cause: error });
-    } catch {
-      // Diagnostics is observational and cannot break state delivery.
-    }
+  // `cause` carries the raw thrown value across the diagnostics boundary (a ZodError's issues, an
+  // Error's stack, ...) so a real sink can inspect it; `error` is the formatted-string summary.
+  const report = (message: string, error: unknown, summary?: string): void => {
+    reportWarning(diagnostics, message, { error: summary ?? formatUnknown(error), cause: error });
   };
 
   const canonicalize = (value: unknown, label: string): JsonValue | undefined => {
     const parsed = JsonValueSchema.safeParse(value);
     if (!parsed.success) {
-      report(label, parsed.error);
+      // the schema's own message lists the untrusted key path, so only the error object travels
+      report(label, parsed.error, 'value is not canonical JSON');
       return undefined;
     }
     try {
@@ -70,6 +67,9 @@ export function createDataStore(opts?: {
         if (snapshot === undefined) continue;
         state = snapshot;
         for (const subscriber of [...subscribers]) {
+          // the snapshot above is the order; membership is checked live, so a subscriber removed by an
+          // earlier one in this commit is not called
+          if (!subscribers.has(subscriber)) continue;
           try {
             const result = subscriber(snapshot);
             if (result !== undefined) {

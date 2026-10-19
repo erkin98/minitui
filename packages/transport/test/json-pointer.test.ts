@@ -163,3 +163,62 @@ describe('json-pointer depth ceiling', () => {
     expect(() => removeIn({}, deep(50000))).toThrow(/depth/i);
   });
 });
+
+// Pointer and key text is untrusted input: the error text for a bad pointer is a fixed string, so a
+// huge token or a control byte never reaches a log line or a diagnostics sink.
+describe('json-pointer messages are fixed strings', () => {
+  const LONG = 'x'.repeat(200_000);
+  const hasControlByte = (text: string): boolean =>
+    [...text].some((ch) => {
+      const code = ch.codePointAt(0)!;
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    });
+
+  function messageOf(run: () => unknown): string {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof Error) return error.message;
+      throw error;
+    }
+    throw new Error('the call was expected to throw');
+  }
+
+  const rows: Array<[string, () => unknown, string]> = [
+    ['parsePointer without a leading slash', () => parsePointer(LONG), 'invalid JSON pointer'],
+    [
+      'parsePointer with control bytes',
+      () => parsePointer('\u001b]52;c;ZXZpbA==\u0007\u009b\u007f'),
+      'invalid JSON pointer',
+    ],
+    [
+      'a key that is not canonical (long)',
+      () => getIn({}, `/a\u001b${LONG}`),
+      'state key is not canonical',
+    ],
+    [
+      'a key that is not canonical (C1 and DEL)',
+      () => getIn({}, '/a\u009bb\u007f'),
+      'state key is not canonical',
+    ],
+    ['getIn on an array with a bad index', () => getIn([1], `/${LONG}`), 'invalid array index'],
+    ['setIn on an array with a bad index', () => setIn([1], `/${LONG}`, 1), 'invalid array index'],
+    [
+      'removeIn on an array with a bad index',
+      () => removeIn([1], `/${LONG}`),
+      'invalid array index',
+    ],
+    [
+      'setIn past the end of an array',
+      () => setIn([1], '/99', 1),
+      'array index out of range (would create a sparse hole)',
+    ],
+  ];
+
+  it.each(rows)('%s', (_name, run, expected) => {
+    const message = messageOf(run);
+    expect(message).toBe(expected);
+    expect(message.length).toBeLessThanOrEqual(80);
+    expect(hasControlByte(message)).toBe(false);
+  });
+});

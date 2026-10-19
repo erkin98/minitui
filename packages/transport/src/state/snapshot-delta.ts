@@ -1,6 +1,7 @@
 import { sanitize } from '@minitui/sanitizer';
+import { JsonValueSchema } from '@minitui/types';
 import { assertCanonicalStateKey, isArrayValue, isObject, type JsonValue } from './json-pointer.js';
-import { applyStatePatch, type JsonPatchOp } from './patch-apply.js';
+import { applyStatePatch, parsePatchArray, type JsonPatchOp } from './patch-apply.js';
 
 const MAX_STATE_DEPTH = 256;
 
@@ -41,16 +42,24 @@ function sanitizeValue(value: JsonValue, depth: number): JsonValue {
   return value;
 }
 
+/**
+ * Deep-cleans the string leaves and checks the keys of a JSON document. The value is a plain JSON tree;
+ * a caller screens first (the public folds below do, through the canonical-JSON schema).
+ */
 export function sanitizeStrings(value: JsonValue): JsonValue {
   return sanitizeValue(value, 0);
 }
 
+// Both public folds read their argument through the schema first: it inspects a value without invoking
+// an accessor or walking a non-plain object, so a hostile value is refused before anything walks it.
 export function foldSnapshot(snapshot: JsonValue): JsonValue {
-  return sanitizeStrings(snapshot);
+  const parsed = JsonValueSchema.safeParse(snapshot);
+  if (!parsed.success) throw new Error('state snapshot is not canonical JSON');
+  return sanitizeStrings(parsed.data);
 }
 
 export function foldDelta(state: JsonValue, delta: readonly JsonPatchOp[]): JsonValue {
-  const cleaned = delta.map((operation) =>
+  const cleaned = parsePatchArray(delta).map((operation) =>
     'value' in operation ? { ...operation, value: sanitizeStrings(operation.value) } : operation,
   );
   return applyStatePatch(state, cleaned);

@@ -1,5 +1,6 @@
 import { assertNever, type DiagnosticsPort } from '@minitui/types';
 import { formatUnknown } from '../format-unknown.js';
+import { reportWarning } from '../report-warning.js';
 import { BoundedQueue, assertValidCapacity } from './backpressure.js';
 import type { BusPort, PublishArgs } from './bus-port.js';
 import { COALESCIBLE, type Topic, type TopicPayloads, POSITIONAL } from './topics.js';
@@ -59,12 +60,7 @@ export function createAppBus(opts?: { capacity?: number; diagnostics?: Diagnosti
   let gapped = false;
 
   const report = (message: string, meta: Record<string, unknown>): void => {
-    try {
-      const result = diagnostics?.warn(message, meta);
-      if (result !== undefined) void Promise.resolve(result).catch(() => undefined);
-    } catch {
-      // Diagnostics is observational and cannot break bus delivery.
-    }
+    reportWarning(diagnostics, message, meta);
   };
 
   const schedule = (sub: ScheduledSub): void => {

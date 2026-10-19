@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventType } from '@ag-ui/core';
 import { toAppEvent } from '../src/events/to-app-event.js';
+import { EVENT_TYPES } from '@minitui/types';
 import { CONSUMED_KINDS } from '../src/events/event-kinds.js';
 
 describe('toAppEvent (single normalization chokepoint)', () => {
@@ -497,5 +498,16 @@ describe('toAppEvent (single normalization chokepoint)', () => {
       (type) => toAppEvent({ type }).kind !== 'passthrough',
     );
     expect([...CONSUMED_KINDS].sort()).toEqual([...handledByNormalizer].sort());
+  });
+});
+
+// A type added to @minitui/types without the matching transport routing is caught here: every wire
+// event type the types package declares must be consumed and normalised, never passed through opaque.
+describe('event lockstep with @minitui/types', () => {
+  const consumed: ReadonlySet<string> = CONSUMED_KINDS;
+
+  it.each(EVENT_TYPES)('%s is consumed and routed to something other than passthrough', (type) => {
+    expect(consumed.has(type)).toBe(true);
+    expect(toAppEvent({ type }).kind).not.toBe('passthrough');
   });
 });

@@ -444,6 +444,34 @@ describe('preserved-byte identity across all four strip paths', () => {
   });
 });
 
+describe('sanitizeSpecStrings depth ceiling', () => {
+  const wrap = (levels: number, leaf: unknown): unknown => {
+    let value = leaf;
+    for (let i = 0; i < levels; i++) value = { a: value };
+    return value;
+  };
+  const dive = (value: unknown, levels: number): unknown => {
+    let node = value;
+    for (let i = 0; i < levels; i++) node = (node as { a: unknown }).a;
+    return node;
+  };
+
+  it('keeps and cleans a string leaf at depth 256', () => {
+    const out = sanitizeSpecStrings(wrap(256, `x${ESC}[31my`));
+    expect(dive(out, 256)).toBe('xy');
+  });
+
+  it('turns whatever sits at depth 257 into null', () => {
+    const out = sanitizeSpecStrings(wrap(257, 'x'));
+    expect(dive(out, 256)).toEqual({ a: null });
+    expect(dive(out, 257)).toBeNull();
+  });
+
+  it.each([255, 256, 257, 258, 10_000])('does not throw for a chain %i levels deep', (levels) => {
+    expect(() => sanitizeSpecStrings(wrap(levels, 'x'))).not.toThrow();
+  });
+});
+
 describe('sanitizeSpecStrings', () => {
   it('cleans every nested string prop and returns a new object', () => {
     const spec = {
