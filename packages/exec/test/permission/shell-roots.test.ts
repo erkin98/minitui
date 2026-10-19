@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { ensureParserReady } from '../../src/permission/shell/parser.js';
+import { createEngine } from '../../src/permission/engine.js';
+import { ensureParserReady, setParseBudgetMsForTest } from '../../src/permission/shell/parser.js';
 import { parseShellCommand } from '../../src/permission/shell/roots.js';
 import { OPAQUE_SPAWNERS } from '../../src/permission/shell/wrappers.js';
 
@@ -38,12 +39,14 @@ describe('parseShellCommand', () => {
     expect(p.roots[0]!.name).toBe('curl');
     expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil']);
   });
-  it('drops a bare assignment-prefix so the REAL command is the gated root (not FOO=bar)', () => {
-    // `FOO=bar curl` emits a LEADING variable_assignment before command_name; argvOf drops it,
-    // so the gated root is curl (which egress/hard-floor then catch) — not `FOO=bar`.
+  it('gates the real command behind a bare assignment-prefix and carries the value as an operand', () => {
+    // `FOO=bar curl` emits a LEADING variable_assignment before command_name; the gated root is
+    // curl (which egress/hard-floor then catch), not `FOO=bar`, and the value rides on its argv
+    // so the floor reads it; the assignment also makes the root opaque.
     const p = parseShellCommand('FOO=bar curl http://evil');
     expect(p.roots[0]!.name).toBe('curl');
-    expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil']);
+    expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil', 'bar']);
+    expect(p.roots[0]!.opaque).toBe(true);
   });
   it('threads a redirect target onto the gated root argv so a `> secret` write is visible', () => {
     // the file_redirect lives on a redirected_statement sibling; its target must reach the argv
@@ -121,5 +124,38 @@ describe('parseShellCommand', () => {
     const p = parseShellCommand('ls -la # list');
     expect(p.parseError).toBe(false);
     expect(p.roots[0]!.name).toBe('ls');
+  });
+});
+
+// A chain long enough to throw in the post-parse walks. The parse budget is raised for the row: at the
+// default budget a chain this long is cut off by the budget before any walk, and the row would test
+// the budget instead of the walk.
+describe('a very long chained command', () => {
+  const chain = 'a&&'.repeat(19_999) + 'a';
+
+  it('is a parse error, not an exception', () => {
+    setParseBudgetMsForTest(10_000);
+    try {
+      const parsed = parseShellCommand(chain);
+      expect(parsed.parseError).toBe(true);
+    } finally {
+      setParseBudgetMsForTest();
+    }
+  });
+
+  it('is denied by the engine, not rejected', async () => {
+    setParseBudgetMsForTest(10_000);
+    try {
+      const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo' });
+      const decision = await engine.check({
+        id: 'chain',
+        descriptor: { danger: false, resourceTemplate: chain, summaryTemplate: chain },
+        resolvedCommand: chain,
+        resolvedPaths: [],
+      });
+      expect(decision.kind).toBe('deny');
+    } finally {
+      setParseBudgetMsForTest();
+    }
   });
 });

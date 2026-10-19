@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import {
   parseToTree,
   ensureParserReady,
+  resetParserForTest,
   setParseBudgetMsForTest,
 } from '../../src/permission/shell/parser.js';
 
@@ -45,5 +46,11 @@ describe('parseToTree', () => {
     // a budget-cancel calls reset(); the NEXT parse must start clean, not resume the cancelled
     // state on this memoized instance — a resumed parse could miss a dangerous root.
     expect('root' in parseToTree('ffmpeg -i a.mp4 out.mp4')).toBe(true);
+  });
+  it('fails closed before the parser is initialised and parses once it is ready', async () => {
+    resetParserForTest();
+    expect(parseToTree('ls')).toEqual({ parseError: true });
+    await ensureParserReady();
+    expect('root' in parseToTree('ls')).toBe(true);
   });
 });
