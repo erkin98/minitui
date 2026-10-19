@@ -2,11 +2,12 @@ import type {
   PermissionRequest,
   Decision,
   PermissionReply,
+  PermissionGatePort,
   ApprovalMode,
   PermissionRule,
   ParsedCommand,
 } from '@minitui/types';
-import { sanitize } from '@minitui/sanitizer';
+import { sanitize, CONSENT_FORBIDDEN } from '@minitui/sanitizer';
 import { parseShellCommand } from './shell/roots.js';
 import { ensureParserReady } from './shell/parser.js';
 import { STDIN_RUNNERS } from './shell/wrappers.js';
@@ -15,13 +16,13 @@ import { resolveStatic, denyRuleFor, unsafeToolArgs, identityMismatch } from './
 import { defaultResolveExecutable, type ResolveExecutable } from './resolve-exec.js';
 import type { RuleSet } from './rules.js';
 import { createPendingChannel } from './pending.js';
+import { exceedsConsentBudget, REQUEST_TOO_LARGE_REASON } from './consent.js';
 
 // exec is the SOLE owner + definer of PermissionEngine — @minitui/types never exports it (it lives
 // in exec). Re-exported from permission/index.ts for sibling-package imports.
-export interface PermissionEngine {
-  // the interface other packages wire through PermissionGatePort
-  check(req: PermissionRequest): Promise<Decision>;
-  readonly requests: AsyncIterable<PermissionRequest>;
+// The engine is declared as an extension of the gate port, so drift on either side fails the type check
+// instead of a consumer. check and requests come from the port; the rest is the engine's own.
+export interface PermissionEngine extends PermissionGatePort {
   reply(reply: PermissionReply): void; // once | always(+cascade) | reject(feedback)
   setMode(mode: ApprovalMode): void;
   disposeAll(reason: string): void;
@@ -35,6 +36,36 @@ export interface EngineOptions {
   // to. Defaults to `defaultResolveExecutable` (which-semantics + realpathSync); injectable so tests
   // pass a real fake (no replacement-mock) and a non-POSIX host can supply its own resolver.
   readonly resolveExecutable?: ResolveExecutable | undefined;
+}
+
+// The fixed reason for a request whose text cannot be shown as it is decided on. It never holds
+// the offending string.
+const NOT_CANONICAL_REASON =
+  'request contains control or invisible characters and cannot be shown safely; rename the file or path and try again';
+
+// A request is canonical when every string in it survives the sanitiser unchanged and holds no
+// member of the consent class. The walk covers every string leaf of the request, not three named
+// fields, so a string field added later is covered without an edit here. It is iterative and
+// bounded: a request that is not a plain tree of reasonable size is not canonical.
+const CANONICAL_WALK_LIMIT = 4096;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+function isCanonicalRequest(request: unknown): boolean {
+  const stack: unknown[] = [request];
+  for (let visited = 0; stack.length > 0; visited += 1) {
+    if (visited > CANONICAL_WALK_LIMIT) return false;
+    const value = stack.pop();
+    if (typeof value === 'string') {
+      if (CONSENT_FORBIDDEN.test(value) || sanitize(value, { allow: 'none' }) !== value) {
+        return false;
+      }
+    } else if (isRecord(value)) {
+      stack.push(...Object.values(value));
+    }
+  }
+  return true;
 }
 
 // Strip ANSI/OSC from every host-resolved string before it reaches the consent UI
@@ -59,24 +90,40 @@ function sanitizeRequest(req: PermissionRequest): PermissionRequest {
   };
 }
 
-// 'always' grant: cascade => broad grant on the gated root name; else narrow on the resolved command.
-// Bind the grant to the RESOLVED executable identity (realpath of argv[0]) so a later $PATH/symlink
+// 'always' grant. A cascade grant is a broad rule on the gated root's name. A narrow grant is stored
+// as the approved command with `exact: true` and matches only that string; it exists only for a command
+// with exactly one root, so for any other command `always` allows this request and stores nothing.
+// Either kind is bound to the RESOLVED executable identity (realpath of argv[0]) so a later $PATH/symlink
 // swap of the same basename can't inherit it. `identity` is left off when the command can't be
-// resolved — that grant keeps name-only match + the exec-time re-gate as backstop (undefined is
-// elided, not stored, for exactOptionalPropertyTypes).
+// resolved — that grant keeps the match + the exec-time re-gate as backstop (undefined is elided, not
+// stored, for exactOptionalPropertyTypes).
 function grantFor(
   req: PermissionRequest,
   parsed: ParsedCommand,
   cascade: boolean,
   resolveExecutable: ResolveExecutable,
-): PermissionRule {
+): PermissionRule | undefined {
+  if (!cascade && parsed.roots.length !== 1) return undefined;
   const root = parsed.roots[0];
   const pattern = cascade && root ? root.name : req.resolvedCommand;
   const identity = root ? resolveExecutable(root.argv[0] ?? root.name) : undefined;
-  return identity === undefined
-    ? { pattern, effect: 'allow', layer: 'user' }
-    : { pattern, effect: 'allow', layer: 'user', identity };
+  return {
+    pattern,
+    effect: 'allow',
+    layer: 'user',
+    ...(cascade ? {} : { exact: true as const }),
+    ...(identity === undefined ? {} : { identity }),
+  };
 }
+
+// Two rules are the same grant when every field that decides what they cover is equal. A grant that
+// is already live is not added again, so it is neither listed twice nor reported to onGrant twice.
+const sameGrant = (a: PermissionRule, b: PermissionRule): boolean =>
+  a.pattern === b.pattern &&
+  a.effect === b.effect &&
+  a.layer === b.layer &&
+  a.exact === b.exact &&
+  a.identity === b.identity;
 
 export function createEngine(opts: EngineOptions): PermissionEngine {
   let rules: PermissionRule[] = [...opts.initialRules.rules];
@@ -85,6 +132,7 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
   const resolveExecutable = opts.resolveExecutable ?? defaultResolveExecutable; // grant-identity resolver
 
   function addGrant(rule: PermissionRule): void {
+    if (rules.some((live) => sameGrant(live, rule))) return;
     rules = [...rules, rule];
     opts.onGrant?.(rule);
   }
@@ -94,6 +142,16 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
   // to the security sequence.
   // eslint-disable-next-line complexity
   async function check(req: PermissionRequest): Promise<Decision> {
+    // -1. canonical text. What the person approves must be the string the engine decides on, so a
+    //     request holding a control or invisible character is denied first: before the parse, before
+    //     the hard floor, in every approval mode. The sanitised copy shown to the overlay below is a
+    //     second layer, not this control.
+    if (!isCanonicalRequest(req)) return { kind: 'deny', reason: NOT_CANONICAL_REASON };
+
+    // -0.5. size budget. A request the approval box cannot show whole is denied before the parse, in
+    //       every mode: what cannot be shown cannot be approved.
+    if (exceedsConsentBudget(req)) return { kind: 'deny', reason: REQUEST_TOO_LARGE_REASON };
+
     await ensureParserReady(); // idempotent; first call pays the wasm init
     const parsed = parseShellCommand(req.resolvedCommand);
 
@@ -156,15 +214,19 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
       parsed.roots.some((r) => r.opaque === true) || // opaque root: a spawner or a wrapper peeled to an empty inner command — the payload the AST can't see, never YOLO-lifted
       parsed.roots.some((r) => STDIN_RUNNERS.has(r.name)) || // xargs feeds its target from stdin — invisible to the name-based floor, never YOLO-lifted
       parsed.roots.some((r) => unsafeToolArgs(r)) || // git global-opt / ffmpeg net-input never YOLO-lifted
-      parsed.roots.some((r) => identityMismatch(r, { rules }, resolveExecutable)); // a swapped-identity grant is host-uncertainty, never YOLO-lifted
+      parsed.roots.some((r) => identityMismatch(r, { rules }, resolveExecutable, parsed.raw)); // a swapped-identity grant is host-uncertainty, never YOLO-lifted
     if (mode === 'yolo' && !uncertain) return { kind: 'allow' };
 
     const resolution = await pending.ask(sanitizeRequest(req));
-    if (resolution.kind === 'reject') {
+    // only a once or an always reply approves; anything else is a rejection
+    if (resolution.kind !== 'once' && resolution.kind !== 'always') {
       return { kind: 'deny', reason: resolution.feedback ?? 'rejected' };
     }
-    if (resolution.kind === 'always') {
-      addGrant(grantFor(req, parsed, resolution.cascade ?? false, resolveExecutable));
+    // an ask the host could not fully account for allows this request and mints no grant, narrow or
+    // cascade: it can never be matched safely, and the same command asks again
+    if (resolution.kind === 'always' && !uncertain) {
+      const grant = grantFor(req, parsed, resolution.cascade ?? false, resolveExecutable);
+      if (grant !== undefined) addGrant(grant);
     }
     return { kind: 'allow' }; // once | always
   }

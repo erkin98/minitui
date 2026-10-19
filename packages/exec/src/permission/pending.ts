@@ -8,6 +8,9 @@ export interface PendingResolution {
   readonly feedback?: string;
 }
 
+// The reason for a reply whose kind is none of the three. It is fixed: it never holds what was received.
+export const UNRECOGNISED_REPLY_REASON = 'reply not recognised: treated as a rejection';
+
 export interface PendingChannel {
   readonly requests: AsyncIterable<PermissionRequest>;
   ask(req: PermissionRequest): Promise<PendingResolution>;
@@ -61,7 +64,12 @@ export function createPendingChannel(): PendingChannel {
         w.resolve({ kind: 'always', cascade: reply.cascade });
         return;
       }
-      w.resolve({ kind: 'once' });
+      if (reply.kind === 'once') {
+        w.resolve({ kind: 'once' });
+        return;
+      }
+      // any other kind (a value from outside the typed seam) is a rejection, never an approval
+      w.resolve({ kind: 'reject', feedback: UNRECOGNISED_REPLY_REASON });
     },
 
     disposeAll(reason) {

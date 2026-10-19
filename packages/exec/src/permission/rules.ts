@@ -11,11 +11,33 @@ type Effect = 'allow' | 'ask' | 'deny';
 const LAYER_RANK: Record<PermissionRule['layer'], number> = { managed: 3, project: 2, user: 1 };
 const EFFECT_RANK: Record<Effect, number> = { deny: 2, ask: 1, allow: 0 };
 
+// A deny written as several words matches a command whose non-option tokens hold those words in
+// order, so an option placed between them does not hide the deny: `deny "git push"` matches
+// `git --no-pager push origin`. There is no arity table, so an operand equal to one of the words
+// matches too (`git commit -m push`): a recorded over-deny, the safe direction. A pattern that names
+// an option is left to the contiguous match.
+function wordsInOrder(pattern: string, value: string): boolean {
+  const want = pattern.trim().split(/\s+/);
+  if (want.length < 2 || want.some((word) => word.startsWith('-'))) return false;
+  let found = 0;
+  for (const token of value.trim().split(/\s+/)) {
+    if (token.startsWith('-')) continue;
+    const next = want[found];
+    if (next !== undefined && matchPattern(next, token)) found += 1;
+  }
+  return found === want.length;
+}
+
 // The winning RULE for a value — layer precedence with managed-deny absolute. This is the single
 // precedence implementation; effectFor (below) and decision.ts's denyRuleFor both project
 // off it, so the engine's deny reason can never disagree with the effect resolveStatic saw.
 export function matchedRule(set: RuleSet, value: string): PermissionRule | undefined {
-  const matched = set.rules.filter((r) => matchPattern(r.pattern, value));
+  // an exact rule covers one command string and is read by exactRuleFor, never by this prefix matcher
+  const matched = set.rules.filter(
+    (r) =>
+      r.exact !== true &&
+      (matchPattern(r.pattern, value) || (r.effect === 'deny' && wordsInOrder(r.pattern, value))),
+  );
   if (matched.length === 0) return undefined;
 
   // managed-deny is absolute
@@ -37,4 +59,10 @@ export function matchedRule(set: RuleSet, value: string): PermissionRule | undef
 
 export function effectFor(set: RuleSet, value: string): Effect | undefined {
   return matchedRule(set, value)?.effect;
+}
+
+// The exact rule for a command, if any: its pattern equals the whole command string character for
+// character. A star in the pattern is a literal character here, not a wildcard.
+export function exactRuleFor(set: RuleSet, raw: string): PermissionRule | undefined {
+  return set.rules.find((r) => r.exact === true && r.pattern === raw);
 }

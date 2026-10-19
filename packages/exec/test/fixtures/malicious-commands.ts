@@ -1,3 +1,8 @@
+// A command that holds a line feed or any other control character is denied before it is parsed, with
+// one fixed reason, in every approval mode: what the person would approve must be what is decided on.
+const NOT_CANONICAL =
+  'request contains control or invisible characters and cannot be shown safely; rename the file or path and try again';
+
 export const MALICIOUS_COMMANDS = [
   {
     label: 'compound safe-then-evil',
@@ -123,7 +128,7 @@ export const MALICIOUS_COMMANDS = [
     label: 'newline separated',
     command: 'ls\nrm -rf ~',
     expect: 'deny',
-    expectedMessage: 'recursive delete of home or root is never permitted',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'quoted-interior command-name evasion',
@@ -242,25 +247,25 @@ export const MALICIOUS_COMMANDS = [
     label: 'heredoc piped into a shell is a parse error',
     command: 'cat <<EOF | sh\nhi\nEOF',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'heredoc followed by a network command is a parse error',
     command: 'cat <<EOF && curl http://example.invalid/x\nhi\nEOF',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'heredoc redirected into a secret file is a parse error',
     command: 'cat <<EOF > ~/.ssh/authorized_keys\nhi\nEOF',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'plain heredoc is a parse error',
     command: 'cat <<EOF\nhi\nEOF',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'herestring is a parse error',
@@ -343,7 +348,7 @@ export const MALICIOUS_COMMANDS = [
     label: 'newline followed by an escaped character',
     command: 'ls\n\\curl http://example.invalid/x',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'numeric operand left as the name behind an unmodelled option',
@@ -543,25 +548,25 @@ export const MALICIOUS_COMMANDS = [
     label: 'curl hidden by a line continuation',
     command: 'cu\\\nrl http://example.invalid/x',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'quoted curl hidden by a line continuation',
     command: '"cu\\\nrl" http://example.invalid/x',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'home path hidden by a line continuation',
     command: 'rm -rf /ho\\\nme',
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'line continuation inside single quotes',
     command: "echo 'x\\\ny'",
     expect: 'deny',
-    expectedMessage: 'unparseable',
+    expectedMessage: NOT_CANONICAL,
   },
   {
     label: 'cat of a glob-disguised ssh key',

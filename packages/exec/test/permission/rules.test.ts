@@ -39,3 +39,29 @@ describe('effectFor — layered rule resolution', () => {
     ).toBeUndefined();
   });
 });
+
+describe('effectFor — a deny written as several words', () => {
+  const denyPush = set([{ pattern: 'git push', effect: 'deny', layer: 'user' }]);
+
+  it('matches when an option sits between its words', () => {
+    expect(effectFor(denyPush, 'git --no-pager push origin')).toBe('deny');
+    expect(effectFor(denyPush, 'git -C repo push')).toBe('deny');
+  });
+  it('matches an operand equal to one of its words (recorded over-deny)', () => {
+    expect(effectFor(denyPush, 'git commit -m push')).toBe('deny');
+  });
+  it('does not match a word that only starts like one of its own', () => {
+    expect(effectFor(denyPush, 'git pushy')).toBeUndefined();
+    expect(effectFor(denyPush, 'git status')).toBeUndefined();
+  });
+  it('is read for a deny only: an allow of several words keeps the contiguous match', () => {
+    const allowPush = set([{ pattern: 'git push', effect: 'allow', layer: 'user' }]);
+    expect(effectFor(allowPush, 'git push origin')).toBe('allow');
+    expect(effectFor(allowPush, 'git --no-pager push origin')).toBeUndefined();
+  });
+  it('leaves a deny that names an option to the contiguous match', () => {
+    const denyForce = set([{ pattern: 'git push --force', effect: 'deny', layer: 'user' }]);
+    expect(effectFor(denyForce, 'git push --force origin')).toBe('deny');
+    expect(effectFor(denyForce, 'git --no-pager push --force')).toBeUndefined();
+  });
+});

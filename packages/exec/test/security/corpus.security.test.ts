@@ -42,7 +42,11 @@ async function verdict(
 describe('permission engine — malicious-command corpus', () => {
   for (const c of MALICIOUS_COMMANDS) {
     it(`${c.label} -> ${c.expect}`, async () => {
-      const e = await createPermissionEngine(); // no allow rules => unknown roots ask, hard floor denies
+      // YOLO lifts every ask the host fully understands, so a row that expects ask can only pass here when
+      // the command is one no mode lifts (an opaque root, a stdin runner, unsafe tool arguments), and a
+      // deny row is a floor or parser deny that no mode lifts. In default mode any command no rule allows
+      // asks, so an ask row could not fail there.
+      const e = await createPermissionEngine({ mode: 'yolo' });
       const d = await verdict(e, c.command);
       expect(d.kind).toBe(c.expect);
       // the expected-message column — a deny must NAME what fired, not a bare "denied by rule" /

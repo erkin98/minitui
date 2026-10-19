@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createEngine } from '../../src/permission/engine.js';
 import type { PermissionRequest, PermissionRule } from '@minitui/types';
 
+const NOT_CANONICAL =
+  'request contains control or invisible characters and cannot be shown safely; rename the file or path and try again';
+
 let n = 0;
 const exec = (resolvedCommand: string): PermissionRequest => ({
   id: `r${n++}`,
@@ -90,7 +93,7 @@ describe('createEngine', () => {
     expect(d.kind).toBe('deny');
   });
 
-  it('sanitizes resolvedPaths before the consent UI — ESC/CSI in a resolved path', async () => {
+  it('denies a resolved path holding an escape sequence before it can reach the consent UI', async () => {
     const e = createEngine({ initialRules: { rules: [] } });
     const req: PermissionRequest = {
       id: 'esc-path',
@@ -98,23 +101,16 @@ describe('createEngine', () => {
       resolvedCommand: 'ffmpeg -i a out',
       resolvedPaths: ['/abs/\x1b[2Jout.mp4'], // clear-screen CSI laundered through a resolved path
     };
-    const p = e.check(req);
-    const it = e.requests[Symbol.asyncIterator]();
-    const { value } = await it.next();
-    expect(value!.resolvedPaths[0]).not.toContain('\x1b'); // stripped — no raw ESC reaches the modal
-    e.reply({ kind: 'once' });
-    await p;
+    // the request is never asked: no pending request is waited for
+    expect(await e.check(req)).toEqual({ kind: 'deny', reason: NOT_CANONICAL });
   });
 
-  it('sanitizes the host-resolved command before it reaches the consent UI', async () => {
+  it('denies a host-resolved command holding an OSC sequence before it can reach the consent UI', async () => {
     const e = createEngine({ initialRules: { rules: [] } });
-    // an OSC/ANSI-laden resolved command must be neutralized on the surfaced request
-    const p = e.check(exec('echo \x1b]0;pwned\x07 hi'));
-    const it = e.requests[Symbol.asyncIterator]();
-    const { value } = await it.next();
-    expect(value!.resolvedCommand).not.toContain('\x1b');
-    e.reply({ kind: 'once' });
-    await p;
+    expect(await e.check(exec('echo \x1b]0;pwned\x07 hi'))).toEqual({
+      kind: 'deny',
+      reason: NOT_CANONICAL,
+    });
   });
 
   it('always builds a grant and auto-allows the next identical command', async () => {
