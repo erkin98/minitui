@@ -6,46 +6,9 @@ import type { ConsentController } from '../src/widgets/consent-overlay.js';
 import type { ActionDispatcher, DispatchContext, ActionOutcome } from '@minitui/renderer-core';
 import type { AppSpec, PermissionRequest } from '@minitui/types';
 import { makeCatalog } from './support/make-catalog.js';
-import { EventEmitter } from 'node:events';
-
-// ink-testing-library-shaped fake streams: a stdin whose write() emits 'readable'+'data' drives ink's
-// useInput; a non-TTY 100-col stdout sinks frames. Fed through mountInk's io seam so the keypress golden
-// drives the REAL mounted tree (real Button, real focus ring, real gated handlers) — not a fake dispatch.
-class FakeStdin extends EventEmitter {
-  isTTY = true as const;
-  private data: string | null = null;
-  setRawMode(): void {}
-  setEncoding(): void {}
-  resume(): void {}
-  pause(): void {}
-  ref(): this {
-    return this;
-  }
-  unref(): this {
-    return this;
-  }
-  read(): string | null {
-    const d = this.data;
-    this.data = null;
-    return d;
-  }
-  write(data: string): boolean {
-    this.data = data;
-    this.emit('readable');
-    this.emit('data', data);
-    return true;
-  }
-}
-class FakeStdout extends EventEmitter {
-  get columns(): number {
-    return 100;
-  }
-  readonly frames: string[] = [];
-  write = (f: string): boolean => {
-    this.frames.push(f);
-    return true;
-  };
-}
+import { controlledIo } from './support/store-io.js';
+import { FakeStdin, FakeStdout, asReadStream, asWriteStream } from './support/fake-streams.js';
+import { awaitFocus, awaitFocusOn, awaitMounted, lastOf, until } from './support/focus-waits.js';
 
 const catalog = makeCatalog({
   id: 'video-merge',
@@ -70,23 +33,6 @@ const spec: AppSpec = {
   },
 };
 
-function controlledIo(seed: Record<string, unknown>) {
-  let snap = seed;
-  const subs = new Set<() => void>();
-  return {
-    getSnapshot: () => snap,
-    setSnapshot: (n: Record<string, unknown>) => {
-      snap = n;
-      subs.forEach((f) => f());
-    },
-    subscribe: (f: () => void) => {
-      subs.add(f);
-      return () => {
-        subs.delete(f);
-      };
-    },
-  };
-}
 const noopConsent: ConsentController = {
   request: undefined,
   subscribe: () => () => {},
@@ -109,7 +55,7 @@ function harness(
   };
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const store = controlledIo({ inputs: ['a.mp4'] });
+  const store = controlledIo({ inputs: ['a.mp4', 'b.mp4'], out: '' });
   const handle = mountInk({
     spec: specArg,
     catalog: catalogArg,
@@ -121,8 +67,8 @@ function harness(
     // debug: ink writes every render in full, also when CI is set (it otherwise keeps the
     // output back until unmount), so a wait can read the frame.
     io: {
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stdout: stdout as unknown as NodeJS.WriteStream,
+      stdin: asReadStream(stdin),
+      stdout: asWriteStream(stdout),
       debug: true,
     },
   });
@@ -139,40 +85,10 @@ function harness(
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
 
-// A key written before the mount effects have run reaches no handler: the widget has not
-// registered with the focus ring yet, so the press is dropped. Wait for what the key depends
-// on, not for a fixed time. The clock is frozen in tests, so count attempts instead of reading it.
-async function until(cond: () => boolean, what: string, attempts = 1000): Promise<void> {
-  for (let i = 0; !cond(); i++) {
-    if (i >= attempts) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
-// React commits the frame first and flushes the effects (listener attach) on the next immediates.
-const afterEffects = (): Promise<void> => new Promise((r) => setImmediate(() => setImmediate(r)));
-const lastOf =
-  (out: FakeStdout): (() => string) =>
-  () =>
-    out.frames.at(-1) ?? '';
-// A display-only tree renders an empty frame, so "mounted" means a frame was written.
-const awaitMounted = async (out: FakeStdout): Promise<void> => {
-  await until(() => out.frames.length > 0, 'the first frame');
-  await afterEffects();
-};
-// Every focusable widget prints '> ' while it holds focus and two spaces otherwise.
-const awaitFocus = async (frame: () => string): Promise<void> => {
-  await until(() => frame().includes('> '), 'a focused widget in the frame');
-  await afterEffects();
-};
-
 describe('gated-dispatch (headless)', () => {
-  // DEFERRED: single-key input through the real mounted tree works (see the q/Esc + focused-widget
-  // tests below), but Tab TRAVERSAL of json-render's focus ring does not advance the focused element in
-  // this headless harness (json-render focus-manager detail under ink's real render with fake stdio).
-  // The per-widget focus GATE (an unfocused widget consumes no keys) is proven by the running two-widget
-  // security test below; the capturesText tests prove the focus-REPORT channel. Full Tab cycling is
-  // exercised end to end when the cli mounts through the port in the spine e2e. Un-skip once wired.
-  it.skip('a real Tab->Enter keypress routes through the focus ring to the gated dispatcher', async () => {
+  // Tab moves the focus ring on the pinned @json-render/ink only with the patch that keeps the focus
+  // effect's dependencies stable; the rows that cross widgets rely on it.
+  it('a real Tab->Enter keypress routes through the focus ring to the gated dispatcher', async () => {
     // Two focusable Buttons in a Box — the first auto-focuses, Tab moves focus to Merge, Enter fires its
     // bound gated action. If Tab did NOT move focus, Enter would land on btnOther (no binding) and the
     // dispatcher would never be called — so this genuinely proves the focus ring.
@@ -215,6 +131,7 @@ describe('gated-dispatch (headless)', () => {
       },
     };
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: twoButtons,
       catalog: keyCatalog,
@@ -223,16 +140,15 @@ describe('gated-dispatch (headless)', () => {
       store: controlledIo({ inputs: ['a.mp4'] }),
       consent: noopConsent,
       onLifecycle: { emit: (e) => lifecycle.push(e.phase) },
-      io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
-      },
+      io: { stdin: asReadStream(stdin), stdout: asWriteStream(stdout), debug: true },
     });
-    await tick(); // both buttons register in the ring; btnOther auto-focuses
+    const frame = lastOf(stdout);
+    await awaitFocus(frame); // both buttons register in the ring; btnOther auto-focuses
     stdin.write('\t'); // Tab -> focus moves to btnMerge
-    await tick();
+    await awaitFocusOn(frame, 'Merge'); // Enter must not be written before the focus has moved
     stdin.write('\r'); // Enter -> the FOCUSED Merge button emits('press') -> gated dispatch
-    await tick();
+    await until(() => dispatched.length > 0, 'the dispatch');
+    await until(() => lifecycle.length >= 2, 'the lifecycle');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.resolvedParams).toEqual({ inputs: ['a.mp4'] });
     expect(dispatched[0]?.elementKey).toBe('btnMerge'); // prepareSpec injected it; the binder stripped it
@@ -294,8 +210,8 @@ describe('gated-dispatch (headless)', () => {
       consent: noopConsent,
       onLifecycle: { emit: () => {} },
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });
@@ -315,19 +231,17 @@ describe('gated-dispatch (headless)', () => {
     handle.unmount();
   });
 
-  // TAB-TRAVERSAL HALF (deferred): Tab advancing json-render's focus ring to the next widget does not
-  // drive in this headless harness (focus-manager detail under ink's real render with fake stdio).
-  // Un-skip once the traversal is wired; exercised end to end when the cli mounts through the port.
-  it.skip('two custom widgets: Tab advances the ring to the FilePicker, whose Enter then dispatches', async () => {
-    const { dispatched, stdin, handle } = mountTwoWidgets();
-    await tick();
+  // TAB-TRAVERSAL HALF: Tab advances the ring to the next widget, whose Enter then dispatches.
+  it('two custom widgets: Tab advances the ring to the FilePicker, whose Enter then dispatches', async () => {
+    const { dispatched, stdin, handle, frame } = mountTwoWidgets();
+    await awaitFocus(frame); // OrderList registers first -> auto-focuses
     stdin.write('\r'); // OrderList focused; no dispatch yet
-    await tick();
+    await tick(); // a negative window: its positive control is the dispatch below
     expect(dispatched).toHaveLength(0);
     stdin.write('\t'); // Tab -> the ring moves to FilePicker
-    await tick();
+    await awaitFocusOn(frame, 'out:'); // Enter must not be written before the focus has moved
     stdin.write('\r'); // Enter -> the FOCUSED FilePicker emits('change') -> gated dispatch
-    await tick();
+    await until(() => dispatched.length > 0, 'the dispatch');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.elementKey).toBe('fp');
     handle.unmount();
@@ -470,8 +384,8 @@ describe('gated-dispatch (headless)', () => {
       store: io,
       consent: noopConsent,
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });
@@ -481,6 +395,107 @@ describe('gated-dispatch (headless)', () => {
     expect(io.getSnapshot()).toMatchObject({ probe: 'ok' }); // liveness: the native sink wrote through
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(Object.prototype).not.toHaveProperty('polluted');
+    handle.unmount();
+  });
+
+  // A real Enter on the focused Button reaches the gated handler through the live tree: the
+  // dispatcher is asked once with the resolved params, and the lifecycle follows the outcome.
+  it('a real Enter with an allowing dispatcher: one dispatch, then started and result', async () => {
+    const { dispatched, lifecycle, stdin, handle, lastFrame } = harness({
+      status: 'settled',
+      result: 'ok',
+    });
+    await awaitFocus(lastFrame);
+    stdin.write('\r');
+    await until(() => lifecycle.length >= 2, 'the lifecycle');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.elementKey).toBe('btn');
+    expect(dispatched[0]?.resolvedParams).toEqual({ inputs: ['a.mp4'] });
+    expect(lifecycle).toEqual(['started', 'result']);
+    handle.unmount();
+  });
+
+  it('a real Enter with a denying dispatcher: one dispatch, then started and error', async () => {
+    const { dispatched, lifecycle, stdin, handle, lastFrame } = harness({
+      status: 'denied',
+      reason: 'no',
+    });
+    await awaitFocus(lastFrame);
+    stdin.write('\r');
+    await until(() => lifecycle.length >= 2, 'the lifecycle');
+    expect(dispatched).toHaveLength(1);
+    expect(lifecycle).toEqual(['started', 'error']);
+    handle.unmount();
+  });
+
+  it('a FilePicker writes its draft back through the binding on Enter and emits change', async () => {
+    const pickCatalog = makeCatalog({
+      id: 'pick',
+      components: { FilePicker: { trustTier: 'interactive', capturesText: true } },
+      actions: {
+        pick: {
+          kind: 'exec-local',
+          params: z.object({}),
+          permission: { danger: false, resourceTemplate: 'pick', summaryTemplate: 'pick' },
+        },
+      },
+    });
+    const pickSpec: AppSpec = {
+      root: 'fp',
+      elements: {
+        fp: {
+          type: 'FilePicker',
+          props: { label: 'out', value: { $bindState: '/out' } },
+          on: { change: { action: 'pick', params: {} } },
+        },
+      },
+    };
+    const { dispatched, stdin, store, handle, lastFrame } = harness(
+      { status: 'settled', result: 'ok' },
+      pickSpec,
+      pickCatalog,
+    );
+    await awaitFocus(lastFrame);
+    stdin.write('a');
+    stdin.write('b');
+    await until(() => lastFrame().includes('ab'), 'the typed draft');
+    stdin.write('\r');
+    await until(() => dispatched.length === 1, 'the change dispatch');
+    expect(store.getSnapshot()).toMatchObject({ out: 'ab' });
+    handle.unmount();
+  });
+
+  it('an OrderList reorders the bound items on shift+down and emits reorder', async () => {
+    const listCatalog = makeCatalog({
+      id: 'list',
+      components: { OrderList: { trustTier: 'interactive' } },
+      actions: {
+        pick: {
+          kind: 'exec-local',
+          params: z.object({}),
+          permission: { danger: false, resourceTemplate: 'pick', summaryTemplate: 'pick' },
+        },
+      },
+    });
+    const listSpec: AppSpec = {
+      root: 'ol',
+      elements: {
+        ol: {
+          type: 'OrderList',
+          props: { items: { $bindState: '/inputs' } },
+          on: { reorder: { action: 'pick', params: {} } },
+        },
+      },
+    };
+    const { dispatched, stdin, store, handle, lastFrame } = harness(
+      { status: 'settled', result: 'ok' },
+      listSpec,
+      listCatalog,
+    );
+    await awaitFocus(lastFrame);
+    stdin.write('\x1B[1;2B'); // shift+down moves the first item down
+    await until(() => dispatched.length === 1, 'the reorder dispatch');
+    expect(store.getSnapshot()).toMatchObject({ inputs: ['b.mp4', 'a.mp4'] });
     handle.unmount();
   });
 
@@ -534,8 +549,8 @@ describe('gated-dispatch (headless)', () => {
       onQuit,
       onCancel,
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });
@@ -572,8 +587,8 @@ describe('gated-dispatch (headless)', () => {
       onQuit,
       onCancel,
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });
@@ -632,8 +647,8 @@ describe('gated-dispatch (headless)', () => {
       onQuit,
       onCancel,
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });
@@ -673,8 +688,8 @@ describe('gated-dispatch (headless)', () => {
       consent: pendingConsent,
       onQuit,
       io: {
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: asReadStream(stdin),
+        stdout: asWriteStream(stdout),
         debug: true,
       },
     });

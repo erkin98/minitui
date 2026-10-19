@@ -5,7 +5,9 @@ import type {
   DispatchContext,
 } from '@minitui/renderer-core';
 import type { MinituiActionDef } from '@minitui/catalog';
-import type { ExecEvent, JsonValue, RuntimeFault } from '@minitui/types';
+import type { DiagnosticsPort, ExecEvent, JsonValue, RuntimeFault } from '@minitui/types';
+import { boundText, errorText } from './bound-text.js';
+import { reportFault } from './report.js';
 
 export interface GatedHandlerArgs {
   readonly actionName: string;
@@ -13,7 +15,12 @@ export interface GatedHandlerArgs {
   readonly dispatcher: ActionDispatcher;
   readonly getStateSnapshot: () => JsonValue;
   readonly emitLifecycle: (e: ActionLifecycleEvent) => void;
+  // where a contained failure is reported; absent means nowhere
+  readonly diagnostics?: DiagnosticsPort | undefined;
 }
+
+// fixed phrase of the report for a failure after the action started
+const HANDLER_FAILED = 'gated action failed after it started';
 
 // outcome.status -> the canonical-union lifecycle event the renderer surfaces.
 // Per-variant payloads: result -> `result`, awaiting -> `awaiting` (carries `requestId`),
@@ -36,7 +43,7 @@ function outcomeToEvent(
       const fault: RuntimeFault = {
         actionKey: actionName,
         exitCode: -1,
-        stderrExcerpt: outcome.reason,
+        stderrExcerpt: boundText(outcome.reason),
       };
       return { phase: 'error', actionName, elementKey, fault };
     }
@@ -56,33 +63,52 @@ export function gatedHandler(args: GatedHandlerArgs) {
       const fault: RuntimeFault = {
         actionKey: actionName,
         exitCode: -1,
-        stderrExcerpt: `invalid params: ${parsed.error.message}`,
+        stderrExcerpt: boundText(`invalid params: ${parsed.error.message}`),
       };
       emitLifecycle({ phase: 'error', actionName, elementKey, fault });
       return;
     }
     emitLifecycle({ phase: 'started', actionName, elementKey });
-    // params arrive RESOLVED from json-render emit() — never re-resolve.
-    const ctx: DispatchContext = {
-      actionName,
-      actionKind: def.kind,
-      permission: def.permission,
-      resolvedParams: parsed.data as Record<string, unknown>,
-      stateSnapshot: getStateSnapshot(),
-      elementKey,
-      // The exec-progress correlation seam. The composition-root dispatcher streams exec
-      // `ExecEvent`s through this callback; here we map a `progress` event to a FIRST-CLASS
-      // lifecycle `progress` phase so the renderer chrome updates live. (That dispatcher ALSO
-      // maps the same event to a store delta so a bound Progress widget moves — the two
-      // consumers are independent; this package owns the lifecycle mapping, the composition
-      // root owns the store delta.)
-      onEvent: (ev: ExecEvent) => {
-        if (ev.kind === 'progress') {
-          emitLifecycle({ phase: 'progress', actionName, elementKey, progress: ev.value });
-        }
-      },
+    // After the run has ended, in either way, nothing more is emitted for it: late progress is dropped.
+    let ended = false;
+    const end = (event: ActionLifecycleEvent): void => {
+      if (ended) return;
+      ended = true;
+      emitLifecycle(event);
     };
-    const outcome = await dispatcher.dispatch(actionName, ctx);
-    emitLifecycle(outcomeToEvent(actionName, elementKey, outcome));
+    try {
+      // params arrive RESOLVED from json-render emit() — never re-resolve.
+      const ctx: DispatchContext = {
+        actionName,
+        actionKind: def.kind,
+        permission: def.permission,
+        resolvedParams: parsed.data as Record<string, unknown>,
+        stateSnapshot: getStateSnapshot(),
+        elementKey,
+        // The exec-progress correlation seam. The composition-root dispatcher streams exec
+        // `ExecEvent`s through this callback; here we map a `progress` event to a FIRST-CLASS
+        // lifecycle `progress` phase so the renderer chrome updates live. (That dispatcher ALSO
+        // maps the same event to a store delta so a bound Progress widget moves — the two
+        // consumers are independent; this package owns the lifecycle mapping, the composition
+        // root owns the store delta.)
+        onEvent: (ev: ExecEvent) => {
+          if (ev.kind === 'progress' && !ended) {
+            emitLifecycle({ phase: 'progress', actionName, elementKey, progress: ev.value });
+          }
+        },
+      };
+      const outcome = await dispatcher.dispatch(actionName, ctx);
+      end(outcomeToEvent(actionName, elementKey, outcome));
+    } catch (error) {
+      // A throw or rejection after `started` still ends the run with exactly one terminal event, and
+      // never reaches the library's console output.
+      reportFault(args.diagnostics, HANDLER_FAILED, error, { actionName });
+      const fault: RuntimeFault = {
+        actionKey: actionName,
+        exitCode: -1,
+        stderrExcerpt: errorText(error),
+      };
+      end({ phase: 'error', actionName, elementKey, fault });
+    }
   };
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { JSONUIProvider } from '@json-render/ink';
-import { createInkBinding, OrderList } from '../src/widgets/bindings.js';
+import { createInkBinding, OrderList, ProgressWidget } from '../src/widgets/bindings.js';
 import { CommandPreview } from '../src/widgets/command-preview.js'; // host chrome — barrel-direct, NOT via bindings
 import { makeCatalog } from './support/make-catalog.js';
 
@@ -10,6 +10,7 @@ const catalog = makeCatalog({
   id: 'video-merge',
   components: {
     Text: { trustTier: 'display' },
+    ProgressBar: { trustTier: 'display' },
     Button: { trustTier: 'interactive' },
     OrderList: { trustTier: 'interactive' },
     FilePicker: { trustTier: 'interactive', capturesText: true }, // free-text widget → capturesText surfaced through resolve()
@@ -78,5 +79,28 @@ describe('createInkBinding', () => {
     );
     const frame = lastFrame() ?? '';
     expect(frame.indexOf('a.mp4')).toBeLessThan(frame.indexOf('b.mp4'));
+  });
+
+  it('the progress widget reads the progress prop: a frame at 0.5 shows 50 percent', () => {
+    const { lastFrame } = render(
+      React.createElement(ProgressWidget, {
+        element: { type: 'ProgressBar', props: { progress: 0.5 } },
+        emit: () => {},
+      }),
+    );
+    expect(lastFrame()).toContain('50%');
+    // a value prop is not the progress prop
+    const other = render(
+      React.createElement(ProgressWidget, {
+        element: { type: 'ProgressBar', props: { value: 0.9 } },
+        emit: () => {},
+      }),
+    );
+    expect(other.lastFrame()).toContain('0%');
+    expect(other.lastFrame()).not.toContain('90%');
+  });
+
+  it('the binding resolves ProgressBar to the custom widget, not the standard one', () => {
+    expect(createInkBinding(catalog).resolve('ProgressBar')?.factory).toBe(ProgressWidget);
   });
 });

@@ -1,19 +1,15 @@
 import React from 'react';
-import { render, Text, useInput } from 'ink';
+import { Box, render, Text, useInput } from 'ink';
 import { JSONUIProvider, Renderer, type StateStore } from '@json-render/ink';
 import type { StoreAdapterConfig } from '@json-render/core';
 import { createStoreAdapter } from '@json-render/core/store-utils';
-import fastJsonPatch, { type Operation } from 'fast-json-patch';
 import {
-  assertJsonResourceBudget,
   JsonObjectSchema,
-  JsonPatchArraySchema,
-  JsonValueSchema,
   type ActionBinding,
   type AppSpec,
-  type JsonValue,
   type JsonPatch,
   type ActionRequest,
+  type DiagnosticsPort,
 } from '@minitui/types';
 import type {
   ActionDispatcher,
@@ -22,135 +18,15 @@ import type {
   WidgetCatalogBinding,
 } from '@minitui/renderer-core';
 import type { MinituiCatalog } from '@minitui/catalog';
-import { throwingFallback } from '@minitui/catalog'; // render-time gate primitive (component-only)
-import { sanitize, sanitizeSpecStrings } from '@minitui/sanitizer';
+import { checkElementTree, hasCanonicalKeys, throwingFallback } from '@minitui/catalog'; // render-time gate primitive (component-only) and the shared tree rule
+import { RendererRefusal } from './refusal.js';
+import { applyStatePatchTo } from './state-patch.js';
+import { reportFault } from './binder/report.js';
+import { sanitizeSpecStrings } from '@minitui/sanitizer';
 import { buildHandlers, ELEMENT_KEY } from './binder/build-handlers.js';
 import { ConsentOverlay, type ConsentController } from './widgets/consent-overlay.js';
 import { createFocusTypeChannel, FocusTypeProvider } from './focus-capture.js';
 import type { WidgetProps } from './widgets/command-preview.js';
-
-const { applyOperation } = fastJsonPatch;
-const RESERVED_STATE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const MAX_STATE_POINTER_DEPTH = 256;
-
-function parseCanonicalPointer(pointer: string): string[] {
-  let separators = 0;
-  for (let offset = 0; offset < pointer.length; offset++) {
-    if (pointer.charCodeAt(offset) === 0x2f && ++separators > MAX_STATE_POINTER_DEPTH) {
-      throw new Error(`JSON pointer exceeds max depth ${MAX_STATE_POINTER_DEPTH}`);
-    }
-  }
-  if (pointer === '') return [];
-  if (!pointer.startsWith('/')) throw new Error(`invalid JSON pointer: ${pointer}`);
-  const tokens = pointer
-    .slice(1)
-    .split('/')
-    .map((token) => token.replace(/~1/g, '/').replace(/~0/g, '~'));
-  for (const token of tokens) {
-    if (RESERVED_STATE_KEYS.has(token)) throw new Error(`reserved state key not allowed: ${token}`);
-    if (sanitize(token) !== token) {
-      throw new Error(`state key is not canonical: ${JSON.stringify(token)}`);
-    }
-  }
-  return tokens;
-}
-
-function isArrayValue(value: JsonValue): value is readonly JsonValue[] {
-  return Array.isArray(value);
-}
-
-function isObjectValue(value: JsonValue): value is { readonly [key: string]: JsonValue } {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseArrayIndexToken(token: string): number | '-' | undefined {
-  if (token === '-') return '-';
-  if (!/^(0|[1-9][0-9]*)$/.test(token)) return undefined;
-  const index = Number(token);
-  return Number.isSafeInteger(index) ? index : undefined;
-}
-
-function assertCanonicalStateValue(value: JsonValue): void {
-  const pending: JsonValue[] = [value];
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    if (isArrayValue(current)) {
-      for (const item of current) pending.push(item);
-    } else if (isObjectValue(current)) {
-      for (const [key, item] of Object.entries(current)) {
-        if (RESERVED_STATE_KEYS.has(key)) throw new Error(`reserved state key not allowed: ${key}`);
-        if (sanitize(key) !== key) {
-          throw new Error(`state key is not canonical: ${JSON.stringify(key)}`);
-        }
-        pending.push(item);
-      }
-    }
-  }
-}
-
-function resolveExisting(document: JsonValue, tokens: readonly string[]): JsonValue {
-  let current = document;
-  for (const token of tokens) {
-    if (isArrayValue(current)) {
-      const index = parseArrayIndexToken(token);
-      if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
-      if (index === '-' || index >= current.length) {
-        throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
-      }
-      current = current[index]!;
-    } else if (isObjectValue(current)) {
-      if (!Object.hasOwn(current, token)) throw new Error(`object member does not exist: ${token}`);
-      current = current[token]!;
-    } else {
-      throw new Error('patch path traverses a primitive');
-    }
-  }
-  return current;
-}
-
-function resolveParent(
-  document: JsonValue,
-  tokens: readonly string[],
-): { readonly parent: JsonValue; readonly token: string } {
-  const token = tokens.at(-1);
-  if (token === undefined) throw new Error('root pointer has no parent');
-  return { parent: resolveExisting(document, tokens.slice(0, -1)), token };
-}
-
-function assertAddTarget(document: JsonValue, tokens: readonly string[]): void {
-  if (tokens.length === 0) return;
-  const { parent, token } = resolveParent(document, tokens);
-  if (isArrayValue(parent)) {
-    const index = parseArrayIndexToken(token);
-    if (index === undefined || (index !== '-' && index > parent.length)) {
-      throw new Error(`invalid add array index: ${JSON.stringify(token)}`);
-    }
-  } else if (!isObjectValue(parent)) {
-    throw new Error('patch target parent is a primitive');
-  }
-}
-
-function assertExistingTarget(document: JsonValue, tokens: readonly string[]): void {
-  if (tokens.length === 0) return;
-  const { parent, token } = resolveParent(document, tokens);
-  if (isArrayValue(parent)) {
-    // A malformed token (leading zero, sign, non-digits) is a different defect than a
-    // well-formed index that is out of range; name each precisely.
-    const index = parseArrayIndexToken(token);
-    if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
-    if (index === '-' || index >= parent.length) {
-      throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
-    }
-  } else if (isObjectValue(parent)) {
-    if (!Object.hasOwn(parent, token)) throw new Error(`object member does not exist: ${token}`);
-  } else {
-    throw new Error('patch target parent is a primitive');
-  }
-}
-
-function isStrictPrefix(prefix: readonly string[], value: readonly string[]): boolean {
-  return prefix.length < value.length && prefix.every((token, index) => value[index] === token);
-}
 
 // Array.isArray narrows a union containing a readonly array to any[], which leaks `any` into
 // the caller; this guard keeps the prepared-binding walk fully typed.
@@ -158,53 +34,6 @@ function isBindingList(
   value: ActionBinding | readonly ActionBinding[],
 ): value is readonly ActionBinding[] {
   return Array.isArray(value);
-}
-
-function applyCanonicalOperation(
-  document: JsonValue,
-  operation: JsonPatch,
-  index: number,
-): JsonValue {
-  const path = parseCanonicalPointer(operation.path);
-  if ('value' in operation) assertCanonicalStateValue(operation.value);
-  if (operation.op === 'add') assertAddTarget(document, path);
-  if (operation.op === 'replace' || operation.op === 'remove' || operation.op === 'test') {
-    assertExistingTarget(document, path);
-  }
-  if (operation.op === 'copy') {
-    const from = parseCanonicalPointer(operation.from);
-    const value = structuredClone(resolveExisting(document, from));
-    assertAddTarget(document, path);
-    return applyOperation(
-      document,
-      { op: 'add', path: operation.path, value },
-      true,
-      true,
-      true,
-      index,
-    ).newDocument;
-  }
-  if (operation.op === 'move') {
-    const from = parseCanonicalPointer(operation.from);
-    const value = structuredClone(resolveExisting(document, from));
-    if (isStrictPrefix(from, path)) throw new Error('move source cannot contain its destination');
-    const removal: Operation = { op: 'remove', path: operation.from };
-    const afterRemovalProbe = JsonValueSchema.parse(
-      applyOperation(structuredClone(document), removal, true, true, true, index).newDocument,
-    );
-    assertAddTarget(afterRemovalProbe, path);
-    const afterRemoval = applyOperation(document, removal, true, true, true, index).newDocument;
-    return applyOperation(
-      afterRemoval,
-      { op: 'add', path: operation.path, value },
-      true,
-      true,
-      true,
-      index,
-    ).newDocument;
-  }
-  return applyOperation(document, structuredClone(operation) as Operation, true, true, true, index)
-    .newDocument;
 }
 
 export interface MountInkArgs {
@@ -240,6 +69,9 @@ export interface MountInkArgs {
   // never pass it. Lives ONLY on this ink-specific entry (like `io`) — RendererPort stays
   // renderer-agnostic.
   readonly renderInk?: typeof render | undefined;
+  // Where a contained failure is reported (a failing action, a throwing subscriber, a rejecting log or
+  // exit handler). Absent means nowhere.
+  readonly diagnostics?: DiagnosticsPort | undefined;
 }
 
 // The handle `mountInk` returns: the `RenderHandle` PORT plus two TEST-ONLY inspection members
@@ -307,6 +139,15 @@ export function makeOffCatalogFallback(): React.ComponentType<{ element: { type:
   };
 }
 
+// The clear-terminal sequence: erase the screen and the scrollback, cursor home.
+const CLEAR_TERMINAL =
+  String.fromCharCode(27) +
+  '[2J' +
+  String.fromCharCode(27) +
+  '[3J' +
+  String.fromCharCode(27) +
+  '[H';
+
 // DEC-2026 synchronized output (tear-free streaming frames). ink 6.8.0 brackets its own
 // throttled TTY frame writes in these escapes, but skips the bracketing whenever it detects a
 // CI environment, and the guarantee lives inside ink's private write path. This wrapper makes
@@ -339,44 +180,99 @@ export function withSynchronizedOutput(stdout: NodeJS.WriteStream): NodeJS.Write
 }
 
 // ONE immutable prepare pass at bind + every update:
-//  1. sanitizeSpecStrings — the SPEC sanitize chokepoint;
-//  2. assertSpecOnCatalog — synchronous allowlist gate;
-//  3. binding rewrite (on + watch, single or array): confirm AND the onSuccess/onError callback
-//     chains STRIPPED — json-render's confirmation dialog renders agent-authored
-//     confirm.title/message when present, and its action provider runs onSuccess.set (ungated
-//     state write) / onSuccess.action (secondary action) / onError.* past the frozen action
-//     grammar; undefined keeps all three inert — and gated actions get params[ELEMENT_KEY]
+//  1. hasCanonicalKeys on the raw spec — the key predicate, first, because the sanitiser walks a graph
+//     that shares references as a tree (exponential);
+//  2. sanitizeSpecStrings — the SPEC sanitize chokepoint;
+//  3. assertSpecOnCatalog — synchronous allowlist gate;
+//  4. checkElementTree — children form a tree within the depth bound;
+//  5. a `watch` map is refused (the installed renderer has no watch implementation);
+//  6. binding rewrite (`on`, single or array): the result has EXACTLY the keys action and params —
+//     confirm, the onSuccess/onError callback chains and every unknown key are dropped, because
+//     json-render's confirmation dialog renders agent-authored confirm text when present and its
+//     action provider runs onSuccess.set (ungated state write) / onSuccess.action (secondary
+//     action) / onError.* past the frozen action grammar — and gated actions get params[ELEMENT_KEY]
 //     injected (handlers receive ONLY params — there is no other element-key channel);
-//  4. props normalized to {} (json-render's element props field is required).
-function prepareSpec(spec: AppSpec, catalog: MinituiCatalog): AppSpec {
+//  7. props normalized to {} (json-render's element props field is required).
+// Each element type the spec uses is resolved through the binding once, here, before any render. A type
+// that resolves to nothing is refused: a marker in the frame would hide that the catalog lists a
+// component the renderer cannot draw.
+function refuseUnbound(
+  spec: AppSpec,
+  binding: WidgetCatalogBinding<React.ComponentType<WidgetProps>>,
+): void {
+  const types = new Set(Object.values(spec.elements).map((el) => el.type));
+  for (const type of types) {
+    if (binding.resolve(type) === undefined) {
+      throw new RendererRefusal(
+        'unbound-component',
+        `component "${type}" is not bound by catalog "${binding.catalogId}"`,
+      );
+    }
+  }
+}
+
+function refuseWatch(spec: AppSpec): void {
+  for (const el of Object.values(spec.elements)) {
+    if ((el as Record<string, unknown>).watch) {
+      throw new RendererRefusal(
+        'watch-unsupported',
+        'the Ink renderer does not support watch bindings',
+      );
+    }
+  }
+}
+
+function rewriteBindings(
+  el: AppSpec['elements'][string],
+  key: string,
+  catalog: MinituiCatalog,
+): BindingField | undefined {
+  const bindings = (el as Record<string, unknown>).on as BindingField | undefined;
+  if (!bindings) return undefined;
+  // Mapping the single binding directly (never list[0]) keeps it clean under noUncheckedIndexedAccess;
+  // the render-local params branch copies to {} so it is never `undefined` under
+  // exactOptionalPropertyTypes.
+  const rewriteOne = (one: SpecBinding): SpecBinding => ({
+    action: one.action,
+    params:
+      catalog.actionDefs.get(one.action)?.kind !== 'render-local'
+        ? { ...(one.params ?? {}), [ELEMENT_KEY]: key }
+        : { ...(one.params ?? {}) },
+  });
+  const rewritten: BindingField = {};
+  for (const [event, b] of Object.entries(bindings)) {
+    rewritten[event] = Array.isArray(b) ? b.map(rewriteOne) : rewriteOne(b);
+  }
+  return rewritten;
+}
+
+function prepareSpec(
+  spec: AppSpec,
+  catalog: MinituiCatalog,
+  binding: WidgetCatalogBinding<React.ComponentType<WidgetProps>>,
+): AppSpec {
+  // The key predicate runs first: it screens for a plain JSON tree, and the sanitiser walks a graph
+  // that shares references as a tree (exponential). The generation gate refuses such specs; this is
+  // the render-side backstop.
+  if (!hasCanonicalKeys(spec)) {
+    throw new RendererRefusal(
+      'non-canonical-key',
+      'the spec holds a key that sanitising would change',
+    );
+  }
   const clean = sanitizeSpecStrings(spec);
   assertSpecOnCatalog(clean, catalog);
+  const [issue] = checkElementTree(clean);
+  if (issue !== undefined) {
+    throw new RendererRefusal('not-a-tree', `${issue.code}: ${issue.message}`);
+  }
+  refuseUnbound(clean, binding);
+  refuseWatch(clean);
   const elements: Record<string, AppSpec['elements'][string]> = {};
   for (const [key, el] of Object.entries(clean.elements)) {
     const next: Record<string, unknown> = { ...el, props: el.props ?? {} };
-    // rewrite one binding: strip the confirm/onSuccess/onError agent grammar + inject the gated
-    // element key. Mapping the single binding directly (never list[0]) keeps it clean under
-    // noUncheckedIndexedAccess; the render-local params branch copies to {} so it is never
-    // `undefined` under exactOptionalPropertyTypes.
-    const rewriteOne = (one: SpecBinding): SpecBinding => ({
-      ...one,
-      confirm: undefined,
-      onSuccess: undefined,
-      onError: undefined,
-      params:
-        catalog.actionDefs.get(one.action)?.kind !== 'render-local'
-          ? { ...(one.params ?? {}), [ELEMENT_KEY]: key }
-          : { ...(one.params ?? {}) },
-    });
-    for (const field of ['on', 'watch'] as const) {
-      const bindings = (el as Record<string, unknown>)[field] as BindingField | undefined;
-      if (!bindings) continue;
-      const rewritten: BindingField = {};
-      for (const [event, b] of Object.entries(bindings)) {
-        rewritten[event] = Array.isArray(b) ? b.map(rewriteOne) : rewriteOne(b);
-      }
-      next[field] = rewritten;
-    }
+    const on = rewriteBindings(el, key, catalog);
+    if (on !== undefined) next.on = on;
     elements[key] = next as AppSpec['elements'][string];
   }
   return { ...clean, elements };
@@ -409,14 +305,22 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
   } = args;
 
   // --- the SPEC chokepoint (bind + every update) ---
-  let activeSpec = prepareSpec(spec, catalog);
+  let activeSpec = prepareSpec(spec, catalog, binding);
   const specListeners = new Set<() => void>();
   const notifySpec = (): void => specListeners.forEach((f) => f());
 
   const emitLifecycle = (e: Parameters<LifecycleEmitter['emit']>[0]): void => onLifecycle?.emit(e);
 
   const actionRequests = new Set<(req: ActionRequest) => void>();
-  const notifyAction = (req: ActionRequest): void => actionRequests.forEach((f) => f(req));
+  // a throwing subscriber is reported and the others, and the action itself, still run
+  const notifyAction = (req: ActionRequest): void =>
+    actionRequests.forEach((f) => {
+      try {
+        f(req);
+      } catch (error) {
+        reportFault(args.diagnostics, 'an action subscriber failed', error);
+      }
+    });
 
   // controlled store: build the StateStore from the transport io. The io's setSnapshot stays
   // in hand for applyStatePatch — the built StateStore has NO whole-snapshot writer.
@@ -429,6 +333,7 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
     dispatcher,
     getState: () => JsonObjectSchema.parse(io.getSnapshot()),
     emitLifecycle,
+    diagnostics: args.diagnostics,
   });
   // Each installed handler also notifies onAction subscribers with the ActionRequest (the host
   // and cli observe fired actions). Native state built-ins bypass this map by design; their
@@ -436,12 +341,23 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
   const handlers: Record<string, (params: Record<string, unknown>) => Promise<void>> = {};
   for (const [name, fn] of Object.entries(rawHandlers)) {
     handlers[name] = async (params) => {
+      // A widget acts only while no request is pending. The controller is read here, at call time: the
+      // keyboard isolation of the overlay arrives one commit after the box is first drawn, and a key
+      // written in that commit would otherwise dispatch a gated action behind the prompt.
+      if (consent.request !== undefined) return;
       const rawKey = params[ELEMENT_KEY];
       const key = typeof rawKey === 'string' ? rawKey : '';
       const clean = { ...params };
       delete clean[ELEMENT_KEY];
       notifyAction({ actionName: name, elementKey: key, params: clean });
-      await fn(params); // fn re-strips ELEMENT_KEY for gated handlers; rejectors ignore params
+      try {
+        await fn(params); // fn re-strips ELEMENT_KEY for gated handlers; rejectors ignore params
+      } catch (error) {
+        // the log and exit rejectors reject by design; the library would print the rejection
+        reportFault(args.diagnostics, 'an installed action handler failed', error, {
+          actionName: name,
+        });
+      }
     };
   }
 
@@ -452,6 +368,23 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
   // off the binding to gate the `q` quit key. Provided to the tree below via FocusTypeProvider.
   const focusTypes = createFocusTypeChannel();
 
+  // The resolved output stream. withSynchronizedOutput brackets writes on a real TTY only; a fake or
+  // piped stream comes back unwrapped, so no escapes leak into captured frames.
+  const rawStdout = args.io?.stdout ?? process.stdout;
+  const stdout = withSynchronizedOutput(rawStdout);
+  // the render instance exists only after the first render; the clear below runs on later notifications
+  const mounted: { instance?: ReturnType<typeof render> } = {};
+
+  // When a request opens on a terminal (outside debug mode), clear the visible screen and reset the
+  // renderer's frame accounting before the frame that shows the box is written: the renderer erases
+  // one line per logical row, so rows that an earlier app frame wrapped past the terminal edge would
+  // otherwise stay on the screen above the box.
+  const clearScreenForRequest = (): void => {
+    if (rawStdout.isTTY !== true || args.io?.debug === true) return;
+    stdout.write(CLEAR_TERMINAL);
+    mounted.instance?.clear();
+  };
+
   const App: React.FC = () => {
     const [, force] = React.useReducer((n: number) => n + 1, 0);
     React.useEffect(() => {
@@ -460,6 +393,32 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
         specListeners.delete(force);
       };
     }, []);
+    // The single read of the consent controller for this render. It decides whether the app is
+    // drawn and it is the request the overlay shows, so a frame never holds both. The shell is the
+    // only subscriber; the overlay gets a view that does not subscribe.
+    const request = consent.request;
+    const rendered = React.useRef(request);
+    rendered.current = request;
+    React.useEffect(() => {
+      let hadRequest = rendered.current !== undefined;
+      const unsubscribe = consent.subscribe(() => {
+        const open = consent.request !== undefined;
+        if (open && !hadRequest) clearScreenForRequest();
+        hadRequest = open;
+        force();
+      });
+      // a request that arrived between the render and this subscription
+      if (consent.request !== rendered.current) force();
+      return unsubscribe;
+    }, []);
+    const view = React.useMemo<ConsentController>(
+      () => ({
+        request,
+        subscribe: () => () => {},
+        resolve: (decision) => consent.resolve(decision),
+      }),
+      [request],
+    );
     // Quit producer — a GLOBAL binding at the APP SHELL, ABOVE json-render's focus ring. App is
     // NOT a focus-ring member, so this binding claims no focus slot / Tab stop — it sits OVER
     // the ring. It defers to focused widgets on the only key that can collide:
@@ -481,7 +440,8 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
     //    "not capturing", so `q` quits — the correct default.
     // The handler is inert while a consent modal is up (the overlay owns Esc = deny then).
     // `isActive` matches ConsentOverlay's pattern: only bind (enable raw mode) when a quit sink
-    // exists — a mount with no `onQuit`/`onCancel` never touches raw mode.
+    // exists. The focus provider of the adopted library binds the keyboard on every mount, so raw
+    // mode is requested whatever this option says; a mount needs a stdin that supports it.
     const focusedCapturesText = (): boolean => {
       const type = focusTypes.focusedType();
       return type !== undefined && binding.resolve(type)?.capturesText === true;
@@ -495,38 +455,45 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
         } // Esc = cancel quit
         if (input === 'q' && !focusedCapturesText()) onQuit?.(); // q = clean quit
       },
-      { isActive: onQuit !== undefined || onCancel !== undefined },
+      // inactive while a request is pending, so that Escape denies and does nothing else whatever the
+      // order of the listeners
+      {
+        isActive: (onQuit !== undefined || onCancel !== undefined) && request === undefined,
+      },
     );
     return (
       <FocusTypeProvider value={focusTypes}>
         <JSONUIProvider store={store} handlers={handlers}>
-          <Renderer
-            spec={
-              activeSpec as never /* structural bridge: prepared AppSpec (props normalized) is json-render Spec-shaped */
-            }
-            registry={
-              componentMap as never /* structural bridge: WidgetProps.element.props is optional while json-render's element props is required — the same documented bridge the widget siblings use */
-            }
-            includeStandard={false}
-            fallback={
-              Fallback as never /* narrowed props — receives the full component-render props at runtime */
-            }
-          />
-          <ConsentOverlay controller={consent} />
+          {/* The app stays mounted (its state and effects continue) but is not laid out and draws
+              nothing while a request is pending. */}
+          <Box flexDirection="column" display={request === undefined ? 'flex' : 'none'}>
+            <Renderer
+              spec={
+                activeSpec as never /* structural bridge: prepared AppSpec (props normalized) is json-render Spec-shaped */
+              }
+              registry={
+                componentMap as never /* structural bridge: WidgetProps.element.props is optional while json-render's element props is required — the same documented bridge the widget siblings use */
+              }
+              includeStandard={false}
+              fallback={
+                Fallback as never /* narrowed props — receives the full component-render props at runtime */
+              }
+            />
+          </Box>
+          <ConsentOverlay controller={view} live={() => consent.request} />
         </JSONUIProvider>
       </FocusTypeProvider>
     );
   };
 
   // Forward the caller's io (the headless test harness injects fake stdio here) into ink's
-  // render, defaulting to the real process streams. withSynchronizedOutput wraps the RESOLVED
-  // stdout; its isTTY guard returns a non-TTY stream (fake / pipe / CI) unwrapped, so DEC-2026
-  // frame bracketing lands ONLY on a real TTY and no escapes leak into captured frames.
-  // `renderInk` (defaulting to ink's real `render`) is the injected render entry — a test hands
-  // a REAL wrapping render that records the options; production runs ink's `render` unchanged.
+  // render, defaulting to the real process streams. `stdout` is the RESOLVED stream wrapped by
+  // withSynchronizedOutput. `renderInk` (defaulting to ink's real `render`) is the injected render
+  // entry — a test hands a REAL wrapping render that records the options; production runs ink's
+  // `render` unchanged.
   const doRender = args.renderInk ?? render;
-  const instance = doRender(<App />, {
-    stdout: withSynchronizedOutput(args.io?.stdout ?? process.stdout),
+  mounted.instance = doRender(<App />, {
+    stdout,
     stderr: args.io?.stderr ?? process.stderr,
     stdin: args.io?.stdin ?? process.stdin,
     // Never let ink globally patch console: minitui owns its own diagnostics, and ink's patch would
@@ -548,7 +515,7 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
       return activeSpec;
     },
     update(next: AppSpec): void {
-      activeSpec = prepareSpec(next, catalog); // same chokepoint as bind: sanitize + assert + rewrite
+      activeSpec = prepareSpec(next, catalog, binding); // same chokepoint as bind: sanitize + assert + rewrite
       notifySpec();
     },
     // TEST-ONLY: a real call into the SAME wrapped handler map the live `emit` path uses (not a
@@ -565,31 +532,14 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
       }
     },
     applyStatePatch(patch: readonly JsonPatch[]): void {
-      // FULL RFC-6902 per the renderer-core contract — move/copy/test included.
-      // Parse first, then mutate only one private clone. The local preflight mirrors the
-      // transport-side patch semantics without introducing the forbidden renderer→transport
-      // edge. Keep intermediate documents mutable: readonly schemas freeze parsed containers,
-      // so the final object parse belongs after the complete sequence.
-      const parsed = JsonPatchArraySchema.parse(patch);
-      const initial = JsonObjectSchema.parse(io.getSnapshot());
-      assertCanonicalStateValue(initial);
-      let document: JsonValue = structuredClone(initial);
-      for (let index = 0; index < parsed.length; index++) {
-        document = applyCanonicalOperation(document, parsed[index]!, index);
-        assertJsonResourceBudget(document);
-      }
-      // A generic patch may produce null at the root; json-render's state model may not.
-      // Parse before the sole write so rejection is atomic.
-      const next = JsonObjectSchema.parse(document);
-      assertCanonicalStateValue(next);
-      io.setSnapshot(next);
+      applyStatePatchTo(io, patch);
     },
     onAction(handler: (req: ActionRequest) => void): () => void {
       actionRequests.add(handler);
       return () => actionRequests.delete(handler);
     },
     unmount(): void {
-      instance.unmount(); // ink restores the terminal
+      mounted.instance?.unmount(); // ink restores the terminal
     },
   };
   return handle;

@@ -1,6 +1,6 @@
 import type { ActionDispatcher, ActionLifecycleEvent } from '@minitui/renderer-core';
 import type { MinituiCatalog } from '@minitui/catalog';
-import type { JsonValue } from '@minitui/types';
+import type { DiagnosticsPort, JsonValue } from '@minitui/types';
 import { gatedHandler } from './gated-handler.js';
 import { isRenderLocalAllowed } from './render-local.js';
 
@@ -9,6 +9,7 @@ export interface BuildHandlersArgs {
   readonly dispatcher: ActionDispatcher;
   readonly getState: () => JsonValue; // single thunk — the same shape json-render uses for getState
   readonly emitLifecycle: (e: ActionLifecycleEvent) => void;
+  readonly diagnostics?: DiagnosticsPort | undefined;
 }
 
 // json-render handlers receive ONLY (params) — no element-key channel exists. prepareSpec
@@ -41,7 +42,7 @@ function rejecting(name: string): (params: Record<string, unknown>) => Promise<v
 export function buildHandlers(
   args: BuildHandlersArgs,
 ): Record<string, (params: Record<string, unknown>) => Promise<void>> {
-  const { catalog, dispatcher, getState, emitLifecycle } = args;
+  const { catalog, dispatcher, getState, emitLifecycle, diagnostics } = args;
   const handlers: Record<string, (params: Record<string, unknown>) => Promise<void>> = {};
 
   for (const [name, def] of catalog.actionDefs) {
@@ -60,6 +61,7 @@ export function buildHandlers(
       dispatcher,
       getStateSnapshot: getState,
       emitLifecycle,
+      diagnostics,
     });
     handlers[name] = async (params) => {
       const { key, clean } = takeElementKey(params);
