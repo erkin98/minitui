@@ -2,6 +2,8 @@ import { basename } from 'node:path';
 
 // Opaque shell-spawners: the real payload is a quoted string the AST cannot see.
 // We gate the SPAWNER itself and force ask — we never strip-and-trust the inner string.
+// The second half of the list holds shells, command-string builtins and runners the option tables
+// below do not model: their inner command cannot be located reliably, so they are not peeled.
 export const OPAQUE_SPAWNERS: ReadonlySet<string> = new Set([
   'sh',
   'bash',
@@ -11,6 +13,30 @@ export const OPAQUE_SPAWNERS: ReadonlySet<string> = new Set([
   'eval',
   'source',
   '.',
+  'ash',
+  'fish',
+  'csh',
+  'tcsh',
+  'busybox',
+  'su',
+  'script',
+  'hash',
+  'trap',
+  'alias',
+  'flock',
+  'taskset',
+  'chrt',
+  'nsenter',
+  'runuser',
+  'setpriv',
+  'fakeroot',
+  'proxychains',
+  'proxychains4',
+  'strace',
+  'ltrace',
+  'watch',
+  'systemd-run',
+  'parallel',
 ]);
 
 // Arg-runners: take an inner argv we CAN re-resolve, so we peel the wrapper and gate the inner
@@ -37,6 +63,8 @@ export const ARG_RUNNERS: ReadonlySet<string> = new Set([
   'exec',
   'command',
   'builtin',
+  // a coprocess runs an inner command: peel to it so the floor judges the real target
+  'coproc',
 ]);
 
 // Stdin-fed runners: a recognized root whose INNER command/operand comes from pipeline STDIN, not
@@ -68,54 +96,162 @@ export function isQualifiedPath(token: string): boolean {
   return normalizeCommandToken(token).includes('/');
 }
 
+// A wrapper the peel went through: its name, the argv it was written with (from the wrapper onward),
+// and whether one of its options is outside the tables below.
+export interface PeeledWrapper {
+  readonly name: string;
+  readonly full: readonly string[];
+  readonly unmodelled: boolean;
+}
+
 interface Unwrapped {
   readonly name: string;
   readonly argv: readonly string[];
   readonly wrappedBy: readonly string[];
+  readonly peeled: readonly PeeledWrapper[];
+  // an assignment word the peel skipped (`env PATH=/tmp/evil ffmpeg`): it changes what the inner command runs
+  readonly skippedAssignment: boolean;
   readonly opaque: boolean;
 }
 
-// Per-arg-runner options that consume the FOLLOWING token as their operand. A dashed token NOT in
-// this table is a BOOLEAN flag (its successor is NOT consumed) — the secure default, because boolean
-// flags (`sudo -k/-n/-b/-i/-H/-E`, `env -i/-0`, …) are common and swallowing the real inner command
-// as a phantom operand would HIDE it from the hard floor (`sudo -u root rm -rf /` must still root at
-// `rm`, not at the `-u` operand `root`). `--opt=val` and an attached short form (`-oVAL`) carry the
-// operand inline and never consume the next token. Only a KNOWN value-option skips its successor;
-// an unknown dashed arg just falls through as boolean.
-const OPERAND_OPTS: Record<string, ReadonlySet<string>> = {
-  sudo: new Set([
-    '-u',
-    '--user',
-    '-g',
-    '--group',
-    '-C',
-    '--close-from',
-    '-D',
-    '--chdir',
-    '-h',
-    '--host',
-    '-p',
-    '--prompt',
-    '-r',
-    '--role',
-    '-t',
-    '--type',
-    '-T',
-    '--command-timeout',
-    '-U',
-    '--other-user',
-    '-R',
-    '--chroot',
-  ]),
-  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string', '-P']),
-  doas: new Set(['-u', '-C', '-a']),
-  timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
-  nice: new Set(['-n', '--adjustment']),
-  ionice: new Set(['-c', '--class', '-n', '--classdata', '-p', '--pid']),
-  stdbuf: new Set(['-i', '--input', '-o', '--output', '-e', '--error']),
-  time: new Set(['-o', '--output', '-f', '--format']),
-  unshare: new Set(['-S', '--setuid', '-G', '--setgid', '-R', '--root', '--wd']),
-  npx: new Set(['-p', '--package', '-c', '--call']),
+// What the peel knows about one arg-runner's options: those that take an operand, and those that take
+// none. An option in neither set is UNMODELLED: the peel cannot tell whether it swallows the next
+// token, so the inner command is marked opaque and the wrapper's whole argv reaches the floor. Boolean
+// flags are tabled, so `sudo -E ls`, `env -i ls` and `time -p ls` keep their verdicts. `--opt=val` and
+// an attached short form (`-oVAL`) carry the operand inline and never consume the next token.
+interface OptionTable {
+  readonly operand: ReadonlySet<string>;
+  readonly flags: ReadonlySet<string>;
+}
+
+const table = (operand: readonly string[], flags: readonly string[] = []): OptionTable => ({
+  operand: new Set(operand),
+  flags: new Set(flags),
+});
+
+const OPTIONS: Readonly<Record<string, OptionTable>> = {
+  sudo: table(
+    [
+      '-u',
+      '--user',
+      '-g',
+      '--group',
+      '-C',
+      '--close-from',
+      '-D',
+      '--chdir',
+      '-h',
+      '--host',
+      '-p',
+      '--prompt',
+      '-r',
+      '--role',
+      '-t',
+      '--type',
+      '-T',
+      '--command-timeout',
+      '-U',
+      '--other-user',
+      '-R',
+      '--chroot',
+    ],
+    [
+      '-A',
+      '-b',
+      '-E',
+      '-e',
+      '-H',
+      '-i',
+      '-K',
+      '-k',
+      '-l',
+      '-n',
+      '-P',
+      '-S',
+      '-s',
+      '-V',
+      '-v',
+      '--askpass',
+      '--background',
+      '--preserve-env',
+      '--edit',
+      '--set-home',
+      '--login',
+      '--remove-timestamp',
+      '--reset-timestamp',
+      '--list',
+      '--non-interactive',
+      '--preserve-groups',
+      '--stdin',
+      '--shell',
+      '--validate',
+      '--version',
+      '--help',
+    ],
+  ),
+  env: table(
+    ['-u', '--unset', '-C', '--chdir', '-S', '--split-string', '-P'],
+    ['-i', '-0', '-v', '--ignore-environment', '--null', '--debug', '--version', '--help'],
+  ),
+  doas: table(['-u', '-C'], ['-n', '-s', '-L']),
+  timeout: table(
+    ['-s', '--signal', '-k', '--kill-after'],
+    ['--foreground', '--preserve-status', '-v', '--verbose', '--version', '--help'],
+  ),
+  nice: table(['-n', '--adjustment'], ['--version', '--help']),
+  nohup: table([], ['--version', '--help']),
+  setsid: table(
+    [],
+    ['-c', '--ctty', '-f', '--fork', '-w', '--wait', '-V', '--version', '-h', '--help'],
+  ),
+  stdbuf: table(['-i', '--input', '-o', '--output', '-e', '--error'], ['--version', '--help']),
+  time: table(
+    ['-o', '--output', '-f', '--format'],
+    ['-p', '-a', '--append', '-v', '--verbose', '-V', '--version', '--portability', '--help'],
+  ),
+  ionice: table(
+    ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'],
+    ['-t', '--ignore', '--version', '--help'],
+  ),
+  chroot: table(['--userspec', '--groups'], ['--skip-chdir', '--version', '--help']),
+  unshare: table(
+    ['-S', '--setuid', '-G', '--setgid', '-R', '--root', '-w', '--wd'],
+    [
+      '-m',
+      '-u',
+      '-i',
+      '-n',
+      '-p',
+      '-U',
+      '-C',
+      '-T',
+      '-f',
+      '-r',
+      '--mount',
+      '--uts',
+      '--ipc',
+      '--net',
+      '--pid',
+      '--user',
+      '--cgroup',
+      '--time',
+      '--fork',
+      '--map-root-user',
+      '--kill-child',
+      '--mount-proc',
+      '--version',
+      '--help',
+    ],
+  ),
+  npx: table(
+    ['-p', '--package', '-c', '--call'],
+    ['-y', '--yes', '--no', '--no-install', '-q', '--quiet', '--version', '--help'],
+  ),
+  docker: table([]),
+  exec: table(['-a'], ['-c', '-l']),
+  command: table([], ['-p', '-v', '-V']),
+  builtin: table([]),
+  coproc: table([]),
 };
 
 // Arg-runners taking a fixed count of leading POSITIONAL operands BEFORE the inner command
@@ -126,64 +262,132 @@ const OPERAND_OPTS: Record<string, ReadonlySet<string>> = {
 // host-affecting `docker run -v /:/host …` is a mount escape beyond argv parsing.
 const LEADING_POSITIONALS: Record<string, number> = { timeout: 1, chroot: 1 };
 
-// Does this runner's option token consume the FOLLOWING token as its operand? Only a KNOWN bare-form
-// value-option does; `--opt=val` / attached `-oVAL` carry the operand inline, and any option not in
-// the table is boolean (fail-safe: never swallow the real command).
-function consumesNextOperand(runner: string, tok: string): boolean {
-  const opts = OPERAND_OPTS[runner];
-  if (!opts) return false;
-  if (tok.includes('=')) return false; // --opt=val / -o=val: operand is inline
-  if (tok.startsWith('--')) return opts.has(tok); // --long val: only a KNOWN long value-option
-  if (tok.length > 2) return false; // -oVAL: short value-option, operand attached
-  return opts.has(tok); // -o val: only a KNOWN short value-option
+// Runners that skip `NAME=value` words before the inner command, as `env` does.
+const SKIPS_ASSIGNMENTS: ReadonlySet<string> = new Set(['env', 'sudo']);
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+interface OptionRead {
+  // tokens the option takes, itself included
+  readonly consumed: number;
+  readonly unmodelled: boolean;
 }
 
-// Skip an arg-runner's own options — and, for a KNOWN operand-bearing option, its operand token —
+function readLongOption(opts: OptionTable, tok: string): OptionRead {
+  const eq = tok.indexOf('=');
+  const name = eq === -1 ? tok : tok.slice(0, eq);
+  if (!opts.operand.has(name) && !opts.flags.has(name)) return { consumed: 1, unmodelled: true };
+  return { consumed: eq === -1 && opts.operand.has(name) ? 2 : 1, unmodelled: false };
+}
+
+// A cluster of short flags (`-nu root`): each character is a flag, or an option that takes an operand.
+// An operand-taking character that ends the cluster takes the NEXT token; with characters after it,
+// they are the attached operand (`-uroot`).
+function readShortCluster(opts: OptionTable, tok: string): OptionRead {
+  for (let k = 1; k < tok.length; k++) {
+    const opt = `-${tok[k]}`;
+    if (opts.operand.has(opt)) return { consumed: k === tok.length - 1 ? 2 : 1, unmodelled: false };
+    if (!opts.flags.has(opt)) return { consumed: 1, unmodelled: true };
+  }
+  return { consumed: 1, unmodelled: false };
+}
+
+function readOption(runner: string, tok: string): OptionRead {
+  const opts = OPTIONS[runner];
+  if (opts === undefined) return { consumed: 1, unmodelled: true };
+  if (tok.startsWith('--')) return readLongOption(opts, tok);
+  if (runner === 'nice' && /^-[0-9]+$/.test(tok)) return { consumed: 1, unmodelled: false };
+  return readShortCluster(opts, tok);
+}
+
+// Skip an arg-runner's own options — and, for an option that takes an operand, its operand token —
 // then a fixed count of leading positional operands, to find the start of the inner argv. This is
 // the hard-floor's anti-mis-rooting guard: an option's operand (or a positional like `timeout`'s
 // DURATION) must never be mistaken for the inner command, which would hide a gated `rm`/`curl`.
-function innerStart(runner: string, rest: readonly string[]): number {
+function innerStart(
+  runner: string,
+  rest: readonly string[],
+): { readonly start: number; readonly unmodelled: boolean; readonly skipped: boolean } {
   let i = 0;
+  let unmodelled = false;
+  let skipped = false;
   while (i < rest.length) {
     const tok = rest[i]!;
-    if (runner === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) {
+    if (SKIPS_ASSIGNMENTS.has(runner) && ASSIGNMENT_WORD.test(tok)) {
       i++;
+      skipped = true;
       continue;
-    } // env NAME=val
+    }
+    if (tok === '-' && runner === 'env') {
+      i++; // a lone dash is a flag of env, not the inner command
+      continue;
+    }
     if (!tok.startsWith('-') || tok === '-') break; // first positional (`-` is a stdin sentinel)
     if (tok === '--') {
       i++;
       break;
     } // explicit end-of-options
-    i += consumesNextOperand(runner, tok) ? 2 : 1;
+    const option = readOption(runner, tok);
+    unmodelled ||= option.unmodelled;
+    i += option.consumed;
   }
   const positionals = LEADING_POSITIONALS[runner] ?? 0;
   for (let p = 0; p < positionals && i < rest.length; p++) i++;
-  return i;
+  return { start: i, unmodelled, skipped };
 }
 
-export function unwrapArgv(argv: readonly string[]): Unwrapped {
+// `fold` makes the name matching case-insensitive, for a host whose file system is (darwin, win32).
+export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
   const wrappedBy: string[] = [];
+  const peeled: PeeledWrapper[] = [];
+  let anyUnmodelled = false;
+  let anySkipped = false;
   let cur = argv;
   // peel arg-runners until we reach a real command or an opaque spawner
   for (;;) {
     // normalise THEN basename so `"/bin/curl"` / `\curl` / `'sh'` resolve to their bare name
-    const head = basename(normalizeCommandToken(cur[0] ?? ''));
+    const written = basename(normalizeCommandToken(cur[0] ?? ''));
+    const head = fold ? written.toLowerCase() : written;
     if (OPAQUE_SPAWNERS.has(head)) {
-      return { name: head, argv: cur, wrappedBy, opaque: true };
+      return {
+        name: head,
+        argv: cur,
+        wrappedBy,
+        peeled,
+        skippedAssignment: anySkipped,
+        opaque: true,
+      };
     }
     if (ARG_RUNNERS.has(head)) {
       const rest = cur.slice(1);
-      const start = innerStart(head, rest);
+      const { start, unmodelled, skipped } = innerStart(head, rest);
       const inner = rest.slice(start);
       if (inner.length === 0) {
         // wrapper with no inner command (e.g. bare `sudo`) — opaque, force ask
-        return { name: head, argv: cur, wrappedBy, opaque: true };
+        return {
+          name: head,
+          argv: cur,
+          wrappedBy,
+          peeled,
+          skippedAssignment: anySkipped,
+          opaque: true,
+        };
       }
       wrappedBy.push(head);
+      peeled.push({ name: head, full: cur, unmodelled });
+      anyUnmodelled ||= unmodelled;
+      anySkipped ||= skipped;
       cur = inner;
       continue;
     }
-    return { name: head, argv: cur, wrappedBy, opaque: false };
+    // an option the tables do not model leaves the inner command unlocated: it is opaque, and the
+    // floor still reads every later token of the wrapper's own argv as a candidate command name
+    return {
+      name: head,
+      argv: cur,
+      wrappedBy,
+      peeled,
+      skippedAssignment: anySkipped,
+      opaque: anyUnmodelled,
+    };
   }
 }

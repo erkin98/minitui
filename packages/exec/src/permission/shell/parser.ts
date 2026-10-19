@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { Parser, Language, type Node as SyntaxNode } from 'web-tree-sitter';
+import { Parser, Language, type Node as SyntaxNode, type Tree } from 'web-tree-sitter';
 
 export type { SyntaxNode };
 
@@ -46,11 +46,11 @@ function resolveGrammarWasmPath(): string | undefined {
 let parserPromise: Promise<Parser> | undefined;
 let readyParser: Parser | undefined;
 
-// Cap a single parse so a pathological input can never hang the host. web-tree-sitter exposes
-// NO supported setTimeoutMicros (deprecated since 0.25 in the pinned version); the
-// only per-parse bound is ParseOptions.progressCallback, which fires periodically with
-// { currentOffset, hasError } (no time) and cancels the parse when it returns true. We measure a
-// wall-clock deadline ourselves. 50ms is generous for a shell line yet bounded.
+// Cap a single parse so a pathological input can never hang the host. The installed web-tree-sitter
+// still declares setTimeoutMicros but marks it deprecated, so minitui bounds a parse with
+// ParseOptions.progressCallback by choice: it fires periodically with { currentOffset, hasError }
+// (no time) and cancels the parse when it returns true. We measure a wall-clock deadline ourselves.
+// 50ms is generous for a shell line yet bounded.
 const DEFAULT_PARSE_BUDGET_MS = 50;
 let parseBudgetMs = DEFAULT_PARSE_BUDGET_MS;
 
@@ -100,15 +100,32 @@ export async function ensureParserReady(): Promise<void> {
   }
 }
 
+// A tree lives in wasm memory the garbage collector never sees, so every tree the parser hands out is
+// released explicitly once the strings it holds have been copied out. Releasing twice, or a tree the
+// runtime already dropped, is not an error.
+function dropTree(tree: Tree | null): void {
+  try {
+    tree?.delete();
+  } catch {
+    /* already released — nothing left to free */
+  }
+}
+
+export function freeTree(root: SyntaxNode): void {
+  dropTree(root.tree);
+}
+
 // SYNCHRONOUS parse. Requires ensureParserReady() to have resolved first; if the parser is
 // not ready (init failed or not yet awaited), returns parseError — fail closed, never throws.
+// On success the CALLER owns the tree and releases it with freeTree; every failing path releases it here.
 export function parseToTree(command: string): { root: SyntaxNode } | { parseError: true } {
   if (!readyParser) return { parseError: true };
+  let tree: Tree | null = null;
   try {
     // Bound the parse with a wall-clock deadline via the real progress-callback API: returning
     // true cancels the parse, and a cancelled parse returns null (web-tree-sitter) — fail-closed.
     const start = performance.now();
-    const tree = readyParser.parse(command, undefined, {
+    tree = readyParser.parse(command, undefined, {
       progressCallback: () => performance.now() - start > parseBudgetMs,
     });
     // rootNode.hasError is the built-in whole-subtree check (catches anonymous ERROR/MISSING
@@ -118,11 +135,13 @@ export function parseToTree(command: string): { root: SyntaxNode } | { parseErro
     // contaminate the NEXT command on this module-memoized instance — the security chokepoint.
     // reset() before every fail-closed return so each command parses from a clean slate.
     if (!tree?.rootNode || tree.rootNode.hasError) {
+      dropTree(tree);
       readyParser.reset();
       return { parseError: true };
     }
     return { root: tree.rootNode };
   } catch {
+    dropTree(tree);
     try {
       readyParser?.reset();
     } catch {
