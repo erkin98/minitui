@@ -6,7 +6,9 @@ import { stripControlStrings } from './osc.js';
 // string sequences have ESC-form AND C1-form introducers, ST is ESC \ or the
 // C1 ST 0x9c, and BEL (0x07) terminates OSC ONLY — in DCS/PM/APC/SOS it is data.
 
-// C0 controls that are layout-safe and must survive: TAB, LF, CR.
+// C0 controls that survive both modes: TAB, LF, CR. Preserving them is a compatibility rule, not a
+// layout guarantee: a renderer may write TAB and CR to the terminal as they are, so a consumer that
+// needs a single safe line handles them itself.
 export const PRESERVE_C0: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
 
 // CSI/SGR and other ESC-introduced escape sequences, three ordered alternatives.

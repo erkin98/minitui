@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeStrings, foldSnapshot, foldDelta } from '../src/state/snapshot-delta.js';
 import type { JsonValue } from '../src/state/json-pointer.js';
+import { PatchError } from '../src/state/patch-apply.js';
 
 function nested(n: number): JsonValue {
   let v: JsonValue = { leaf: 'x' };
@@ -38,7 +39,9 @@ describe('snapshot-delta sanitize ingress', () => {
   });
 
   it('rejects reserved state keys rather than copying or rewriting identity', () => {
-    expect(() => foldSnapshot(JSON.parse('{"__proto__":{"x":1},"a":2}'))).toThrow(/key/i);
+    expect(() => foldSnapshot(JSON.parse('{"__proto__":{"x":1},"a":2}'))).toThrow(
+      'state snapshot is not canonical JSON',
+    );
     expect(({} as Record<string, unknown>).x).toBeUndefined();
   });
 
@@ -58,11 +61,17 @@ describe('snapshot-delta sanitize ingress', () => {
     expect(() => foldSnapshot(nested(200))).not.toThrow();
     // beyond it: a clean typed rejection the store can catch and drop, not an uncaught stack crash
     expect(() => sanitizeStrings(nested(400))).toThrow(/nesting depth/);
-    expect(() => foldSnapshot(nested(400))).toThrow(/nesting depth/);
-    // and via an over-deep delta value too
-    expect(() => foldDelta({}, [{ op: 'add', path: '/x', value: nested(400) }])).toThrow(
-      /nesting depth/,
-    );
+    // the public folds read the schema first, which rejects the over-deep value before the walk
+    expect(() => foldSnapshot(nested(400))).toThrow('state snapshot is not canonical JSON');
+    // and an over-deep delta value fails as the indexed patch error of the patch engine
+    try {
+      foldDelta({}, [{ op: 'add', path: '/x', value: nested(400) }]);
+      throw new Error('expected a patch error');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      expect((error as PatchError).message).toBe('invalid state delta: patch schema rejected');
+      expect((error as PatchError).opIndex).toBe(0);
+    }
     // the thrown error is not the raw stack RangeError
     try {
       sanitizeStrings(nested(400));
@@ -80,5 +89,97 @@ describe('snapshot-delta sanitize ingress', () => {
       { op: 'replace', path: '/x', value: 'green' },
     ]);
     expect(next).toEqual({ x: 'green' });
+  });
+});
+
+// The public folds read their argument through the canonical-JSON schema BEFORE any walk, so a value
+// that is not plain JSON (an accessor, a Date, an own __proto__ key) is refused without being invoked
+// or traversed, and a bad delta fails as the same indexed patch error the patch engine raises.
+describe('public folds canonicalise before they sanitise', () => {
+  const NOT_CANONICAL = 'state snapshot is not canonical JSON';
+
+  function accessorObject(): { value: unknown; calls: () => number } {
+    let calls = 0;
+    const value: unknown = Object.defineProperty({}, 'trap', {
+      enumerable: true,
+      get() {
+        calls++;
+        return 1;
+      },
+    });
+    return { value, calls: () => calls };
+  }
+
+  it('foldSnapshot rejects a Date and an accessor object without invoking the accessor', () => {
+    const date: unknown = new Date(0);
+    expect(() => Reflect.apply(foldSnapshot, undefined, [date])).toThrow(NOT_CANONICAL);
+    const { value, calls } = accessorObject();
+    expect(() => Reflect.apply(foldSnapshot, undefined, [value])).toThrow(NOT_CANONICAL);
+    expect(calls()).toBe(0);
+  });
+
+  it('foldSnapshot refuses an own __proto__ key with the fixed message', () => {
+    const hostile: unknown = JSON.parse('{"__proto__":{}}');
+    expect(() => Reflect.apply(foldSnapshot, undefined, [hostile])).toThrow(
+      new Error(NOT_CANONICAL),
+    );
+  });
+
+  it('foldDelta does not invoke an accessor in a delta value', () => {
+    const { value, calls } = accessorObject();
+    const delta: unknown = [{ op: 'add', path: '/x', value }];
+    expect(() => Reflect.apply(foldDelta, undefined, [{}, delta])).toThrow(PatchError);
+    expect(calls()).toBe(0);
+  });
+
+  it('foldDelta fails a delta that is not an array as a patch error at index -1', () => {
+    const notAnArray: unknown = { op: 'add', path: '/x', value: 1 };
+    try {
+      Reflect.apply(foldDelta, undefined, [{}, notAnArray]);
+      throw new Error('expected a patch error');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      expect((error as PatchError).opIndex).toBe(-1);
+    }
+  });
+
+  it('foldDelta fails a bad member as a patch error at its own index', () => {
+    const delta: unknown = [{ op: 'add', path: '/x', value: 1 }, null];
+    try {
+      Reflect.apply(foldDelta, undefined, [{}, delta]);
+      throw new Error('expected a patch error');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchError);
+      expect((error as PatchError).opIndex).toBe(1);
+    }
+  });
+
+  it('still strips escape text from a plain snapshot and a three-operation delta', () => {
+    expect(foldSnapshot({ a: `x${ESC}[31my` })).toEqual({ a: 'xy' });
+    const next = foldDelta({ a: '', b: [1] }, [
+      { op: 'replace', path: '/a', value: `p${ESC}[0mq` },
+      { op: 'add', path: '/b/-', value: 2 },
+      { op: 'add', path: '/c', value: `r${ESC}[1ms` },
+    ]);
+    expect(next).toEqual({ a: 'pq', b: [1, 2], c: 'rs' });
+  });
+
+  it('keeps copy and move results and returns the state for an empty delta', () => {
+    expect(foldDelta({ a: 1 }, [{ op: 'copy', from: '/a', path: '/b' }])).toEqual({ a: 1, b: 1 });
+    expect(foldDelta({ a: 1 }, [{ op: 'move', from: '/a', path: '/b' }])).toEqual({ b: 1 });
+    expect(foldDelta({ a: 1 }, [])).toEqual({ a: 1 });
+  });
+});
+
+// The state-depth ceiling is 256 levels, counted to the deepest value (nested(n) puts its leaf string
+// n + 1 levels below the root).
+describe('transport state depth ceiling', () => {
+  it('accepts a document whose deepest value sits at depth 256', () => {
+    expect(() => sanitizeStrings(nested(255))).not.toThrow();
+    expect(() => foldSnapshot(nested(255))).not.toThrow();
+  });
+
+  it('rejects a document whose deepest value sits at depth 257', () => {
+    expect(() => sanitizeStrings(nested(256))).toThrow(/nesting depth/);
   });
 });

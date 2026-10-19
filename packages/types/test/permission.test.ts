@@ -101,4 +101,46 @@ describe('ApprovalMode / Reply / Rule', () => {
     const noId = PermissionRuleSchema.parse({ pattern: 'ls *', effect: 'allow', layer: 'user' });
     expect('identity' in noId).toBe(false);
   });
+
+  it('keeps exact: true on a narrow grant and leaves the key out otherwise', () => {
+    const narrow = PermissionRuleSchema.parse({
+      pattern: 'ffmpeg -i a.mp4 b.mp4',
+      effect: 'allow',
+      layer: 'user',
+      exact: true,
+    });
+    expect(narrow.exact).toBe(true);
+    const plain = PermissionRuleSchema.parse({ pattern: 'ls *', effect: 'allow', layer: 'user' });
+    expect('exact' in plain).toBe(false);
+  });
+
+  it('rejects exact: false', () => {
+    expect(
+      PermissionRuleSchema.safeParse({
+        pattern: 'ls',
+        effect: 'allow',
+        layer: 'user',
+        exact: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('still strips an unknown key', () => {
+    const parsed = PermissionRuleSchema.parse({
+      pattern: 'ls',
+      effect: 'allow',
+      layer: 'user',
+      extra: 1,
+    });
+    expect('extra' in parsed).toBe(false);
+  });
+});
+
+describe('CommandRoot opaque', () => {
+  it('keeps opaque: true and leaves the key out otherwise', () => {
+    const flagged = CommandRootSchema.parse({ name: 'sh', argv: ['sh', '-c', 'x'], opaque: true });
+    expect(flagged.opaque).toBe(true);
+    const plain = CommandRootSchema.parse({ name: 'ls', argv: ['ls'] });
+    expect('opaque' in plain).toBe(false);
+  });
 });

@@ -1,5 +1,8 @@
 // @minitui/sanitizer — ANSI/control-character chokepoint leaf (zero-dep).
 // The single import every package routes untrusted text through before the screen.
+// Scope: ANSI escape sequences and C0, DEL and C1 control characters. Bidirectional and zero-width
+// format characters are outside this contract and pass through unchanged; a boundary that shows text
+// for approval deals with them itself.
 import { caretEncode, CSI_SEQUENCE_SOURCE, hasEscape, PRESERVE_C0, stripAnsi } from './ansi.js';
 import {
   stripDangerousOscSegments,
@@ -8,8 +11,15 @@ import {
   type OscLinkState,
 } from './osc.js';
 // Stream completeness grammar. NOT re-exported from this barrel — test/surface.test.ts
-// freezes the public surface at six names, and both growth and shrink must red.
+// freezes the public surface at seven names, and both growth and shrink must red.
 import { splitTail } from './stream-grammar.js';
+
+// The one place the class of text that cannot be shown for approval is written: control characters,
+// format characters (including the zero-width joiners and the bidirectional controls) and the line and
+// paragraph separators. A string holding a member is refused at a consent boundary instead of being
+// shown. The sanitiser's own functions do not read it and their output is unchanged. No `g` or `y` flag,
+// so `test` keeps no state between calls.
+export const CONSENT_FORBIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
 export interface SanitizeOptions {
   /**
@@ -210,6 +220,8 @@ function cleanValue(value: unknown, depth: number): unknown {
  * sanitized keys are rejected. Values beyond the nesting ceiling become null.
  * Callers pass validated JSON-shaped specs; the generic preserves that type
  * without introducing a dependency on the shared types package.
+ * Depth is counted from the root of the value passed in, not from any enclosing document.
+ * The value is a plain JSON tree; a caller screens first.
  */
 export function sanitizeSpecStrings<S>(spec: S): S {
   return cleanValue(spec, 0) as S;

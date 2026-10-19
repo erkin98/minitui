@@ -355,3 +355,150 @@ describe('applyStatePatch', () => {
     expect(wholeDocumentClones).toBe(1);
   });
 });
+
+const TEST_FAILED = 'invalid state delta: test operation failed';
+
+describe('a failed test operation', () => {
+  function failure(state: JsonValue, delta: unknown): PatchError {
+    try {
+      applyStatePatch(state, delta);
+    } catch (error) {
+      if (error instanceof PatchError) return error;
+      throw error;
+    }
+    throw new Error('the patch was expected to fail');
+  }
+
+  it('reports a fixed string and the operation index, and never the document', () => {
+    const sentinel = 'SENTINEL-DO-NOT-LEAK';
+    const error = failure({ secret: sentinel, a: 1 }, [
+      { op: 'replace', path: '/a', value: 2 },
+      { op: 'test', path: '/secret', value: 'something else' },
+    ]);
+    expect(error.message).toBe(TEST_FAILED);
+    expect(error.opIndex).toBe(1);
+    expect(error.message).not.toContain(sentinel);
+  });
+
+  it('keeps the message the same size for a very large document', () => {
+    const large: Record<string, JsonValue> = {};
+    for (let i = 0; i < 20_000; i++) large[`key${i}`] = i;
+    const error = failure(large, [{ op: 'test', path: '', value: {} }]);
+    expect(error.message).toHaveLength(TEST_FAILED.length);
+  });
+
+  it('leaves a short message with no document text', () => {
+    const error = failure({ password: 'hunter2', nested: { token: 'abc' } }, [
+      { op: 'test', path: '/nested', value: { token: 'different' } },
+    ]);
+    expect(error.message.length).toBeLessThanOrEqual(80);
+    expect(error.message).not.toContain('hunter2');
+    expect(error.message).not.toContain('abc');
+  });
+});
+
+// The comparator is the adopted engine's own, so a test operation decides exactly as the engine does.
+describe('test operation comparison', () => {
+  const passes = (document: JsonValue, operand: JsonValue): boolean => {
+    try {
+      applyStatePatch(document, [{ op: 'test', path: '', value: operand }]);
+      return true;
+    } catch (error) {
+      if (error instanceof PatchError) return false;
+      throw error;
+    }
+  };
+
+  it.each<[string, JsonValue, JsonValue, boolean]>([
+    ['-0 against 0', -0, 0, true],
+    ['0 against -0', 0, -0, true],
+    ['[0] against [-0]', [0], [-0], true],
+    ['objects with the keys in another order', { a: 1, b: 2 }, { b: 2, a: 1 }, true],
+    ['nested arrays and null', { a: [1, { b: null }] }, { a: [1, { b: null }] }, true],
+    ['arrays in another order', [1, 2], [2, 1], false],
+    ['null against a missing member', { a: null }, {}, false],
+    ["'1' against 1", '1', 1, false],
+    ['an array against an object', [], {}, false],
+    ['[1] against {0: 1}', [1], { '0': 1 }, false],
+  ])('%s', (_name, document, operand, expected) => {
+    expect(passes(document, operand)).toBe(expected);
+  });
+
+  it('refuses a comparison of objects that own a key named hasOwnProperty, state unchanged', () => {
+    const document: JsonValue = { hasOwnProperty: 1 };
+    expect(passes(document, { hasOwnProperty: 1 })).toBe(false);
+    expect(document).toEqual({ hasOwnProperty: 1 });
+  });
+});
+
+// A long or hostile token in a patch path never reaches the error text.
+describe('patch messages are fixed strings', () => {
+  const LONG = 'x'.repeat(100_000);
+  const hasControlByte = (text: string): boolean =>
+    [...text].some((ch) => {
+      const code = ch.codePointAt(0)!;
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    });
+
+  function messageOf(state: JsonValue, delta: unknown): string {
+    try {
+      applyStatePatch(state, delta);
+    } catch (error) {
+      if (error instanceof PatchError) return error.message;
+      throw error;
+    }
+    throw new Error('the patch was expected to fail');
+  }
+
+  const rows: Array<[string, JsonValue, unknown, string]> = [
+    [
+      'an array member that does not exist',
+      { arr: [1] },
+      [{ op: 'replace', path: `/arr/${LONG}`, value: 1 }],
+      'array member does not exist',
+    ],
+    [
+      'an object member that does not exist',
+      { a: {} },
+      [{ op: 'replace', path: `/a/${LONG}`, value: 1 }],
+      'object member does not exist',
+    ],
+    [
+      'a bad add index',
+      { arr: [1] },
+      [{ op: 'add', path: `/arr/${LONG}`, value: 1 }],
+      'invalid add array index',
+    ],
+    [
+      'an array member that does not exist after a removal (bad token)',
+      { src: 1, arr: [1, 2] },
+      [{ op: 'move', from: '/src', path: `/arr/${LONG}/x` }],
+      'array member does not exist',
+    ],
+    [
+      'an array member that does not exist after a removal (out of range)',
+      { src: 1, arr: [1, 2] },
+      [{ op: 'move', from: '/src', path: '/arr/5/x' }],
+      'array member does not exist',
+    ],
+    [
+      'an object member that does not exist after a removal',
+      { src: 1, o: {} },
+      [{ op: 'move', from: '/src', path: `/o/${LONG}/x` }],
+      'object member does not exist',
+    ],
+    [
+      'a bad add index after a removal',
+      { src: 1, arr: [1] },
+      [{ op: 'move', from: '/src', path: `/arr/${LONG}` }],
+      'invalid add array index',
+    ],
+  ];
+
+  it.each(rows)('%s', (_name, state, delta, fixed) => {
+    const message = messageOf(state, delta);
+    expect(message).toBe(`invalid state delta: ${fixed}`);
+    expect(message.length).toBeLessThanOrEqual(80);
+    expect(hasControlByte(message)).toBe(false);
+  });
+});

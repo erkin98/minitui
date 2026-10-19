@@ -15,7 +15,10 @@ import {
   type JsonValue,
 } from './json-pointer.js';
 
-const { applyOperation } = fastJsonPatch;
+// The engine's own comparator and error class: a test operation is decided here, before the engine
+// runs, with the same comparison the engine would use (Node's deep equality differs on -0), so a failure
+// is reported as a fixed string instead of the engine's message, which carries the document.
+const { applyOperation, _areEquals: areEquals, JsonPatchError } = fastJsonPatch;
 
 export type JsonPatchOp = JsonPatch;
 
@@ -49,12 +52,12 @@ function memberOf(container: JsonValue, token: string, primitiveMessage: string)
   if (isArrayValue(container)) {
     const index = parseArrayIndexToken(token);
     if (index === undefined || index === '-' || index >= container.length) {
-      throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
+      throw new Error('array member does not exist');
     }
     return container[index]!;
   }
   if (isObject(container)) {
-    if (!Object.hasOwn(container, token)) throw new Error(`object member does not exist: ${token}`);
+    if (!Object.hasOwn(container, token)) throw new Error('object member does not exist');
     return container[token]!;
   }
   throw new Error(primitiveMessage);
@@ -82,7 +85,7 @@ function assertAddTarget(doc: JsonValue, tokens: readonly string[]): void {
   if (isArrayValue(parent)) {
     const index = parseArrayIndexToken(token);
     if (index === undefined || (index !== '-' && index > parent.length)) {
-      throw new Error(`invalid add array index: ${JSON.stringify(token)}`);
+      throw new Error('invalid add array index');
     }
   } else if (!isObject(parent)) {
     throw new Error('patch target parent is a primitive');
@@ -117,7 +120,7 @@ function resolveExistingAfterRemoval(
     if (isArrayValue(current)) {
       const raw = parseArrayIndexToken(token);
       if (raw === undefined || raw === '-') {
-        throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
+        throw new Error('array member does not exist');
       }
       let length = current.length;
       let index = raw;
@@ -125,10 +128,10 @@ function resolveExistingAfterRemoval(
         length -= 1;
         if (raw >= removedIndex) index = raw + 1;
       }
-      if (raw >= length) throw new Error(`array member does not exist: ${JSON.stringify(token)}`);
+      if (raw >= length) throw new Error('array member does not exist');
       current = current[index]!;
     } else if (isObject(current)) {
-      if (!Object.hasOwn(current, token)) throw new Error(`object member does not exist: ${token}`);
+      if (!Object.hasOwn(current, token)) throw new Error('object member does not exist');
       current = current[token]!;
     } else {
       throw new Error('patch path traverses a primitive');
@@ -166,7 +169,7 @@ function assertAddTargetAfterRemoval(
     const length =
       parent === removedParent && removedIndex !== undefined ? parent.length - 1 : parent.length;
     if (index === undefined || (index !== '-' && index > length)) {
-      throw new Error(`invalid add array index: ${JSON.stringify(token)}`);
+      throw new Error('invalid add array index');
     }
   } else if (!isObject(parent)) {
     throw new Error('patch target parent is a primitive');
@@ -181,8 +184,12 @@ function prepareEngineOperation(doc: JsonValue, operation: JsonPatch): Operation
       assertAddTarget(doc, path);
       break;
     case 'replace':
-    case 'test':
       assertExistingTarget(doc, path);
+      break;
+    case 'test':
+      if (!areEquals(resolveExisting(doc, path), operation.value)) {
+        throw new Error('test operation failed');
+      }
       break;
     case 'remove':
       assertExistingTarget(doc, path);
@@ -203,7 +210,10 @@ function prepareEngineOperation(doc: JsonValue, operation: JsonPatch): Operation
   return structuredClone(operation) as Operation;
 }
 
-export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
+// Reads a delta of unknown shape through the patch schema, which inspects it without invoking an
+// accessor or walking a non-plain value. A rejection is the indexed patch error: -1 when the delta is
+// not an array, the member's index when one member is bad.
+export function parsePatchArray(delta: unknown): readonly JsonPatchOp[] {
   let parsedPatch: ReturnType<typeof JsonPatchArraySchema.safeParse>;
   try {
     parsedPatch = JsonPatchArraySchema.safeParse(delta);
@@ -216,6 +226,11 @@ export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
       issueIndex(parsedPatch.error),
     );
   }
+  return parsedPatch.data;
+}
+
+export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
+  const patch = parsePatchArray(delta);
   const parsedState = JsonValueSchema.safeParse(state);
   if (!parsedState.success)
     throw new PatchError('invalid state delta: state is not canonical JSON', -1);
@@ -232,8 +247,8 @@ export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
     throw new PatchError(`invalid state delta: ${formatUnknown(error)}`, -1);
   }
 
-  for (let index = 0; index < parsedPatch.data.length; index++) {
-    const operation = parsedPatch.data[index]!;
+  for (let index = 0; index < patch.length; index++) {
+    const operation = patch[index]!;
     try {
       const engineOperation = prepareEngineOperation(doc, operation);
       doc = applyOperation(
@@ -246,24 +261,23 @@ export function applyStatePatch(state: JsonValue, delta: unknown): JsonValue {
       ).newDocument;
       assertJsonResourceBudget(doc);
     } catch (error) {
-      throw new PatchError(`invalid state delta: ${formatUnknown(error)}`, index);
+      // by class, never by message: an error of the engine's own class carries the document
+      const reason =
+        error instanceof JsonPatchError
+          ? 'patch engine rejected the operation'
+          : formatUnknown(error);
+      throw new PatchError(`invalid state delta: ${reason}`, index);
     }
   }
 
   const result = JsonValueSchema.safeParse(doc);
   if (!result.success) {
-    throw new PatchError(
-      'invalid state delta: result is not canonical JSON',
-      parsedPatch.data.length - 1,
-    );
+    throw new PatchError('invalid state delta: result is not canonical JSON', patch.length - 1);
   }
   try {
     assertCanonicalStateValue(result.data);
   } catch (error) {
-    throw new PatchError(
-      `invalid state delta: ${formatUnknown(error)}`,
-      parsedPatch.data.length - 1,
-    );
+    throw new PatchError(`invalid state delta: ${formatUnknown(error)}`, patch.length - 1);
   }
   return result.data;
 }

@@ -6,6 +6,7 @@ import { createAgUiAgentPort } from '../src/agent/ag-ui-agent.js';
 import { createLocalAgentPort } from '../src/agent/local-agent.js';
 import type { AgentPort } from '../src/agent/agent-port.js';
 import { buildRunAgentInput } from '../src/agent/run-input.js';
+import { rejectingSink, unhandledRejectionsDuring } from './diagnostics-sinks.js';
 
 // minimal REAL fake: createAgUiAgentPort only calls run(), so a real object implementing
 // Pick<HttpAgent, 'run'> stands in with no cast; run() returns an Observable<BaseEvent> we drive by hand.
@@ -96,7 +97,7 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     for await (const e of handle.events)
       if (e.kind === 'state-snapshot') snapshots.push((e.snapshot as { n: number }).n);
     expect(snapshots).toEqual([2, 3]); // only the last 2 survived the ceiling; oldest dropped
-    expect(warnings).toHaveLength(2); // two drops -> two diagnostics
+    expect(warnings).toHaveLength(1); // two drops in one stall episode -> one diagnostic
     expect(warnings[0]?.[0]).toContain('dropped');
   });
 
@@ -186,5 +187,90 @@ describe('createAgUiAgentPort (remote path, same toAppEvent chokepoint)', () => 
     expect(() => createAgUiAgentPort(agent, { maxQueue: -1 })).toThrow();
     expect(() => createAgUiAgentPort(agent, { maxQueue: NaN })).toThrow();
     expect(() => createAgUiAgentPort(agent, { maxQueue: Infinity })).toThrow();
+  });
+});
+
+describe('remote pump contains a sink that returns a rejected promise', () => {
+  it('leaves no unhandled rejection and delivers the same events', async () => {
+    const subject = new Subject<BaseEvent>();
+    const handle = createAgUiAgentPort(fakeAgent(subject), {
+      maxQueue: 2,
+      diagnostics: rejectingSink,
+    }).run(input);
+    const unhandled = await unhandledRejectionsDuring(() => {
+      subject.next({ type: EventType.RUN_STARTED, threadId: 't', runId: 'r' } as BaseEvent);
+      subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 1 } } as BaseEvent);
+      subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 2 } } as BaseEvent);
+      subject.next({ type: EventType.STATE_SNAPSHOT, snapshot: { n: 3 } } as BaseEvent);
+      subject.complete();
+    });
+    expect(unhandled).toEqual([]);
+    const snapshots: number[] = [];
+    for await (const e of handle.events)
+      if (e.kind === 'state-snapshot') snapshots.push((e.snapshot as { n: number }).n);
+    expect(snapshots).toEqual([2, 3]);
+  });
+});
+
+// One stall episode runs from the first eviction until the buffer has drained to empty; the pump
+// reports once per episode, not once per evicted event.
+describe('remote pump reports once per stall episode', () => {
+  function pumpWithCountingSink(): {
+    subject: Subject<BaseEvent>;
+    warnings: string[];
+    handle: ReturnType<AgentPort['run']>;
+  } {
+    const subject = new Subject<BaseEvent>();
+    const warnings: string[] = [];
+    const diagnostics = {
+      warn: (message: string): void => {
+        warnings.push(message);
+      },
+      debug(): void {},
+    };
+    const handle = createAgUiAgentPort(fakeAgent(subject), { maxQueue: 2, diagnostics }).run(input);
+    subject.next({ type: EventType.RUN_STARTED, threadId: 't', runId: 'r' } as BaseEvent);
+    return { subject, warnings, handle };
+  }
+  const snapshot = (n: number): BaseEvent =>
+    ({ type: EventType.STATE_SNAPSHOT, snapshot: { n } }) as BaseEvent;
+
+  it('gives one report for a burst of a thousand evictions', () => {
+    const { subject, warnings } = pumpWithCountingSink();
+    for (let n = 0; n < 1000; n++) subject.next(snapshot(n));
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('gives one report for several bursts with nothing consuming between them', () => {
+    const { subject, warnings } = pumpWithCountingSink();
+    for (let burst = 0; burst < 3; burst++) {
+      for (let n = 0; n < 5; n++) subject.next(snapshot(burst * 10 + n));
+    }
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('reports again for a new episode once the buffer has drained', async () => {
+    const { subject, warnings, handle } = pumpWithCountingSink();
+    for (let n = 0; n < 5; n++) subject.next(snapshot(n));
+    expect(warnings).toHaveLength(1);
+    const first = await handle.events.next();
+    const second = await handle.events.next();
+    expect(first.done).toBe(false);
+    expect(second.done).toBe(false);
+    for (let n = 10; n < 15; n++) subject.next(snapshot(n));
+    expect(warnings).toHaveLength(2);
+  });
+
+  it('reports again after a waiting consumer took an event directly', async () => {
+    const { subject, warnings, handle } = pumpWithCountingSink();
+    for (let n = 0; n < 5; n++) subject.next(snapshot(n));
+    expect(warnings).toHaveLength(1);
+    await handle.events.next();
+    await handle.events.next();
+    const waiting = handle.events.next(); // parks on the empty buffer
+    subject.next(snapshot(20)); // handed straight to the waiter
+    await waiting;
+    for (let n = 30; n < 35; n++) subject.next(snapshot(n));
+    expect(warnings).toHaveLength(2);
   });
 });

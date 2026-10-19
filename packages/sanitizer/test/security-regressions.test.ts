@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { sanitize, sanitizeSpecStrings, ALLOWED_OSC8_SCHEMES } from '../src/index.js';
+import {
+  sanitize,
+  sanitizeSpecStrings,
+  ALLOWED_OSC8_SCHEMES,
+  CONSENT_FORBIDDEN,
+} from '../src/index.js';
 import { runStream } from './run-stream.js';
 
 const ESC = '\x1b';
@@ -428,5 +433,133 @@ describe('OSC 8 pairing across chunks and intervening control strings', () => {
     const out = sanitize(input, { allow: 'renderer-sgr' });
     expect(out).toBe(expected);
     expect(out).toContain('https://example.com'); // the live frame survived
+  });
+});
+
+// Literal-value rows for the strip clauses of both modes. Each expected value is written here as a
+// literal or as the caret formula (a control byte becomes ^ plus the byte plus 0x40; a C1 byte becomes
+// ^[ plus the byte minus 0x40); none is taken from the sanitiser.
+describe('strip clauses for DEL, the C1 range and the C0 range', () => {
+  const MODES = [undefined, { allow: 'renderer-sgr' }] as const;
+  const swallowed = new Set([0x90, 0x98, 0x9b, 0x9d, 0x9e, 0x9f]);
+  const range = (from: number, to: number): number[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+  const expectedForDelOrC1 = (byte: number): string => {
+    if (swallowed.has(byte)) return 'a';
+    if (byte === 0x7f) return 'a^?b';
+    return `a^[${String.fromCharCode(byte - 0x40)}b`;
+  };
+
+  it.each(range(0x7f, 0x9f))(
+    'byte %i between two letters gives the same result in both modes',
+    (byte) => {
+      const input = `a${String.fromCharCode(byte)}b`;
+      for (const mode of MODES) {
+        expect(sanitize(input, mode)).toBe(expectedForDelOrC1(byte));
+      }
+    },
+  );
+
+  it('a lone 0x9b with nothing after it is made visible in both modes', () => {
+    for (const mode of MODES) {
+      expect(sanitize('a\x9b', mode)).toBe('a^[[');
+    }
+  });
+
+  it.each(range(0x00, 0x1f).filter((b) => ![0x09, 0x0a, 0x0d, 0x1b].includes(b)))(
+    'C0 byte %i between two letters is made visible in renderer-sgr mode',
+    (byte) => {
+      const input = `a${String.fromCharCode(byte)}b`;
+      expect(sanitize(input, { allow: 'renderer-sgr' })).toBe(
+        `a^${String.fromCharCode(byte + 0x40)}b`,
+      );
+    },
+  );
+
+  it.each([[0x09], [0x0a], [0x0d]])('byte %i is kept in renderer-sgr mode', (byte) => {
+    const input = `a${String.fromCharCode(byte)}b`;
+    expect(sanitize(input, { allow: 'renderer-sgr' })).toBe(input);
+  });
+
+  it('keeps an SGR sequence and makes the BEL inside the text visible', () => {
+    expect(sanitize(`${ESC}[31mred${BEL}${ESC}[0m`, { allow: 'renderer-sgr' })).toBe(
+      `${ESC}[31mred^G${ESC}[0m`,
+    );
+  });
+
+  describe.each([[0x90], [0x98], [0x9e]])('the C1 string introducer %i', (introducer) => {
+    const open = String.fromCharCode(introducer);
+    it.each(MODES.map((mode) => [mode]))('is removed with its payload up to ST (%j)', (mode) => {
+      expect(sanitize(`pre${open}PAYLOAD\x9cpost`, mode)).toBe('prepost');
+      expect(sanitize(`pre${open}PAYLOAD${ST}post`, mode)).toBe('prepost');
+    });
+    it.each(MODES.map((mode) => [mode]))(
+      'treats BEL as data and swallows the rest (%j)',
+      (mode) => {
+        expect(sanitize(`pre${open}PAYLOAD${BEL}post`, mode)).toBe('pre');
+      },
+    );
+    it.each(MODES.map((mode) => [mode]))('swallows the rest when unterminated (%j)', (mode) => {
+      expect(sanitize(`pre${open}PAYLOADpost`, mode)).toBe('pre');
+    });
+  });
+
+  it('removes a C1 string split across stream chunks', async () => {
+    expect(await runStream(['pre\x90PAY', 'LOAD\x9cpost'])).toBe('prepost');
+    expect(await runStream(['pre\x98PAY', 'LOAD'])).toBe('pre');
+  });
+
+  it('makes a C1 byte visible when it arrives alone between chunks', async () => {
+    expect(await runStream(['a', '\x85', 'b'])).toBe('a^[Eb');
+    expect(await runStream(['a', '\x85', 'b'], { allow: 'renderer-sgr' })).toBe('a^[Eb');
+  });
+});
+
+// The one definition of text that cannot be shown for approval. Code points are written as escapes,
+// never as literal invisible characters.
+describe('CONSENT_FORBIDDEN', () => {
+  const members: Array<[string, string]> = [
+    ['ESC', '\u001b'],
+    ['TAB', '\u0009'],
+    ['CR', '\u000d'],
+    ['LF', '\u000a'],
+    ['DEL', '\u007f'],
+    ['NEL (U+0085)', '\u0085'],
+    ['zero-width space (U+200B)', '\u200b'],
+    ['right-to-left override (U+202E)', '\u202e'],
+    ['line separator (U+2028)', '\u2028'],
+    ['paragraph separator (U+2029)', '\u2029'],
+    ['zero-width non-joiner (U+200C)', '\u200c'],
+    ['zero-width joiner (U+200D)', '\u200d'],
+    ['soft hyphen (U+00AD)', '\u00ad'],
+    ['byte order mark (U+FEFF)', '\ufeff'],
+    ['Arabic number sign (U+0600)', '\u0600'],
+    ['tag character (U+E0067)', String.fromCodePoint(0xe0067)],
+    ['a Persian word holding U+200C', '\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645'],
+    ['a family emoji sequence', String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467)],
+  ];
+  it.each(members)('matches %s', (_name, text) => {
+    expect(CONSENT_FORBIDDEN.test(text)).toBe(true);
+  });
+
+  const plain: Array<[string, string]> = [
+    ['Latin letters', 'ffmpeg'],
+    ['Cyrillic letters', '\u041f\u0440\u0438\u0432\u0435\u0442'],
+    ['Han characters', '\u6f22\u5b57'],
+    ['Arabic letters', '\u0645\u0631\u062d\u0628\u0627'],
+    ['a space', ' '],
+    ['a digit', '0'],
+    ['punctuation', '.,;:!?/-_'],
+  ];
+  it.each(plain)('does not match %s', (_name, text) => {
+    expect(CONSENT_FORBIDDEN.test(text)).toBe(false);
+  });
+
+  it('keeps no state between calls', () => {
+    expect(CONSENT_FORBIDDEN.global).toBe(false);
+    expect(CONSENT_FORBIDDEN.sticky).toBe(false);
+    expect(CONSENT_FORBIDDEN.test('\u200b')).toBe(true);
+    expect(CONSENT_FORBIDDEN.test('\u200b')).toBe(true);
   });
 });
