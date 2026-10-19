@@ -177,6 +177,12 @@ describe('the home directories beside the user own are denied for rm', () => {
     'rm -rf /Us*/x',
     'rm -rf /home/x*',
     'rm -rf ~/../x*',
+    'rm -rf /tmp/../ho*',
+    'rm -rf /tmp/../ho*/x',
+    'rm -rf ~/../../ho*/x',
+    'rm -rf $HOME/../../h?me/x',
+    'rm -rf /home/erkin/../../ho*/x',
+    'rm -rf /ho*/../ho*/x',
     'rm -rf ~/../*',
   ];
   it.each(globbed)('is denied when a glob expands to it: %s', (command) => {
@@ -188,6 +194,9 @@ describe('the home directories beside the user own are denied for rm', () => {
     'rm -rf /t*/x',
     'rm -rf /home/erkin/b*/x',
     'rm -rf /home/erkin/b*',
+    'rm -rf /tmp/../t*/x',
+    'rm -rf ~/b*/../c',
+    'rm -rf ~/x*/../docs',
     'rm -rf ~/b*/x',
   ])('keeps a glob below that depth allowed: %s', (command) => {
     expect(floor(command, linuxHost).blocked).toBe(false);
