@@ -201,3 +201,21 @@ describe('where the grants file lives', () => {
     withXdg(undefined, () => expect(grantsFilePath()).toBe(fallback));
   });
 });
+
+describe('a row that the reader would refuse is never written', () => {
+  it('rejects a cascade rule whose pattern holds a space or a star, and leaves the file alone', async () => {
+    await appendGrant(rule, file);
+    const before = await readFile(file, 'utf8');
+    await expect(
+      appendGrant({ pattern: 'my tool', effect: 'allow', layer: 'user' }, file),
+    ).rejects.toThrow();
+    await expect(
+      appendGrant({ pattern: 'a*', effect: 'allow', layer: 'user' }, file),
+    ).rejects.toThrow();
+    await expect(
+      appendGrant({ pattern: 'ls', effect: 'deny', layer: 'user' }, file),
+    ).rejects.toThrow();
+    expect(await readFile(file, 'utf8')).toBe(before);
+    expect((await readGrants(file)).status).toBe('ok');
+  });
+});

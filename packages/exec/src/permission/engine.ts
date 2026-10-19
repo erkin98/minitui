@@ -14,7 +14,7 @@ import { STDIN_RUNNERS } from './shell/wrappers.js';
 import { checkHardFloor } from './hard-floor.js';
 import { resolveStatic, denyRuleFor, unsafeToolArgs, identityMismatch } from './decision.js';
 import { defaultResolveExecutable, type ResolveExecutable } from './resolve-exec.js';
-import type { RuleSet } from './rules.js';
+import { isBareCommandName, type RuleSet } from './rules.js';
 import { createPendingChannel } from './pending.js';
 import { exceedsConsentBudget, REQUEST_TOO_LARGE_REASON } from './consent.js';
 
@@ -103,15 +103,18 @@ function grantFor(
   cascade: boolean,
   resolveExecutable: ResolveExecutable,
 ): PermissionRule | undefined {
-  if (!cascade && parsed.roots.length !== 1) return undefined;
   const root = parsed.roots[0];
-  const pattern = cascade && root ? root.name : req.resolvedCommand;
+  // a cascade grant names one bare command; for a command word that is not (it holds a space or a
+  // star) the grant falls back to the narrow kind, which needs a single root and otherwise stores nothing
+  const narrow = !cascade || root === undefined || !isBareCommandName(root.name);
+  if (narrow && parsed.roots.length !== 1) return undefined;
+  const pattern = narrow || root === undefined ? req.resolvedCommand : root.name;
   const identity = root ? resolveExecutable(root.argv[0] ?? root.name) : undefined;
   return {
     pattern,
     effect: 'allow',
     layer: 'user',
-    ...(cascade ? {} : { exact: true as const }),
+    ...(narrow ? { exact: true as const } : {}),
     ...(identity === undefined ? {} : { identity }),
   };
 }

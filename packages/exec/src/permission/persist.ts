@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { PermissionRuleSchema, type PermissionRule } from '@minitui/types';
+import { isBareCommandName } from './rules.js';
 import { storeDir } from './secret-paths.js';
 
 export function grantsFilePath(): string {
@@ -26,9 +27,8 @@ const EnvelopeSchema = z
 // A grant row is an allow. A cascade grant (no `exact`) names a bare command: no whitespace and no `*`,
 // so a persisted row can never widen into a wildcard. A narrow grant carries `exact: true` and is compared
 // by string equality.
-const BARE_NAME = /^[^\s*]+$/;
 const isGrantRow = (row: Row): boolean =>
-  row.effect === 'allow' && (row.exact === true || BARE_NAME.test(row.pattern));
+  row.effect === 'allow' && (row.exact === true || isBareCommandName(row.pattern));
 
 // Every reloaded grant is pinned to the user layer, so a tampered file cannot claim managed rank over a
 // live project or user deny.
@@ -55,7 +55,7 @@ function fromLegacy(json: unknown): GrantsRead {
   const parsed = z.array(RowSchema).safeParse(json);
   if (!parsed.success) return invalid('the file does not hold grant rows');
   const rows = parsed.data.map((row) =>
-    row.exact === true || BARE_NAME.test(row.pattern) ? row : { ...row, exact: true as const },
+    row.exact === true || isBareCommandName(row.pattern) ? row : { ...row, exact: true as const },
   );
   return rows.every(isGrantRow)
     ? { status: 'ok', grants: rows.map(asUserGrant) }
@@ -106,6 +106,8 @@ function sameRule(a: PermissionRule, b: PermissionRule): boolean {
 }
 
 async function writeGrant(rule: PermissionRule, file: string): Promise<void> {
+  // a row the reader would refuse is never written: it would make the whole file unreadable
+  if (!isGrantRow(rule)) throw new Error('the grant breaks the rules for a saved grant');
   const read = await readGrants(file);
   if (read.status === 'invalid') throw new Error(`the grants file is not valid: ${read.reason}`);
   if (read.grants.some((r) => sameRule(r, rule))) return; // de-dupe

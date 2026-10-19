@@ -11,6 +11,10 @@ type Effect = 'allow' | 'ask' | 'deny';
 const LAYER_RANK: Record<PermissionRule['layer'], number> = { managed: 3, project: 2, user: 1 };
 const EFFECT_RANK: Record<Effect, number> = { deny: 2, ask: 1, allow: 0 };
 
+// A cascade grant and a persisted cascade row name one command: no whitespace and no `*`, so a stored
+// pattern can never act as a wildcard or a multi-word prefix.
+export const isBareCommandName = (name: string): boolean => /^[^\s*]+$/.test(name);
+
 // A deny written as several words matches a command whose non-option tokens hold those words in
 // order, so an option placed between them does not hide the deny: `deny "git push"` matches
 // `git --no-pager push origin`. There is no arity table, so an operand equal to one of the words
