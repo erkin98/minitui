@@ -1,3 +1,4 @@
+import { sanitize } from '@minitui/catalog';
 import type { RuntimeError } from './runtime-error.js';
 
 export interface RuntimeRepair {
@@ -20,13 +21,15 @@ export interface RuntimeRepair {
  * the composition root injects the string). When `wording` is omitted the builder
  * uses a generic remedy line, so it stands alone for any non-catalog fault. A zero
  * exit carries nothing to fix. This is the stderr round-trip the Artifacts failure
- * (errors never returned to the model) is missing.
+ * (errors never returned to the model) is missing. The action key and the stderr excerpt are untrusted
+ * text: both go through the shared `sanitize` before they reach the model (CR, TAB and LF are kept); the
+ * returned `actionKey` field is the value as given.
  */
 export function toRuntimeRepair(err: RuntimeError, wording?: string): RuntimeRepair {
   const fixable = err.exitCode !== 0;
   const remedy = wording ?? 'Regenerate the spec to avoid this error.';
   const reprompt = fixable
-    ? `The action "${err.actionKey}" failed (exit ${err.exitCode}). The tool reported:\n${err.stderrExcerpt}\n${remedy}`
+    ? `The action "${sanitize(err.actionKey)}" failed (exit ${err.exitCode}). The tool reported:\n${sanitize(err.stderrExcerpt)}\n${remedy}`
     : '';
   return { code: 'RUNTIME_ERROR', fixable, actionKey: err.actionKey, reprompt };
 }

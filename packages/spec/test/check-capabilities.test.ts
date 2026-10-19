@@ -136,3 +136,15 @@ describe('checkCapabilities', () => {
     expect(await checkCapabilities(condSpec, caps)).toEqual([]);
   });
 });
+
+describe('checkCapabilities: callbacks that are not objects', () => {
+  it.each([['"done"'], ['5'], ['true']])(
+    'an onSuccess and onError of %s resolve to no issue',
+    async (value) => {
+      const built: Spec = JSON.parse(
+        `{"root":"b","elements":{"b":{"type":"Box","props":{},"on":{"press":{"action":"run","onSuccess":${value},"onError":${value}}}}},"state":{}}`,
+      );
+      expect(await checkCapabilities(built, caps)).toEqual([]);
+    },
+  );
+});
