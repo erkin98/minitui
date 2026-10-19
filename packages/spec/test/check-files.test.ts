@@ -14,7 +14,7 @@ const spec = (inputs: string[]): Spec => ({
   root: 'f',
   elements: {
     f: { type: 'Box', props: {}, children: ['pick'] },
-    pick: { type: 'FilePicker', props: { value: { $state: '/inputs' } } },
+    pick: { type: 'FilePicker', props: { mode: 'file', value: { $state: '/inputs' } } },
   },
   state: { inputs },
 });
@@ -58,4 +58,106 @@ describe('checkFiles', () => {
     const issues = await checkFiles(spec(['/some/dir']), caps);
     expect(issues.map((i) => i.code)).toEqual(['not_a_file']);
   });
+});
+
+describe('checkFiles: a marker whose pointer is not a string', () => {
+  const pickerWith = (valueJson: string): Spec => {
+    const built: Spec = JSON.parse(
+      `{"root":"f","elements":{"f":{"type":"Box","props":{},"children":["pick"]},"pick":{"type":"FilePicker","props":{"value":${valueJson}}}},"state":{"5":["/never.mp4"]}}`,
+    );
+    return built;
+  };
+
+  it.each([['{"$state":5}'], ['{"$bindState":5}']])(
+    'follows nothing and never asks the host about a file: %s',
+    async (valueJson) => {
+      let stats = 0;
+      const caps = capsWith(() => {
+        stats += 1;
+        return { exists: true, readable: true, isFile: true };
+      });
+      expect(await checkFiles(pickerWith(valueJson), caps)).toEqual([]);
+      expect(stats).toBe(0);
+    },
+  );
+});
+
+describe('checkFiles: unpicked values and the picker mode', () => {
+  const recording = (stat: FileStat) => {
+    const asked: string[] = [];
+    const caps: CapabilityProvider = {
+      ...capsWith(() => stat),
+      statFile: async (path) => {
+        asked.push(path);
+        return stat;
+      },
+    };
+    return { caps, asked };
+  };
+  const picker = (propsJson: string, stateJson = '{}'): Spec => {
+    const built: Spec = JSON.parse(
+      `{"root":"f","elements":{"f":{"type":"Box","props":{},"children":["pick"]},"pick":{"type":"FilePicker","props":${propsJson}}},"state":${stateJson}}`,
+    );
+    return built;
+  };
+  const dir: FileStat = { exists: true, readable: true, isFile: false };
+  const file: FileStat = { exists: true, readable: true, isFile: true };
+  const missing: FileStat = { exists: false, readable: false, isFile: false };
+  const codes = async (spec: Spec, stat: FileStat) => {
+    const { caps, asked } = recording(stat);
+    return { codes: (await checkFiles(spec, caps)).map((i) => i.code), asked };
+  };
+
+  it('an empty value is not probed', async () => {
+    const result = await codes(picker('{"value":""}'), missing);
+    expect(result).toEqual({ codes: [], asked: [] });
+  });
+
+  it('a bound value that holds the empty string is not probed', async () => {
+    const result = await codes(picker('{"value":{"$bindState":"/src"}}', '{"src":""}'), missing);
+    expect(result).toEqual({ codes: [], asked: [] });
+  });
+
+  it('an empty member of a bound list is not probed, the others are', async () => {
+    const result = await codes(
+      picker('{"value":{"$state":"/src"}}', '{"src":["","a.mp4"]}'),
+      missing,
+    );
+    expect(result).toEqual({ codes: ['missing_file'], asked: ['a.mp4'] });
+  });
+
+  it('mode dir accepts an existing directory', async () => {
+    expect((await codes(picker('{"mode":"dir","value":"d"}'), dir)).codes).toEqual([]);
+  });
+
+  it('no mode accepts an existing directory and an existing file', async () => {
+    expect((await codes(picker('{"value":"d"}'), dir)).codes).toEqual([]);
+    expect((await codes(picker('{"value":"f"}'), file)).codes).toEqual([]);
+  });
+
+  it('mode file reports a directory as not_a_file', async () => {
+    expect((await codes(picker('{"mode":"file","value":"d"}'), dir)).codes).toEqual(['not_a_file']);
+  });
+
+  it.each(['{"mode":"file","value":"x"}', '{"mode":"dir","value":"x"}', '{"value":"x"}'])(
+    'a path that does not exist is missing_file whatever the mode: %s',
+    async (propsJson) => {
+      expect((await codes(picker(propsJson), missing)).codes).toEqual(['missing_file']);
+    },
+  );
+
+  it('an unreadable path stays unreadable_file in every mode', async () => {
+    const locked: FileStat = { exists: true, readable: false, isFile: true };
+    for (const propsJson of ['{"mode":"dir","value":"x"}', '{"value":"x"}']) {
+      expect((await codes(picker(propsJson), locked)).codes).toEqual(['unreadable_file']);
+    }
+  });
+
+  it.each(['{"$state":5}', '{"$bindState":5}', '{"$state":null}'])(
+    'a marker without a pointer string follows nothing: %s',
+    async (valueJson) => {
+      const result = await codes(picker(`{"value":${valueJson}}`), missing);
+      expect(result).toEqual({ codes: [], asked: [] });
+    },
+  );
 });
