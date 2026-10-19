@@ -384,6 +384,17 @@ describe('git: an abbreviated long option runs the program too', () => {
   });
 
   it.each([
+    'git grep -iOmake pattern',
+    'git grep -nO make pattern',
+    'git rebase -ix "make test" main',
+    'git difftool -dx x',
+    'git clone -qu x u d',
+    'git clone -qc a=b u d',
+  ])('a short option bundled behind other flags is asked: %s', async (command) => {
+    await expectAskEverywhere(command, 'git');
+  });
+
+  it.each([
     'git fetch --recurse-submodules origin',
     'git diff --exit-code',
     'git log --oneline',
@@ -391,6 +402,10 @@ describe('git: an abbreviated long option runs the program too', () => {
     'git push --force-with-lease origin',
     'git clone --depth 1 u d',
     'git grep -n pattern',
+    'git grep -in pattern',
+    'git rebase -i main',
+    'git clone -q u d',
+    'git log -n3',
     'git init',
   ])('control: keeps its verdict: %s', async (command) => {
     expect(staticVerdict(command, 'git')).toBe('allow');
@@ -405,6 +420,11 @@ describe('ffmpeg: an escaped or embedded fetching input asks', () => {
     'ffmpeg -i a.mp4 -vf movie=cache:x.mp4 out.mp4',
     'ffmpeg -i a.mp4 -filter_complex amovie=concatf:list.txt out.mp4',
     'ffmpeg -i a.mp4 -vf movie=a.mp4,movie=tee:x out.mp4',
+    String.raw`ffmpeg -i a.mp4 -vf "movie='cache:x.mp4'" out.mp4`,
+    String.raw`ffmpeg -i a.mp4 -vf "movie=ca'che':x.mp4" out.mp4`,
+    String.raw`ffmpeg -i a.mp4 -vf "movie=filename='tee:x'" out.mp4`,
+    String.raw`ffmpeg -i a.mp4 -vf "subtitles=f.srt:x=1,movie='concat:a|b'" out.mp4`,
+    String.raw`ffmpeg -i a.mp4 -vf "movie=\'cache:x.mp4\'" out.mp4`,
   ])('is asked: %s', async (command) => {
     await expectAskEverywhere(command, 'ffmpeg');
   });
