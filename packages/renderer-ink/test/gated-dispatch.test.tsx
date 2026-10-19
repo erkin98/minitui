@@ -118,9 +118,12 @@ function harness(
     store,
     consent,
     onLifecycle: { emit: (e) => lifecycle.push(e.phase) },
+    // debug: ink writes every render in full, also when CI is set (it otherwise keeps the
+    // output back until unmount), so a wait can read the frame.
     io: {
       stdin: stdin as unknown as NodeJS.ReadStream,
       stdout: stdout as unknown as NodeJS.WriteStream,
+      debug: true,
     },
   });
   return {
@@ -135,6 +138,32 @@ function harness(
 }
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+
+// A key written before the mount effects have run reaches no handler: the widget has not
+// registered with the focus ring yet, so the press is dropped. Wait for what the key depends
+// on, not for a fixed time. The clock is frozen in tests, so count attempts instead of reading it.
+async function until(cond: () => boolean, what: string, attempts = 1000): Promise<void> {
+  for (let i = 0; !cond(); i++) {
+    if (i >= attempts) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+// React commits the frame first and flushes the effects (listener attach) on the next immediates.
+const afterEffects = (): Promise<void> => new Promise((r) => setImmediate(() => setImmediate(r)));
+const lastOf =
+  (out: FakeStdout): (() => string) =>
+  () =>
+    out.frames.at(-1) ?? '';
+// A display-only tree renders an empty frame, so "mounted" means a frame was written.
+const awaitMounted = async (out: FakeStdout): Promise<void> => {
+  await until(() => out.frames.length > 0, 'the first frame');
+  await afterEffects();
+};
+// Every focusable widget prints '> ' while it holds focus and two spaces otherwise.
+const awaitFocus = async (frame: () => string): Promise<void> => {
+  await until(() => frame().includes('> '), 'a focused widget in the frame');
+  await afterEffects();
+};
 
 describe('gated-dispatch (headless)', () => {
   // DEFERRED: single-key input through the real mounted tree works (see the q/Esc + focused-widget
@@ -218,6 +247,7 @@ describe('gated-dispatch (headless)', () => {
     dispatched: DispatchContext[];
     stdin: FakeStdin;
     handle: ReturnType<typeof mountInk>;
+    frame: () => string;
   } {
     const twoWidgetCatalog = makeCatalog({
       id: 'video-merge',
@@ -254,6 +284,7 @@ describe('gated-dispatch (headless)', () => {
       },
     };
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: twoWidgets,
       catalog: twoWidgetCatalog,
@@ -264,10 +295,11 @@ describe('gated-dispatch (headless)', () => {
       onLifecycle: { emit: () => {} },
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    return { dispatched, stdin, handle };
+    return { dispatched, stdin, handle, frame: lastOf(stdout) };
   }
 
   // SECURITY HALF (focus-gate): an UNfocused gated widget must not consume a key. OrderList auto-focuses and
@@ -275,8 +307,8 @@ describe('gated-dispatch (headless)', () => {
   // FilePicker WOULD dispatch here — so this is the running positive control that reds if `{ isActive }`
   // is dropped from a widget's useInput. No Tab needed (single-key + auto-focus, both proven above).
   it('two custom widgets: an UNfocused gated widget does not consume a key', async () => {
-    const { dispatched, stdin, handle } = mountTwoWidgets();
-    await tick(); // OrderList registers first -> auto-focuses; FilePicker is INACTIVE
+    const { dispatched, stdin, handle, frame } = mountTwoWidgets();
+    await awaitFocus(frame); // OrderList registers first -> auto-focuses; FilePicker is INACTIVE
     stdin.write('\r'); // Enter -> OrderList ignores it; a GATED FilePicker must NOT consume it
     await tick();
     expect(dispatched).toHaveLength(0); // an ungated FilePicker would dispatch here
@@ -333,12 +365,12 @@ describe('gated-dispatch (headless)', () => {
         },
       },
     };
-    const { dispatched, stdin, handle } = harness(
+    const { dispatched, stdin, handle, lastFrame } = harness(
       { status: 'settled', result: 'ok' },
       twoButtons,
       keyCatalog,
     );
-    await tick(); // btnOther registers first -> auto-focuses; btnMerge is UNfocused
+    await awaitFocus(lastFrame); // btnOther registers first -> auto-focuses; btnMerge is UNfocused
     stdin.write('\r'); // Enter -> the focused unbound btnOther; the UNfocused btnMerge must not fire
     await tick();
     expect(dispatched).toHaveLength(0);
@@ -381,12 +413,12 @@ describe('gated-dispatch (headless)', () => {
         },
       },
     };
-    const { dispatched, stdin, handle } = harness(
+    const { dispatched, stdin, handle, lastFrame } = harness(
       { status: 'settled', result: 'ok' },
       orderSpec,
       orderCatalog,
     );
-    await tick(); // FilePicker registers first -> auto-focuses; OrderList is UNfocused
+    await awaitFocus(lastFrame); // FilePicker registers first -> auto-focuses; OrderList is UNfocused
     stdin.write('\x1B[1;2B'); // shift+down -> the UNfocused OrderList must not reorder/dispatch
     await tick();
     expect(dispatched).toHaveLength(0);
@@ -429,6 +461,7 @@ describe('gated-dispatch (headless)', () => {
     };
     const io = controlledIo({});
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: evilSpec,
       catalog: stateCatalog,
@@ -438,10 +471,11 @@ describe('gated-dispatch (headless)', () => {
       consent: noopConsent,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    await tick(); // Button auto-focuses
+    await awaitFocus(lastOf(stdout)); // Button auto-focuses
     stdin.write('\r'); // Enter -> emit('press') -> both render-local setStates run in order
     await tick();
     expect(io.getSnapshot()).toMatchObject({ probe: 'ok' }); // liveness: the native sink wrote through
@@ -489,6 +523,7 @@ describe('gated-dispatch (headless)', () => {
       cancel++;
     };
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: textSpec,
       catalog: textCatalog,
@@ -500,10 +535,11 @@ describe('gated-dispatch (headless)', () => {
       onCancel,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    await tick();
+    await awaitMounted(stdout);
     stdin.write('q'); // no interactive widget -> `q` quits (completed)
     await tick();
     stdin.write('\x1B'); // Esc -> cancels
@@ -525,6 +561,7 @@ describe('gated-dispatch (headless)', () => {
       cancel++;
     };
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec,
       catalog,
@@ -536,10 +573,11 @@ describe('gated-dispatch (headless)', () => {
       onCancel,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    await tick(); // Button auto-focuses; reports capturesText:false
+    await awaitFocus(lastOf(stdout)); // Button auto-focuses; reports capturesText:false
     stdin.write('q'); // focused Button does NOT capture text -> `q` quits
     await tick();
     expect(quit).toBe(1);
@@ -583,6 +621,7 @@ describe('gated-dispatch (headless)', () => {
       },
     };
     const stdin = new FakeStdin();
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: fileSpec,
       catalog: fileCatalog,
@@ -594,10 +633,11 @@ describe('gated-dispatch (headless)', () => {
       onCancel,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    await tick(); // FilePicker auto-focuses -> reports capturesText:true
+    await awaitFocus(lastOf(stdout)); // FilePicker auto-focuses -> reports capturesText:true
     stdin.write('q'); // focused free-text field -> `q` is literal input, NOT a quit
     await tick();
     expect(quit).toBe(0);
@@ -623,6 +663,7 @@ describe('gated-dispatch (headless)', () => {
       subscribe: () => () => {},
       resolve: () => {},
     };
+    const stdout = new FakeStdout();
     const handle = mountInk({
       spec: textSpec,
       catalog: textCatalog,
@@ -633,10 +674,11 @@ describe('gated-dispatch (headless)', () => {
       onQuit,
       io: {
         stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: new FakeStdout() as unknown as NodeJS.WriteStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: true,
       },
     });
-    await tick();
+    await awaitMounted(stdout);
     stdin.write('\x1B'); // Esc while consent is up -> quit suppressed
     stdin.write('q');
     await tick();
