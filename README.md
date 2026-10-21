@@ -164,4 +164,4 @@ pnpm typecheck:tsc  # tsc -b, the composite build
 
 ## License
 
-No license has been chosen yet. Until one is added, the code is not licensed for reuse.
+Apache License 2.0. See [LICENSE](LICENSE).
