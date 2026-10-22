@@ -1,5 +1,5 @@
 // Published-artifact gate for the pure-type swap boundary: pack renderer-core + its
-// @minitui/types dependency → assert the four-file tarball + manifest (concrete deps,
+// @minitui/types dependency → assert the five-file tarball + manifest (concrete deps,
 // engines floor, exact exports) → install into a throwaway strict consumer → tsc
 // (types:[] skipLibCheck:false) forces the WHOLE dist/index.d.ts AND its external
 // @minitui/types re-exports to resolve with no ambient fallback (declaration-closure +
@@ -52,13 +52,13 @@ try {
   // 1. Pack renderer-core + its dependency @minitui/types (workspace:* rewritten concrete on pack).
   const tgz = pack(pkgDir);
   const typesTgz = pack(join(packagesDir, 'types'));
-  // 2. Assert EXACTLY the four intended files (a stray/missing file reds).
+  // 2. Assert EXACTLY the five intended files (a stray/missing file reds); pnpm pack adds LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest.
   const m = JSON.parse(

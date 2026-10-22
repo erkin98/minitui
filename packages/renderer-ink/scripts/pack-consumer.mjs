@@ -1,5 +1,5 @@
 // Published-artifact gate for the renderer swap boundary + render chokepoint: pack
-// renderer-ink + its four internal workspace deps → assert the four-file tarball +
+// renderer-ink + its four internal workspace deps → assert the five-file tarball +
 // manifest (concrete deps, engines floor, exact exports) → install into a throwaway
 // strict consumer → tsc (types:[], lib ES2023, skipLibCheck:true) forces the WHOLE
 // dist/index.d.ts AND its external re-exports to resolve → one ESM import that loads the
@@ -78,13 +78,13 @@ try {
   const sanitizerTgz = pack(join(packagesDir, 'sanitizer'));
   const rendererCoreTgz = pack(join(packagesDir, 'renderer-core'));
   const catalogTgz = pack(join(packagesDir, 'catalog'));
-  // 2. Assert EXACTLY the four intended files (a stray/missing file reds).
+  // 2. Assert EXACTLY the five intended files (a stray/missing file reds); pnpm pack adds LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog:/workspace: rewritten concrete, engines present.
   const m = JSON.parse(
