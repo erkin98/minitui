@@ -56,13 +56,13 @@ try {
   // 1. Pack agent-core + its one internal workspace dep (workspace:* rewritten concrete on pack).
   const tgz = pack(pkgDir);
   const typesTgz = pack(join(packagesDir, 'types'));
-  // 2. Assert EXACTLY the four intended files.
+  // 2. Assert EXACTLY the five intended files; pnpm pack adds the root LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog:/workspace: rewritten concrete, engines present.
   const m = JSON.parse(
