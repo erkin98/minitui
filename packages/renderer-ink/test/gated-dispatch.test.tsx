@@ -8,7 +8,14 @@ import type { AppSpec, PermissionRequest } from '@minitui/types';
 import { makeCatalog } from './support/make-catalog.js';
 import { controlledIo } from './support/store-io.js';
 import { FakeStdin, FakeStdout, asReadStream, asWriteStream } from './support/fake-streams.js';
-import { awaitFocus, awaitFocusOn, awaitMounted, lastOf, until } from './support/focus-waits.js';
+import {
+  afterEffects,
+  awaitFocus,
+  awaitFocusOn,
+  awaitMounted,
+  lastOf,
+  until,
+} from './support/focus-waits.js';
 
 const catalog = makeCatalog({
   id: 'video-merge',
@@ -459,6 +466,8 @@ describe('gated-dispatch (headless)', () => {
     stdin.write('a');
     stdin.write('b');
     await until(() => lastFrame().includes('ab'), 'the typed draft');
+    // React re-subscribes the widget's handler with the new draft in a passive effect; Enter must not beat it
+    await afterEffects();
     stdin.write('\r');
     await until(() => dispatched.length === 1, 'the change dispatch');
     expect(store.getSnapshot()).toMatchObject({ out: 'ab' });
