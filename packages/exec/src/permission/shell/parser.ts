@@ -90,6 +90,7 @@ export async function ensureParserReady(): Promise<void> {
       const lang = await Language.load(grammarSource);
       const parser = new Parser();
       parser.setLanguage(lang);
+      warmUp(parser);
       return parser;
     })();
   }
@@ -113,6 +114,33 @@ function dropTree(tree: Tree | null): void {
 
 export function freeTree(root: SyntaxNode): void {
   dropTree(root.tree);
+}
+
+// The first parse after the wasm module loads was measured several times slower than the next ones;
+// under CPU load it can pass the per-parse budget and be refused as a parse error. One parse of a
+// representative long command here moves that cost to start-up, which already pays for the wasm load.
+// Bounded like every other parse (a hung warm-up would leave ensureParserReady pending, so every check
+// would wait forever); best effort, the tree is dropped.
+const WARMUP_COMMAND = 'ffmpeg -i /a/b/c.mp4 -i /d/e/f.mp4 out.mp4 && '.repeat(42) + 'ls';
+// Twenty times the parse budget, 1 s by default. Beside 64 busy loops the warm-up added about 45 ms to
+// the median start-up.
+const WARMUP_BUDGET_FACTOR = 20;
+function warmUp(parser: Parser): void {
+  const start = performance.now();
+  try {
+    dropTree(
+      parser.parse(WARMUP_COMMAND, undefined, {
+        progressCallback: () => performance.now() - start > WARMUP_BUDGET_FACTOR * parseBudgetMs,
+      }),
+    );
+  } catch {
+    /* best effort: the next parse is the cold one, as it is today */
+  }
+  try {
+    parser.reset(); // a cancelled or thrown parse is resumed by the next parse unless reset
+  } catch {
+    /* parser wedged — every later parse fails closed either way */
+  }
 }
 
 // SYNCHRONOUS parse. Requires ensureParserReady() to have resolved first; if the parser is

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import {
   parseToTree,
+  freeTree,
   ensureParserReady,
   resetParserForTest,
   setParseBudgetMsForTest,
@@ -45,12 +46,36 @@ describe('parseToTree', () => {
     setParseBudgetMsForTest(); // restore default for later tests
     // a budget-cancel calls reset(); the NEXT parse must start clean, not resume the cancelled
     // state on this memoized instance — a resumed parse could miss a dangerous root.
-    expect('root' in parseToTree('ffmpeg -i a.mp4 out.mp4')).toBe(true);
+    // a resumed parse still returns a root and reports no error; only its end offset shows that it is
+    // the cancelled parse's tree and not this command's, so the offset is what the row asserts
+    const command = 'ffmpeg -i a.mp4 out.mp4';
+    const next = parseToTree(command);
+    expect('root' in next).toBe(true);
+    if ('root' in next) {
+      expect(next.root.endIndex).toBe(command.length);
+      freeTree(next.root);
+    }
   });
   it('fails closed before the parser is initialised and parses once it is ready', async () => {
     resetParserForTest();
     expect(parseToTree('ls')).toEqual({ parseError: true });
     await ensureParserReady();
     expect('root' in parseToTree('ls')).toBe(true);
+  });
+  it('a start-up warm-up that the budget cancels leaves a clean parser for the first real parse', async () => {
+    // a 0 ms budget cancels the warm-up at its first progress check. The parser must be reset after
+    // that: a cancelled parse is resumed by the next one, which then returns a tree that runs far past
+    // this command and reports no error (the end offset is the part that shows it, not the text).
+    setParseBudgetMsForTest(0);
+    resetParserForTest();
+    await ensureParserReady();
+    setParseBudgetMsForTest();
+    const command = 'ls && rm -rf /';
+    const res = parseToTree(command);
+    expect('root' in res).toBe(true);
+    if ('root' in res) {
+      expect(res.root.endIndex).toBe(command.length);
+      freeTree(res.root);
+    }
   });
 });
