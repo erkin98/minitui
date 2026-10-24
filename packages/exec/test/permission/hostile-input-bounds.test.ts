@@ -24,28 +24,46 @@ const parsedOf = (root: CommandRoot): ParsedCommand => ({
   parseError: false,
 });
 
-// The fastest of three runs. Contention and a cold first call can only slow a run, never speed it up, so
-// the minimum is the cost of the work itself; a sink that is super-linear is slow on every run.
-const timed = <T>(run: () => T): { readonly ms: number; readonly value: T } => {
-  const start = performance.now();
-  const value = run();
-  let best = performance.now() - start;
-  for (let i = 1; i < 3; i++) {
-    const again = performance.now();
+// The fastest of nine runs, in milliseconds. Contention and a cold first call can only slow a run, never
+// speed it up, so the minimum is the cost of the work itself; a sink that is super-linear is slow on every
+// run.
+const fastest = (run: () => unknown, runs = 9): number => {
+  let best = Infinity;
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now();
     run();
-    best = Math.min(best, performance.now() - again);
+    best = Math.min(best, performance.now() - start);
   }
-  return { ms: best, value };
+  return best;
 };
 
+const timed = <T>(run: () => T): { readonly ms: number; readonly value: T } => {
+  const value = run();
+  return { ms: fastest(run, 3), value };
+};
+
+// How the cost of a sink grows with its input: the fastest run at the full size over the fastest run at
+// 1/shrink of it. Linear work grows about `shrink` times and quadratic work about `shrink` squared. A slow or
+// busy machine slows both sizes alike, so this ratio moves far less with the load than an absolute time does;
+// it is used by the rows whose absolute time was measured to come near its bound when the whole suite and
+// the other hook steps ran together. A timer cannot tell below 0.2 ms, so the smaller time is floored there.
+const growth = (build: (size: number) => () => unknown, full: number, shrink: number): number =>
+  fastest(build(full)) / Math.max(fastest(build(full / shrink)), 0.2);
+
 describe('the store-directory check is linear in the token', () => {
-  it('decides a token of 4,000 anchored groups in under 100 ms', () => {
-    const parsed = parsedOf({ name: 'cat', argv: ['cat', 'a=~/'.repeat(4000)] });
+  // 4,000 anchored groups is 16,000 characters; the split-and-join form took 584 ms and grows with the
+  // square of the groups. The cost must grow at most about linearly: eightfold for eightfold more groups,
+  // and the bound allows three times that.
+  const storeToken = (groups: number): (() => unknown) => {
+    const parsed = parsedOf({ name: 'cat', argv: ['cat', 'a=~/'.repeat(groups)] });
+    return () => checkHardFloor(parsed, [], alice);
+  };
+  it('grows at most about linearly with the number of anchored groups', () => {
     checkHardFloor(parsedOf({ name: 'ls', argv: ['ls'] }), [], alice);
-    const { ms, value } = timed(() => checkHardFloor(parsed, [], alice));
-    expect(ms).toBeLessThan(100);
-    // past the cap on anchored tails the token is treated as naming the store: the answer errs to the deny
-    expect(value.blocked).toBe(true);
+    expect(growth(storeToken, 4000, 8)).toBeLessThan(24);
+  });
+  it('past the cap on anchored tails the token is treated as naming the store: the answer errs to the deny', () => {
+    expect(storeToken(4000)()).toMatchObject({ blocked: true });
   });
   it('decides a token of 8,000 unanchored groups in under 100 ms and leaves it allowed', () => {
     const parsed = parsedOf({ name: 'cat', argv: ['cat', 'x='.repeat(8000)] });
@@ -94,16 +112,22 @@ describe('the later tokens of an opaque argument runner are judged once each', (
     expect(reasonOf('ls', '-la', 'build')).toBeUndefined();
   });
 
-  it('decides a runner followed by 2,000 path tokens in under 100 ms', () => {
+  // A candidate root and a floor rerun per token took 3.3 s for 2,000 tokens and grows with the square of
+  // them; each token is now judged once.
+  const laterTokens = (count: number): (() => unknown) => {
     const parsed = parsedOf({
       name: 'env',
-      argv: ['env', '--frob', ...Array.from({ length: 2000 }, () => '~/x')],
+      argv: ['env', '--frob', ...Array.from({ length: count }, () => '~/x')],
       opaque: true,
     });
+    return () => checkHardFloor(parsed, [], alice);
+  };
+  it('grows at most about linearly with the number of later tokens', () => {
     checkHardFloor(parsedOf({ name: 'ls', argv: ['ls'] }), [], alice);
-    const { ms, value } = timed(() => checkHardFloor(parsed, [], alice));
-    expect(ms).toBeLessThan(100);
-    expect(value.blocked).toBe(false);
+    expect(growth(laterTokens, 2000, 8)).toBeLessThan(24);
+  });
+  it('lets 2,000 harmless later tokens through', () => {
+    expect(laterTokens(2000)()).toMatchObject({ blocked: false });
   });
 });
 
