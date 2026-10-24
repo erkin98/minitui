@@ -103,6 +103,69 @@ const FFMPEG_WRAPPER = new RegExp(
   'i',
 );
 
+// ffmpeg takes any leading `[A-Za-z][A-Za-z0-9+.-]*` followed by `:` as the name of a protocol, so a
+// network input needs no double slash (`http:host/x`, `tcp:host:1`, `rtmp:host/x`, and the output side
+// `-f flv rtmp:host/x`). A single letter (`v:0`, a drive letter) and a digit-led run (`00:01:00`, `0:a`) are
+// not opened as protocols. Checked against ffmpeg 6.1.1; the local protocols below read local data only.
+// Recorded cost: a positional file name that reads like a protocol (`show:ep1.mp4`) asks, because ffmpeg
+// itself reads `show` as a protocol and fails to open the file.
+const FFMPEG_LEADING_PROTOCOL = /^([a-z][a-z0-9+.-]+):/;
+const FFMPEG_LOCAL_PROTOCOLS: ReadonlySet<string> = new Set([
+  'file',
+  'pipe',
+  'fd',
+  'data',
+  'bluray',
+]);
+
+// Inside a filtergraph only a named network protocol followed by `:` is flagged, because an option name
+// followed by a colon is ordinary (`afade=t=in:st=0`, `drawtext=text=Hello:fontsize=24`). With these
+// the list covers every network input protocol of the ffmpeg 6.1.1 build the names were read from.
+const FFMPEG_NETWORK_PROTOCOLS = [
+  'http',
+  'https',
+  'ftp',
+  'ftps',
+  'tcp',
+  'udp',
+  'tls',
+  'rtmp',
+  'rtmpe',
+  'rtmps',
+  'rtmpt',
+  'rtmpte',
+  'rtmpts',
+  'rtp',
+  'srtp',
+  'rtsp',
+  'rtsps',
+  'sctp',
+  'srt',
+  'rist',
+  'sftp',
+  'smb',
+  'scp',
+  'mmsh',
+  'mmst',
+  'gopher',
+  'gophers',
+  'ipfs',
+  'ipns',
+  'zmq',
+  'amqp',
+  'hls',
+  'icecast',
+  'httpproxy',
+  'udplite',
+  'ffrtmphttp',
+];
+const FFMPEG_NETWORK_IN_GRAPH = new RegExp(`(^|[=,;\\s])(${FFMPEG_NETWORK_PROTOCOLS.join('|')}):`);
+
+function ffmpegLeadingProtocol(text: string): boolean {
+  const name = FFMPEG_LEADING_PROTOCOL.exec(text)?.[1];
+  return name !== undefined && !FFMPEG_LOCAL_PROTOCOLS.has(name);
+}
+
 // A filtergraph unescapes a backslash before any character and takes single quotes as quoting, so
 // `http\:\/\/host` is `http://host` there and `ca'che':x` is `cache:x`; the argument is judged after both are
 // removed. Recorded limit: the input formats that read further inputs
@@ -113,7 +176,12 @@ function ffmpegNetworkInput(root: CommandRoot): boolean {
   return root.argv.slice(1).some((arg) => {
     if (arg.startsWith('-')) return false;
     const text = arg.replace(/\\(.)/gs, '$1').replace(/'/g, '').toLowerCase();
-    return text.includes('://') || FFMPEG_WRAPPER.test(text);
+    return (
+      text.includes('://') ||
+      FFMPEG_WRAPPER.test(text) ||
+      ffmpegLeadingProtocol(text) ||
+      FFMPEG_NETWORK_IN_GRAPH.test(text)
+    );
   });
 }
 

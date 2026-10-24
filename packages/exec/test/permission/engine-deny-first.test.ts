@@ -70,12 +70,13 @@ describe('createEngine', () => {
     expect(d.kind).toBe('deny');
   });
 
-  it('blocks on ask and resolves when the UI replies once (reply has no id)', async () => {
+  it('blocks on ask and resolves when the UI replies once', async () => {
     const e = createEngine({ initialRules: { rules: [] } });
-    const p = e.check(exec('ffmpeg -i a out'));
+    const asked = exec('ffmpeg -i a out');
+    const p = e.check(asked);
     const it = e.requests[Symbol.asyncIterator]();
     await it.next(); // drain the surfaced request
-    e.reply({ kind: 'once' }); // canonical reply: kind-keyed, no id
+    e.reply({ kind: 'once', requestId: asked.id }); // the reply names the request it answers
     const d = await p;
     expect(d.kind).toBe('allow');
   });
@@ -85,10 +86,11 @@ describe('createEngine', () => {
     // WITHOUT STDIN_RUNNERS the uncertain predicate is false and YOLO would silently allow — the `/`
     // is laundered through stdin, invisible to the name-based hard floor. It must reach the human.
     const e = createEngine({ initialRules: { rules: [] }, mode: 'yolo' });
-    const p = e.check(exec('echo / | xargs rm -rf'));
+    const asked = exec('echo / | xargs rm -rf');
+    const p = e.check(asked);
     const it = e.requests[Symbol.asyncIterator]();
     await it.next(); // it ASKS (surfaces a request) — did NOT auto-allow under YOLO
-    e.reply({ kind: 'reject', feedback: 'stdin-laundered target' });
+    e.reply({ kind: 'reject', feedback: 'stdin-laundered target', requestId: asked.id });
     const d = await p;
     expect(d.kind).toBe('deny');
   });
@@ -116,10 +118,11 @@ describe('createEngine', () => {
   it('always builds a grant and auto-allows the next identical command', async () => {
     const grants: string[] = [];
     const e = createEngine({ initialRules: { rules: [] }, onGrant: (r) => grants.push(r.pattern) });
-    const p = e.check(exec('ffmpeg -i a out'));
+    const asked = exec('ffmpeg -i a out');
+    const p = e.check(asked);
     const it = e.requests[Symbol.asyncIterator]();
     await it.next();
-    e.reply({ kind: 'always', cascade: true });
+    e.reply({ kind: 'always', cascade: true, requestId: asked.id });
     await p;
     expect(grants).toEqual(['ffmpeg']);
     // second command with the same cascade root resolves allow without asking
@@ -153,10 +156,11 @@ describe('createEngine', () => {
     const e = createEngine({ initialRules: { rules: [] } });
     // grant [a]lways for a SAFE rm (rm of a plain file is NOT a hard-floor target) — cascade:true
     // builds an allow grant rooted at `rm`, broad enough to match a later bare `rm`.
-    const p = e.check(exec('rm build.log'));
+    const asked = exec('rm build.log');
+    const p = e.check(asked);
     const it = e.requests[Symbol.asyncIterator]();
     await it.next();
-    e.reply({ kind: 'always', cascade: true });
+    e.reply({ kind: 'always', cascade: true, requestId: asked.id });
     expect((await p).kind).toBe('allow');
     // the grant now allows `rm`, yet a hard-floor rm ($HOME wipe) STILL denies: the hard floor is
     // engine step 1, checked BEFORE the grant triad at step 2, so an always-grant can never lift it

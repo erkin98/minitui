@@ -38,9 +38,13 @@ describe('the consent boundary, end to end through the real engine', () => {
 
   it('a reply of an unknown kind never approves', async () => {
     const e = await createPermissionEngine();
-    const pending = e.check(request('ffmpeg -i a.mp4 out.mp4'));
+    const asked = request('ffmpeg -i a.mp4 out.mp4');
+    const pending = e.check(asked);
     await e.requests[Symbol.asyncIterator]().next();
-    const forged: PermissionReply = JSON.parse('{"kind":"deny","cascade":true}');
+    // the forged reply names the live request, otherwise it would match nothing and never reach the kind rule
+    const forged: PermissionReply = JSON.parse(
+      JSON.stringify({ kind: 'deny', cascade: true, requestId: asked.id }),
+    );
     e.reply(forged);
     expect(await pending).toEqual({ kind: 'deny', reason: UNRECOGNISED });
   });

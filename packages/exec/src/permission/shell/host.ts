@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { posix } from 'node:path';
+import { storeDir } from '../secret-paths.js';
 
 // What the floor and the extractor need to know about the machine a command will run on. Both take it
 // as an optional trailing parameter whose default is read at CALL time, so a test injects a host and
@@ -7,9 +8,18 @@ import { posix } from 'node:path';
 export interface Host {
   readonly home: string;
   readonly platform: string;
+  // the program's own store directory, which no gated command may touch; computed from the environment
+  // and the home directory where the host is built, so the floor reads a value and never `process.env`
+  readonly store: string;
 }
 
-export const currentHost = (): Host => ({ home: homedir(), platform: process.platform });
+// What the shell parser needs of a host: it never reads the store directory.
+export type ParseHost = Pick<Host, 'home' | 'platform'>;
+
+export function currentHost(): Host {
+  const home = homedir();
+  return { home, platform: process.platform, store: storeDir(process.env, home) };
+}
 
 // Case folding for a file system that matches names without regard to case. Lower-casing alone leaves
 // characters such as U+017F (long s) apart from the ASCII letter they are the same name as; going

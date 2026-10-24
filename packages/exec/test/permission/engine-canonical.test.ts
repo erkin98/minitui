@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createEngine } from '../../src/permission/engine.js';
+import { createEngine, sanitizeRequest } from '../../src/permission/engine.js';
 import type { ApprovalMode, Decision, PermissionRequest } from '@minitui/types';
 
 const CANONICAL_PHRASE =
@@ -184,7 +184,40 @@ describe('a request over the size budget is denied before the parse, in every mo
     await tooLarge(request({ resolvedCommand: '(' + 'a'.repeat(4100) }));
   });
 
-  it('is judged after the canonical check: an oversize request with a control character gets that phrase', async () => {
-    await expectCanonicalDeny(request({ resolvedCommand: 'ffmpeg -i \x1b' + 'a'.repeat(5000) }));
+  it('is judged before the canonical check: an oversize request with a control character gets the size phrase', async () => {
+    await tooLarge(request({ resolvedCommand: 'ffmpeg -i \x1b' + 'a'.repeat(5000) }));
+  });
+
+  it('refuses 5,000 clean paths with the size phrase, never the control-character one', async () => {
+    const many = Array.from({ length: 5000 }, (_, i) => `/work/${i}.mp4`);
+    await tooLarge(request({ resolvedPaths: many }));
+  });
+});
+
+describe('the consent copy is a second layer, and a comment-only command still asks', () => {
+  it('strips an escape sequence from the command, a path and the summary', () => {
+    const shown = sanitizeRequest(
+      request({
+        resolvedCommand: 'ffmpeg \x1b[31m-i a.mp4',
+        resolvedPaths: ['/work/\x1b[2Jb.mp4'],
+        descriptor: {
+          danger: false,
+          resourceTemplate: 'ffmpeg',
+          summaryTemplate: 'merge \x1b]0;pwned\x07clips',
+        },
+      }),
+    );
+    expect(shown.resolvedCommand).toBe('ffmpeg -i a.mp4');
+    expect(shown.resolvedPaths).toEqual(['/work/b.mp4']);
+    expect(shown.descriptor.summaryTemplate).toBe('merge clips');
+  });
+  it('leaves a request whose strings are already canonical equal to itself', () => {
+    const clean = request();
+    expect(sanitizeRequest(clean)).toEqual(clean);
+  });
+  it('asks for a comment-only command that has no root, in every mode', async () => {
+    for (const mode of modes) {
+      expect((await outcome(request({ resolvedCommand: '# rm -rf ~' }), mode)).kind).toBe('ask');
+    }
   });
 });

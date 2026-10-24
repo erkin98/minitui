@@ -70,3 +70,14 @@ export function effectFor(set: RuleSet, value: string): Effect | undefined {
 export function exactRuleFor(set: RuleSet, raw: string): PermissionRule | undefined {
   return set.rules.find((r) => r.exact === true && r.pattern === raw);
 }
+
+// The one definition of "the same grant": every field that decides what a rule covers is equal. Identity
+// and exact are part of it: two grants for one basename bound to distinct realpaths are DISTINCT grants,
+// and an exact grant is distinct from a cascade grant with the same text. The engine de-dupes live grants
+// with it and the grants file de-dupes saved ones with it.
+export const sameGrant = (a: PermissionRule, b: PermissionRule): boolean =>
+  a.pattern === b.pattern &&
+  a.effect === b.effect &&
+  a.layer === b.layer &&
+  a.identity === b.identity &&
+  a.exact === b.exact;

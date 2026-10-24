@@ -14,7 +14,10 @@ export const CommandRootSchema = z
     // expansion other than exact `$HOME`, or an unquoted glob or brace expansion); every root in the
     // scope of a leading or standalone assignment; the inner root behind a wrapper option the table
     // does not model; a `NAME=value` operand skipped by the `env` or `sudo` peel; the synthetic root
-    // of a redirect with no command. Consumers: such a root asks; no approval mode lifts it; an allow
+    // of a redirect with no command; a relative `rm` operand in a command that also changes
+    // directory (`cd`, `pushd`) or that a wrapper option runs from another directory or another root;
+    // and a builtin that evaluates a quoted operand the host cannot read (`printf -v`, `let`, `test -v`,
+    // `read -a` or any `read` operand holding a bracket, `mapfile -C`, `readarray -C`, `compgen`). Consumers: such a root asks; no approval mode lifts it; an allow
     // rule or a grant never satisfies it; a deny rule still fires first; `always` on an uncertain ask
     // allows this request and mints no grant. The hard floor runs on every root and accepts a
     // hand-built parsed command with literal argv and no `opaque`. Omitted on a resolvable root, so
@@ -65,11 +68,14 @@ export type Decision = z.infer<typeof DecisionSchema>;
 export const ApprovalModeSchema = z.enum(['default', 'yolo']);
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
+// A reply names the request it answers (`requestId`, the id the host minted for that request). The
+// gate resolves exactly that request: a reply whose id matches no request waiting for approval
+// resolves nothing, so an answer can never approve a request the person was not shown.
 export const PermissionReplySchema = z
   .discriminatedUnion('kind', [
-    z.object({ kind: z.literal('once') }),
-    z.object({ kind: z.literal('always'), cascade: z.boolean() }),
-    z.object({ kind: z.literal('reject'), feedback: z.string() }),
+    z.object({ kind: z.literal('once'), requestId: z.string() }),
+    z.object({ kind: z.literal('always'), cascade: z.boolean(), requestId: z.string() }),
+    z.object({ kind: z.literal('reject'), feedback: z.string(), requestId: z.string() }),
   ])
   .readonly();
 export type PermissionReply = z.infer<typeof PermissionReplySchema>;

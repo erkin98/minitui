@@ -3,6 +3,7 @@ import { ensureParserReady } from '../../src/permission/shell/parser.js';
 import { parseShellCommand } from '../../src/permission/shell/roots.js';
 import { unwrapArgv } from '../../src/permission/shell/wrappers.js';
 import { checkHardFloor } from '../../src/permission/hard-floor.js';
+import { storeDir } from '../../src/permission/secret-paths.js';
 
 beforeAll(async () => {
   await ensureParserReady();
@@ -11,7 +12,11 @@ beforeAll(async () => {
 // Each list is written out here and never imported from the source, so a name silently dropped from the
 // source set turns its row red.
 
-const host = { home: '/home/erkin', platform: 'linux' } as const;
+const host = {
+  home: '/home/erkin',
+  platform: 'linux',
+  store: storeDir({}, '/home/erkin'),
+} as const;
 
 const blockedByFloor = (command: string): boolean =>
   checkHardFloor(parseShellCommand(command, host), undefined, host).blocked;

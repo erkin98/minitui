@@ -35,6 +35,13 @@ const EGRESS_BINARIES = [
   'w3m',
   'lynx',
   'links',
+  'netcat',
+  'nc.openbsd',
+  'nc.traditional',
+  'socat',
+  'openssl',
+  'ftp',
+  'rsh',
 ] as const;
 
 describe('hard-floor egress denylist breadth', () => {

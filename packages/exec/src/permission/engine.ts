@@ -9,12 +9,13 @@ import type {
 } from '@minitui/types';
 import { sanitize, CONSENT_FORBIDDEN } from '@minitui/sanitizer';
 import { parseShellCommand } from './shell/roots.js';
+import { currentHost, type Host } from './shell/host.js';
 import { ensureParserReady } from './shell/parser.js';
 import { STDIN_RUNNERS } from './shell/wrappers.js';
 import { checkHardFloor } from './hard-floor.js';
 import { resolveStatic, denyRuleFor, unsafeToolArgs, identityMismatch } from './decision.js';
 import { defaultResolveExecutable, type ResolveExecutable } from './resolve-exec.js';
-import { isBareCommandName, type RuleSet } from './rules.js';
+import { isBareCommandName, sameGrant, type RuleSet } from './rules.js';
 import { createPendingChannel } from './pending.js';
 import { exceedsConsentBudget, REQUEST_TOO_LARGE_REASON } from './consent.js';
 
@@ -23,7 +24,7 @@ import { exceedsConsentBudget, REQUEST_TOO_LARGE_REASON } from './consent.js';
 // The engine is declared as an extension of the gate port, so drift on either side fails the type check
 // instead of a consumer. check and requests come from the port; the rest is the engine's own.
 export interface PermissionEngine extends PermissionGatePort {
-  reply(reply: PermissionReply): void; // once | always(+cascade) | reject(feedback)
+  reply(reply: PermissionReply): void; // once | always(+cascade) | reject(feedback), naming its request
   setMode(mode: ApprovalMode): void;
   disposeAll(reason: string): void;
 }
@@ -36,6 +37,9 @@ export interface EngineOptions {
   // to. Defaults to `defaultResolveExecutable` (which-semantics + realpathSync); injectable so tests
   // pass a real fake (no replacement-mock) and a non-POSIX host can supply its own resolver.
   readonly resolveExecutable?: ResolveExecutable | undefined;
+  // the machine a command will run on, for the parse and the floor. Defaults to the current machine,
+  // read at each check; a test passes its own so it never writes to `process.env`.
+  readonly host?: Host | undefined;
 }
 
 // The fixed reason for a request whose text cannot be shown as it is decided on. It never holds
@@ -72,8 +76,10 @@ function isCanonicalRequest(request: unknown): boolean {
 // (SECURITY: consent shows HOST-RESOLVED values, never raw escape sequences).
 // This consent-boundary sanitize is load-bearing (do NOT weaken): rather than depend on every
 // render call-site remembering to parse, minitui routes EVERY consent string through the one
-// zero-dep sanitizer here. Keep it.
-function sanitizeRequest(req: PermissionRequest): PermissionRequest {
+// zero-dep sanitizer here. Keep it. It is a second layer behind the canonical-text check in `check`:
+// a request that reaches it holds no string the sanitiser would change, so only a direct call shows it
+// works; it is exported for that, inside the package, and is not on the barrel.
+export function sanitizeRequest(req: PermissionRequest): PermissionRequest {
   return {
     ...req,
     resolvedCommand: sanitize(req.resolvedCommand, { allow: 'none' }),
@@ -119,21 +125,14 @@ function grantFor(
   };
 }
 
-// Two rules are the same grant when every field that decides what they cover is equal. A grant that
-// is already live is not added again, so it is neither listed twice nor reported to onGrant twice.
-const sameGrant = (a: PermissionRule, b: PermissionRule): boolean =>
-  a.pattern === b.pattern &&
-  a.effect === b.effect &&
-  a.layer === b.layer &&
-  a.exact === b.exact &&
-  a.identity === b.identity;
-
 export function createEngine(opts: EngineOptions): PermissionEngine {
   let rules: PermissionRule[] = [...opts.initialRules.rules];
   let mode: ApprovalMode = opts.mode ?? 'default';
   const pending = createPendingChannel();
   const resolveExecutable = opts.resolveExecutable ?? defaultResolveExecutable; // grant-identity resolver
 
+  // A grant that is already live is not added again, so it is neither listed twice nor reported to
+  // onGrant twice.
   function addGrant(rule: PermissionRule): void {
     if (rules.some((live) => sameGrant(live, rule))) return;
     rules = [...rules, rule];
@@ -145,18 +144,21 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
   // to the security sequence.
   // eslint-disable-next-line complexity
   async function check(req: PermissionRequest): Promise<Decision> {
-    // -1. canonical text. What the person approves must be the string the engine decides on, so a
-    //     request holding a control or invisible character is denied first: before the parse, before
-    //     the hard floor, in every approval mode. The sanitised copy shown to the overlay below is a
-    //     second layer, not this control.
-    if (!isCanonicalRequest(req)) return { kind: 'deny', reason: NOT_CANONICAL_REASON };
-
-    // -0.5. size budget. A request the approval box cannot show whole is denied before the parse, in
-    //       every mode: what cannot be shown cannot be approved.
+    // -1. size budget. A request the approval box cannot show whole is denied before anything else, in
+    //     every mode: what cannot be shown cannot be approved. The check is structural and cheap, so it
+    //     runs first, and an oversize request is refused with the size reason even when it also holds a
+    //     control character.
     if (exceedsConsentBudget(req)) return { kind: 'deny', reason: REQUEST_TOO_LARGE_REASON };
 
+    // -0.5. canonical text. What the person approves must be the string the engine decides on, so a
+    //       request holding a control or invisible character is denied next: before the parse, before
+    //       the hard floor, in every approval mode. The sanitised copy shown to the overlay below is a
+    //       second layer, not this control.
+    if (!isCanonicalRequest(req)) return { kind: 'deny', reason: NOT_CANONICAL_REASON };
+
     await ensureParserReady(); // idempotent; first call pays the wasm init
-    const parsed = parseShellCommand(req.resolvedCommand);
+    const host = opts.host ?? currentHost();
+    const parsed = parseShellCommand(req.resolvedCommand, host);
 
     // 0. fail-closed degraded-parse guard. An unparseable OR unmodeled command (the positive
     //    node-kind allowlist routes ANY construct minitui does not model to parseError) is NEVER
@@ -188,7 +190,7 @@ export function createEngine(opts: EngineOptions): PermissionEngine {
     }
 
     // 1. hard floor — non-overridable, ignores mode entirely
-    const floor = checkHardFloor(parsed, req.resolvedPaths);
+    const floor = checkHardFloor(parsed, req.resolvedPaths, host);
     if (floor.blocked) return { kind: 'deny', reason: floor.reason ?? 'blocked by hard floor' };
 
     // 2. deny-first static triad over the live rules (resolveExecutable binds grant identity)

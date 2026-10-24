@@ -1,3 +1,5 @@
+import { hasBraceExpansion } from './operands.js';
+
 // Words that can stand in command-name position without being a command: made only of digits (a file
 // descriptor the grammar read as the name), a shell reserved word left behind after a wrapper peel, or
 // an assignment word (`NAME=value`). The host cannot say which binary any of them runs.
@@ -37,4 +39,4 @@ export const hasLineBreak = (token: string): boolean => /[\r\n]/.test(token);
 // A name that carries an unquoted glob character or a brace expansion (the tree check decides this
 // before the wrapper peel; this one covers the name the peel produced).
 export const hasGlobOrBrace = (name: string): boolean =>
-  /[*?[]/.test(name) || /\{[^{}]*(,|\.\.)[^{}]*\}/.test(name);
+  /[*?[]/.test(name) || hasBraceExpansion(name);

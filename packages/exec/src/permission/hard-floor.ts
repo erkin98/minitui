@@ -4,15 +4,17 @@ import { ARG_RUNNERS, normalizeCommandToken, STDIN_RUNNERS } from './shell/wrapp
 import { currentHost, foldCase, foldsCase, homeRoots, type Host } from './shell/host.js';
 import { textIsUnresolved } from './shell/operands.js';
 import {
+  ENV_FILE_NAME,
   HOME_SECRET_DIRS,
   HOME_SECRET_FILES,
-  SECRET_BASENAME_PATTERNS,
-  storeDir,
+  SECRET_FILE_NAMES,
+  isSecretFileName,
 } from './secret-paths.js';
 
 // Pure host helpers, shared with the extractor; exported here for the floor's own tests, not from the
-// package barrel.
-export { foldsCase, homeRoots };
+// package barrel. The glob matcher and tokenizer are exported for the same reason: the tests run the
+// landed code against a reference matcher.
+export { foldsCase, homeRoots, globMatcher, tokenizeGlob };
 
 // Egress binaries — never permitted, regardless of approval mode. A broad network-tool denylist;
 // keeping it at curl/wget only would be bypassed by nc/ssh/httpie in one keystroke. This is
@@ -35,6 +37,13 @@ const EGRESS = new Set([
   'w3m',
   'lynx',
   'links',
+  'netcat',
+  'nc.openbsd',
+  'nc.traditional',
+  'socat',
+  'openssl',
+  'ftp',
+  'rsh',
 ]);
 
 // bash net-redirect egress: `cat f > /dev/tcp/host/port` (the redirect target is threaded onto
@@ -73,8 +82,7 @@ function floorFor(host: Host): Floor {
   );
   const ownHome = host.home.replace(/\/+$/, '');
   const parents = new Set([...homes].filter((p) => p !== (folds ? foldCase(ownHome) : ownHome)));
-  const store = storeDir(process.env, host.home);
-  return { host, fold: folds, homes, parents, store: folds ? foldCase(store) : store };
+  return { host, fold: folds, homes, parents, store: folds ? foldCase(host.store) : host.store };
 }
 
 // HOME_ROOT above is textual-only, but roots.ts and the runner fill consent+exec holes with the
@@ -116,17 +124,11 @@ const LISTED_LOCATIONS: readonly RegExp[] = [...HOME_SECRET_DIRS, ...HOME_SECRET
 );
 
 // A path component, or the tail of one after an `=`, that is a secret file name.
-function basenameHit(path: string): boolean {
-  return path.split('/').some((component) =>
-    component.split('=').some((_, i, parts) => {
-      const tail = parts.slice(i).join('=');
-      return SECRET_BASENAME_PATTERNS.some((re) => re.test(tail));
-    }),
-  );
-}
+const basenameHit = (path: string): boolean => path.split('/').some(isSecretFileName);
 
-// The concrete names behind SECRET_BASENAME_PATTERNS, for matching a glob component against.
-const BASENAME_SECRETS = ['id_rsa', 'id_ed25519', '.env', 'credentials'];
+// The concrete secret file names, for matching a glob component against. An ending (`*.pem`) has no
+// concrete name; a glob that could spell one is left to the extractor's opaque ask.
+const BASENAME_SECRETS = [...SECRET_FILE_NAMES, ENV_FILE_NAME];
 
 // Every listed name as the components a glob can disguise (`.config/gh` is two).
 const GLOB_TARGETS: ReadonlyArray<readonly string[]> = [
@@ -177,43 +179,87 @@ function setToken(body: string): GlobToken {
   }
 }
 
+// The end (the next slash, or the end of the pattern) of the path component that holds `start`, and the
+// last `]` between `start` and that end (-1 when there is none). One forward scan, so the tokenizer stays
+// linear in the pattern however many brackets it holds.
+function componentAhead(pattern: string, start: number): { end: number; lastClose: number } {
+  let lastClose = -1;
+  let j = start;
+  for (; j < pattern.length && pattern[j] !== '/'; j++) if (pattern[j] === ']') lastClose = j;
+  return { end: j, lastClose };
+}
+
 function tokenizeGlob(pattern: string): GlobToken[] {
   const tokens: GlobToken[] = [];
+  let ahead = { end: -1, lastClose: -1 };
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
     if (c === '*') tokens.push({ kind: 'many' });
     else if (c === '?') tokens.push({ kind: 'one' });
     else if (c === '[') {
-      const slash = pattern.indexOf('/', i);
-      const limit = slash === -1 ? pattern.length : slash;
-      const end = plainSetEnd(pattern, i, limit);
-      const last = pattern.lastIndexOf(']', limit - 1);
+      if (i >= ahead.end) ahead = componentAhead(pattern, i);
+      const end = plainSetEnd(pattern, i, ahead.end);
       if (end !== -1) {
         tokens.push(setToken(pattern.slice(i + 1, end)));
         i = end;
-      } else if (last > i) {
+      } else if (ahead.lastClose > i) {
         tokens.push({ kind: 'many' });
-        i = last;
+        i = ahead.lastClose;
       } else tokens.push({ kind: 'literal', text: c });
     } else tokens.push({ kind: 'literal', text: c });
   }
   return tokens;
 }
 
-const TOKEN_SOURCE = {
-  many: '[^/]*',
-  one: '[^/]',
-} as const;
+// A glob as steps over a subject: a run of characters that holds no slash, or a test of one character.
+type GlobStep =
+  | { readonly kind: 'many' }
+  | { readonly kind: 'char'; readonly accepts: (ch: string) => boolean };
 
-// A path component with glob characters as a regular expression over one component.
-function globToRegExp(pattern: string, ignoreCase: boolean): RegExp {
-  const source = tokenizeGlob(pattern)
-    .map((token) => {
-      if (token.kind === 'literal') return token.text.replace(/[.+^${}()|[\]\\/]/g, '\\$&');
-      return token.kind === 'set' ? token.source : TOKEN_SOURCE[token.kind];
-    })
-    .join('');
-  return new RegExp(`^${source}$`, ignoreCase ? 'i' : '');
+const notSlash = (ch: string): boolean => ch !== '/';
+
+function stepOf(token: GlobToken, ignoreCase: boolean): GlobStep {
+  if (token.kind === 'many') return { kind: 'many' };
+  if (token.kind === 'one') return { kind: 'char', accepts: notSlash };
+  if (token.kind === 'literal' && !ignoreCase) {
+    const text = token.text;
+    return { kind: 'char', accepts: (ch) => ch === text };
+  }
+  const source =
+    token.kind === 'set' ? token.source : token.text.replace(/[.+^${}()|[\]\\/]/g, '\\$&');
+  const one = new RegExp(`^${source}$`, ignoreCase ? 'i' : '');
+  return { kind: 'char', accepts: (ch) => one.test(ch) };
+}
+
+// A glob as a matcher over a whole subject. It never backtracks: `reach[i]` says whether the steps read
+// so far can consume the first `i` characters of the subject, so the work is the number of steps times
+// the length of the subject whatever the pattern holds. A regular expression with one `[^/]*` per star
+// backtracks exponentially in a run of stars that ends in a character the subject lacks.
+function globMatcher(pattern: string, ignoreCase: boolean): (subject: string) => boolean {
+  const steps = tokenizeGlob(pattern).map((token) => stepOf(token, ignoreCase));
+  return (subject) => {
+    const length = subject.length;
+    let reach = new Uint8Array(length + 1);
+    reach[0] = 1;
+    for (const step of steps) {
+      const next = new Uint8Array(length + 1);
+      let any = false;
+      for (let i = 0; i <= length; i++) {
+        const ch = subject[i - 1] ?? '';
+        const reached =
+          step.kind === 'many'
+            ? reach[i] === 1 || (i > 0 && next[i - 1] === 1 && ch !== '/')
+            : i > 0 && reach[i - 1] === 1 && step.accepts(ch);
+        if (reached) {
+          next[i] = 1;
+          any = true;
+        }
+      }
+      if (!any) return false;
+      reach = next;
+    }
+    return reach[length] === 1;
+  };
 }
 
 // Whether a component can spell part of a name: a literal character or a short explicit set. A
@@ -224,6 +270,12 @@ const isSelective = (component: string): boolean =>
     (token) => token.kind === 'literal' || (token.kind === 'set' && token.selective),
   );
 
+// One glob component, read once per operand: whether it can spell part of a name, and its matcher.
+interface GlobComponent {
+  readonly selective: boolean;
+  readonly matches: (subject: string) => boolean;
+}
+
 // One window of path components against one listed name. Every glob component of the window must be
 // selective and match its part of the name; every other component must equal it. At least
 // one glob component is required: a window without one is an ordinary path, left to the list match.
@@ -232,6 +284,7 @@ function globWindowHits(
   components: readonly string[],
   start: number,
   target: readonly string[],
+  globAt: (index: number) => GlobComponent,
 ): boolean {
   let hasGlob = false;
   for (const [k, name] of target.entries()) {
@@ -239,12 +292,11 @@ function globWindowHits(
     if (component === undefined) return false;
     if (!GLOB_CHAR.test(component)) {
       if (fold(floor, component) !== fold(floor, name)) return false;
-    } else if (
-      isSelective(component) &&
-      globToRegExp(fold(floor, component), floor.fold).test(name)
-    ) {
+    } else {
+      const glob = globAt(start + k);
+      if (!glob.selective || !glob.matches(name)) return false;
       hasGlob = true;
-    } else return false;
+    }
   }
   return hasGlob;
 }
@@ -255,8 +307,20 @@ function globWindowHits(
 function globSecretHit(floor: Floor, token: string): boolean {
   if (!ANCHORED.test(token) || !GLOB_CHAR.test(token)) return false;
   const components = token.split('/');
+  const read = new Map<number, GlobComponent>();
+  const globAt = (index: number): GlobComponent => {
+    const known = read.get(index);
+    if (known !== undefined) return known;
+    const text = components[index] ?? '';
+    const glob = {
+      selective: isSelective(text),
+      matches: globMatcher(fold(floor, text), floor.fold),
+    };
+    read.set(index, glob);
+    return glob;
+  };
   return GLOB_TARGETS.some((target) =>
-    components.some((_, start) => globWindowHits(floor, components, start, target)),
+    components.some((_, start) => globWindowHits(floor, components, start, target, globAt)),
   );
 }
 
@@ -268,16 +332,28 @@ function anchoredAbsolute(floor: Floor, operand: string): string | undefined {
   return absolute.startsWith('/') ? absolute : undefined;
 }
 
+// Each anchored tail of a token costs a pass over the rest of it, so a token with more than this many
+// anchored tails (a `=` followed by `~`, `$HOME` or `/`) is treated as naming the store: the work stays
+// bounded and the answer errs toward the deny. No command a person writes holds that many.
+const MAX_ANCHORED_TAILS = 64;
+
 // Whether a token names the program's store directory or anything under it, in an absolute, `~`-anchored
 // or `$HOME`-anchored spelling, lexically (`..` resolved). A relative spelling is not caught: the
 // sandbox write-deny is the control for a command that changes directory first.
 function underStore(floor: Floor, token: string): boolean {
-  return token.split('=').some((_, i, parts) => {
-    const absolute = anchoredAbsolute(floor, parts.slice(i).join('='));
-    if (absolute === undefined) return false;
-    const resolved = fold(floor, posix.normalize(absolute));
-    return resolved === floor.store || resolved.startsWith(`${floor.store}/`);
-  });
+  let anchored = 0;
+  for (let start = 0; ; ) {
+    const absolute = anchoredAbsolute(floor, token.slice(start));
+    if (absolute !== undefined) {
+      anchored += 1;
+      if (anchored > MAX_ANCHORED_TAILS) return true;
+      const resolved = fold(floor, posix.normalize(absolute));
+      if (resolved === floor.store || resolved.startsWith(`${floor.store}/`)) return true;
+    }
+    const eq = token.indexOf('=', start);
+    if (eq === -1) return false;
+    start = eq + 1;
+  }
 }
 
 function isSecretPath(floor: Floor, p: string): boolean {
@@ -313,7 +389,7 @@ function globMayBeDotDot(floor: Floor, component: string): boolean {
   const leadsWithDot =
     component.startsWith('.') || (component.startsWith('[') && component.includes('.'));
   if (!leadsWithDot) return false;
-  return globToRegExp(component, floor.fold).test('..');
+  return globMatcher(component, floor.fold)('..');
 }
 
 // A glob operand matched as a PATTERN against the directories that must never be wiped, in addition
@@ -323,8 +399,8 @@ function globMayBeDotDot(floor: Floor, component: string): boolean {
 function globHitsFloored(floor: Floor, operand: string): boolean {
   if (!operand.startsWith('/') || !GLOB_CHAR.test(operand)) return false;
   const pattern = operand.replace(/\/+$/, '');
-  const re = globToRegExp(pattern, floor.fold);
-  return [...floor.homes].some((home) => re.test(home)) || globBeneathParent(floor, pattern);
+  const matches = globMatcher(pattern, floor.fold);
+  return [...floor.homes].some((home) => matches(home)) || globBeneathParent(floor, pattern);
 }
 
 // The same pattern read one level up: when everything before its last component can be one of the
@@ -333,8 +409,8 @@ function globHitsFloored(floor: Floor, operand: string): boolean {
 function globBeneathParent(floor: Floor, pattern: string): boolean {
   const slash = pattern.lastIndexOf('/');
   if (slash <= 0 || slash === pattern.length - 1) return false;
-  const head = globToRegExp(pattern.slice(0, slash), floor.fold);
-  return [...floor.parents].some((parent) => head.test(parent));
+  const head = globMatcher(pattern.slice(0, slash), floor.fold);
+  return [...floor.parents].some((parent) => head(parent));
 }
 
 // The lexically resolved absolute form of an operand anchored at `~`, `$HOME`, `${HOME}` or `/`: the
@@ -404,12 +480,24 @@ function rootHitsDevNet(root: CommandRoot): boolean {
 // URL is laundered through stdin. ponytail: first-non-flag heuristic — a `xargs -I {} curl` form with
 // a separated placeholder can slip this belt; the OS sandbox network policy is the real control.
 function egressBinaryOf(floor: Floor, root: CommandRoot): string | undefined {
-  const name = fold(floor, root.name);
+  return egressNameAt(floor, root.argv, 0, fold(floor, root.name));
+}
+
+// The same for the command named (already folded) by the token at index `at` of an argv. The search for
+// a stdin-fed runner's inner command stops at the first token after it that is not an option.
+function egressNameAt(
+  floor: Floor,
+  argv: readonly string[],
+  at: number,
+  name: string,
+): string | undefined {
   if (EGRESS.has(name)) return name;
-  if (STDIN_RUNNERS.has(name)) {
-    const inner = root.argv.slice(1).find((t) => !t.startsWith('-'));
-    const n = inner ? fold(floor, basename(normalizeCommandToken(inner))) : undefined;
-    if (n !== undefined && EGRESS.has(n)) return n;
+  if (!STDIN_RUNNERS.has(name)) return undefined;
+  for (let j = at + 1; j < argv.length; j++) {
+    const token = argv[j] ?? '';
+    if (token.startsWith('-')) continue;
+    const inner = fold(floor, basename(normalizeCommandToken(token)));
+    return EGRESS.has(inner) ? inner : undefined;
   }
   return undefined;
 }
@@ -430,15 +518,33 @@ function reasonForRoot(floor: Floor, root: CommandRoot): string | undefined {
 // as if it were the command name (`env -a x curl …`, `sudo --frob v rm -rf ~`).
 function reasonForLaterTokens(floor: Floor, root: CommandRoot): string | undefined {
   if (root.opaque !== true || !ARG_RUNNERS.has(fold(floor, root.name))) return undefined;
-  for (let i = 1; i < root.argv.length; i++) {
-    const candidate: CommandRoot = {
-      name: basename(normalizeCommandToken(root.argv[i] ?? '')),
-      argv: root.argv.slice(i),
-    };
-    const reason = reasonForRoot(floor, candidate);
-    if (reason !== undefined) return reason;
+  const argv = root.argv;
+  // Each token is judged once; "some token from index i on" is read from a flag per index, so the work is
+  // linear in the argv where a candidate root per index would be quadratic. The order of the checks per
+  // candidate is the order of reasonForRoot.
+  const devNetFrom = fromHere(argv, (token) => DEVNET.test(normalizeCommandToken(token)));
+  const deleteFrom = fromHere(argv, (token) => rmOperandHits(floor, token));
+  const secretFrom = fromHere(argv, (token) => isSecretPath(floor, token));
+  for (let i = 1; i < argv.length; i++) {
+    const name = fold(floor, basename(normalizeCommandToken(argv[i] ?? '')));
+    const egress = egressNameAt(floor, argv, i, name);
+    if (egress !== undefined) return `network egress via ${egress} is never permitted`;
+    if (devNetFrom[i] === true) return DEVNET_REASON;
+    if (name === 'rm' && deleteFrom[i + 1] === true) {
+      return 'recursive delete of home or root is never permitted';
+    }
+    if (secretFrom[i] === true) return 'touching a secret file is never permitted';
   }
   return undefined;
+}
+
+// flags[i] is true when the test holds for some token at index i or later.
+function fromHere(argv: readonly string[], test: (token: string) => boolean): boolean[] {
+  const flags = Array.from({ length: argv.length + 1 }, () => false);
+  for (let i = argv.length - 1; i >= 0; i--) {
+    flags[i] = flags[i + 1] === true || test(argv[i] ?? '');
+  }
+  return flags;
 }
 
 // `host` defaults to the machine the process runs on, read at call time; a caller (or a test) that
