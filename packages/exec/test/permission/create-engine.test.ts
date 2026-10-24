@@ -76,7 +76,7 @@ async function until(cond: () => boolean | Promise<boolean>, what: string): Prom
 async function approveNarrowly(engine: PermissionEngine, command: string): Promise<void> {
   const pending = engine.check({ ...exec(command), id: 'persist-1' });
   await engine.requests[Symbol.asyncIterator]().next();
-  engine.reply({ kind: 'always', cascade: false });
+  engine.reply({ kind: 'always', cascade: false, requestId: 'persist-1' });
   await pending;
 }
 

@@ -52,21 +52,21 @@ async function verdict(engine: PermissionEngine, command: string): Promise<Kind>
   return first.kind;
 }
 
+// A reply is built for the request it answers: it carries that request's id.
+type ReplyTo = (requestId: string) => PermissionReply;
+
 // Ask, then answer the surfaced request with the given reply.
-async function answer(
-  engine: PermissionEngine,
-  command: string,
-  reply: PermissionReply,
-): Promise<Kind> {
-  const pending = engine.check(request(command));
+async function answer(engine: PermissionEngine, command: string, replyTo: ReplyTo): Promise<Kind> {
+  const asked = request(command);
+  const pending = engine.check(asked);
   const iter = engine.requests[Symbol.asyncIterator]();
   await iter.next();
-  engine.reply(reply);
+  engine.reply(replyTo(asked.id));
   return (await pending).kind;
 }
 
-const narrow: PermissionReply = { kind: 'always', cascade: false };
-const broad: PermissionReply = { kind: 'always', cascade: true };
+const narrow: ReplyTo = (requestId) => ({ kind: 'always', cascade: false, requestId });
+const broad: ReplyTo = (requestId) => ({ kind: 'always', cascade: true, requestId });
 
 function build(mode: ApprovalMode = 'default', paths = resolver('/usr/bin')) {
   const grants: PermissionRule[] = [];
@@ -148,13 +148,15 @@ describe('grants are de-duplicated', () => {
   it('two pending requests answered always add one rule and call onGrant once', async () => {
     const { engine, grants } = build();
     const command = 'ffmpeg -i a.mp4 b.mp4';
-    const first = engine.check(request(command));
-    const second = engine.check(request(command));
+    const firstAsked = request(command);
+    const secondAsked = request(command);
+    const first = engine.check(firstAsked);
+    const second = engine.check(secondAsked);
     const iter = engine.requests[Symbol.asyncIterator]();
     await iter.next();
     await iter.next();
-    engine.reply(narrow);
-    engine.reply(narrow);
+    engine.reply(narrow(firstAsked.id));
+    engine.reply(narrow(secondAsked.id));
     expect([(await first).kind, (await second).kind]).toEqual(['allow', 'allow']);
     expect(grants).toHaveLength(1);
   });

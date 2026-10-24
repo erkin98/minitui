@@ -91,7 +91,7 @@ The command is the host's own resolved, shell-quoted text. Characters that could
 ### What it does not claim
 
 - **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
-- **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name, and a relative delete after a directory change, are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
+- **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
 - **Platforms.** Linux and macOS are the targets. Windows is not supported. The design is that gated execution refuses to run there; that refusal is part of the planned sandbox surface and is not in the built code yet. No macOS run has been recorded.
 - **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because the host that connects the pieces does not exist yet.
 

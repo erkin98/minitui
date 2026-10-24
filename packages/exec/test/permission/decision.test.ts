@@ -439,3 +439,50 @@ describe('ffmpeg: an escaped or embedded fetching input asks', () => {
     expect(await yoloVerdict(command, 'ffmpeg')).toBe('allow');
   });
 });
+
+// ffmpeg takes any leading `[A-Za-z][A-Za-z0-9+.-]*` followed by `:` as a protocol name (checked on
+// ffmpeg 6.1.1): `http:host/x`, `tcp:host:1` and `rtmp:host/x` open a connection, while `v:0`,
+// `00:01:00`, `0:a` and `C:/x` are "Protocol not found" (a single-letter run and a digit-led run are not
+// opened as a protocol) and `show:ep1.mp4` is read as the protocol `show` and fails. Recorded cost: a
+// positional file name that reads like a protocol asks.
+describe('ffmpeg and ffprobe: a protocol named without a double slash asks, in every mode', () => {
+  it.each([
+    'ffmpeg -i http:host/x out.mp4',
+    'ffmpeg -i tcp:host:1 out.mp4',
+    'ffmpeg -i rtmp:host/x out.mp4',
+    'ffmpeg -f flv rtmp:host/x',
+    'ffmpeg -f mpegts udp:host:1',
+    'ffmpeg -i show:ep1.mp4 out.mp4',
+    String.raw`ffmpeg -vf "movie=http\:host/x" out.mp4`,
+    String.raw`ffmpeg -vf "movie=httpproxy\:host" out.mp4`,
+    String.raw`ffmpeg -vf "movie=udplite\:host\:1" out.mp4`,
+    String.raw`ffmpeg -vf "movie=ffrtmphttp\:host" out.mp4`,
+  ])('asks for %s', async (command) => {
+    await expectAskEverywhere(command, 'ffmpeg');
+  });
+
+  it('asks for ffprobe as well', async () => {
+    await expectAskEverywhere('ffprobe -i http:host/x', 'ffprobe');
+  });
+
+  it.each([
+    'ffmpeg -vf scale=iw:-2 out.mp4',
+    'ffmpeg -af afade=t=in out.mp4',
+    'ffmpeg -filter_complex xfade=transition=fade a.mp4',
+    'ffmpeg -vf "drawtext=text=Hello:fontsize=24" out.mp4',
+    'ffmpeg -vf "subtitles=a.srt:force_style=x" out.mp4',
+    'ffmpeg -ss 00:01:00 -i a.mp4 out.mp4',
+    'ffmpeg -map 0:a -i a.mp4 out.mp4',
+    'ffmpeg -i file:a.mp4 out.mp4',
+    'ffmpeg -i pipe:0 out.mp4',
+    'ffmpeg -i a.mp4 out.mp4',
+  ])('control: keeps its verdict: %s', async (command) => {
+    expect(staticVerdict(command, 'ffmpeg')).toBe('allow');
+    expect(await yoloVerdict(command, 'ffmpeg')).toBe('allow');
+  });
+
+  it('control: ffprobe with a stream specifier keeps its verdict', async () => {
+    expect(staticVerdict('ffprobe -select_streams v:0 a.mp4', 'ffprobe')).toBe('allow');
+    expect(await yoloVerdict('ffprobe -select_streams v:0 a.mp4', 'ffprobe')).toBe('allow');
+  });
+});

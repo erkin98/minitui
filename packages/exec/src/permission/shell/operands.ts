@@ -9,8 +9,24 @@ import type { SyntaxNode } from './parser.js';
 const EXPANSION_KINDS: ReadonlySet<string> = new Set(['simple_expansion', 'expansion']);
 const EXACT_HOME = /^(\$HOME|\$\{HOME\})$/;
 const GLOB_CHAR = /[*?[]/;
-// a brace expansion: a comma list or a range between braces (`{a,b}`, `{1..3}`); a lone `{}` is literal
-const BRACE_EXPANSION = /\{[^{}]*(,|\.\.)[^{}]*\}/;
+// A brace expansion: a comma list or a range between braces (`{a,b}`, `{1..3}`); a lone `{}` is literal.
+// One pass: the text between a `{` and the next brace is checked once, and only when that brace closes it,
+// so the work is linear in a run of commas where a regular expression with two open-ended runs is not.
+export function hasBraceExpansion(text: string): boolean {
+  let open = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') open = i;
+    else if (ch === '}') {
+      if (open !== -1) {
+        const body = text.slice(open + 1, i);
+        if (body.includes(',') || body.includes('..')) return true;
+      }
+      open = -1;
+    }
+  }
+  return false;
+}
 
 const kidsOf = (node: SyntaxNode): SyntaxNode[] =>
   node.namedChildren.filter((child): child is SyntaxNode => child !== null);
@@ -33,10 +49,10 @@ export function hasUnquotedGlobOrBrace(node: SyntaxNode): boolean {
   switch (node.type) {
     case 'word':
       return (
-        GLOB_CHAR.test(withoutEscapes(node.text)) || BRACE_EXPANSION.test(withoutEscapes(node.text))
+        GLOB_CHAR.test(withoutEscapes(node.text)) || hasBraceExpansion(withoutEscapes(node.text))
       );
     case 'concatenation':
-      return kidsOf(node).some(hasUnquotedGlobOrBrace) || BRACE_EXPANSION.test(braceSkeleton(node));
+      return kidsOf(node).some(hasUnquotedGlobOrBrace) || hasBraceExpansion(braceSkeleton(node));
     case 'command_name':
       return kidsOf(node).some(hasUnquotedGlobOrBrace);
     default:
@@ -54,7 +70,7 @@ export function isUnresolved(node: SyntaxNode, scoped: boolean): boolean {
     case 'concatenation':
       return (
         kidsOf(node).some((kid) => isUnresolved(kid, scoped)) ||
-        BRACE_EXPANSION.test(braceSkeleton(node))
+        hasBraceExpansion(braceSkeleton(node))
       );
     case 'string':
       return kidsOf(node).some((kid) => EXPANSION_KINDS.has(kid.type) && isUnresolved(kid, scoped));
@@ -68,13 +84,32 @@ export function isUnresolved(node: SyntaxNode, scoped: boolean): boolean {
 // exactly `$HOME` or `${HOME}`, or a brace expansion, is unresolved.
 export function textIsUnresolved(token: string): boolean {
   const withoutHome = token.replace(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, '');
-  return withoutHome.includes('$') || withoutHome.includes('`') || BRACE_EXPANSION.test(token);
+  return withoutHome.includes('$') || withoutHome.includes('`') || hasBraceExpansion(token);
 }
 
 // A relative operand with a `..` component: with no working directory the floor cannot resolve it, so
 // the root that holds one is opaque. An operand anchored at `~`, `$HOME` or `/` is resolved lexically
 // by the floor instead.
 export function isRelativeDotDot(token: string): boolean {
-  if (/^(~|\$HOME|\$\{HOME\}|\/)/.test(token)) return false;
+  if (ANCHORED.test(token)) return false;
   return token.split('/').includes('..');
+}
+
+const ANCHORED = /^(~|\$HOME|\$\{HOME\}|\/)/;
+
+// Whether a command's argv names a path by a relative operand: one with no `~`, `$HOME` or `/` anchor. An
+// option token (`-rf`) is not an operand, except after `--`. With a working directory the host does not
+// model (after a `cd`, or under a wrapper option that sets the directory or the root), such an operand
+// names a place the host cannot see.
+export function hasRelativeOperand(argv: readonly string[]): boolean {
+  let options = true;
+  for (const token of argv.slice(1)) {
+    if (options && token === '--') {
+      options = false;
+      continue;
+    }
+    if (options && token.startsWith('-')) continue;
+    if (!ANCHORED.test(token)) return true;
+  }
+  return false;
 }

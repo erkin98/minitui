@@ -159,3 +159,43 @@ describe('a very long chained command', () => {
     }
   });
 });
+
+describe('the root of a relative delete after a change of directory or root is opaque', () => {
+  const rmRoot = (command: string) => parseShellCommand(command).roots.find((r) => r.name === 'rm');
+  it.each([
+    ['cd / && rm -rf home'],
+    ['pushd / && rm -rf home'],
+    ['cd ~/.. && rm -rf alice'],
+    ['cd / ; rm -rf -- home'],
+    ['builtin cd / && rm -rf home'],
+    ['rm -rf home; cd /'],
+    ['env -C / rm -rf home'],
+    ['env --chdir=/ rm -rf home'],
+    ['env --chdir / rm -rf home'],
+    ['sudo -D / rm -rf home'],
+    ['sudo --chdir=/ rm -rf home'],
+    ['unshare --wd=/ rm -rf home'],
+    ['unshare -w / rm -rf home'],
+    ['sudo -R / rm -rf home'],
+    ['sudo --chroot=/ rm -rf home'],
+    ['unshare -R / rm -rf home'],
+    ['unshare --root=/ rm -rf home'],
+  ])('marks the rm of %s opaque', (command) => {
+    expect(rmRoot(command)?.opaque).toBe(true);
+  });
+  it.each([
+    ['rm -rf build'],
+    ['env -i rm -rf build'],
+    ['sudo -u root rm -rf build'],
+    ['sudo -C 3 rm -rf build'],
+    ['cd / && ls home'],
+    ['cd ~ && rm -rf /home'],
+    ['cd ~ && rm -rf ~/build'],
+  ])('leaves the rm of %s as it was', (command) => {
+    expect(rmRoot(command)?.opaque).toBeUndefined();
+  });
+  it('marks only the wrapped root: env -C / ls home is not made opaque', () => {
+    const roots = parseShellCommand('env -C / ls home').roots;
+    expect(roots.find((r) => r.name === 'ls')?.opaque).toBeUndefined();
+  });
+});

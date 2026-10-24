@@ -16,17 +16,56 @@ export const HOME_SECRET_DIRS: readonly string[] = [
 ];
 
 // Single files under the home directory.
-export const HOME_SECRET_FILES: readonly string[] = ['.netrc', '.npmrc', '.git-credentials'];
-
-// File names that are secret wherever they sit: private keys, `.env` and `.env.*`, `credentials`,
-// `*.pem`. Each pattern is tested against one path component. Floor only.
-export const SECRET_BASENAME_PATTERNS: readonly RegExp[] = [
-  /^id_rsa$/,
-  /^id_ed25519$/,
-  /^\.env(\..*)?$/,
-  /^credentials$/,
-  /\.pem$/,
+export const HOME_SECRET_FILES: readonly string[] = [
+  '.netrc',
+  '.npmrc',
+  '.git-credentials',
+  '.pgpass',
+  '.pypirc',
+  '.vault-token',
 ];
+
+// File names that are secret wherever they sit, matched against a whole path component or the part of
+// one after an `=`: private keys and `credentials`. Floor only.
+export const SECRET_FILE_NAMES: readonly string[] = [
+  'id_rsa',
+  'id_ed25519',
+  'id_ecdsa',
+  'id_dsa',
+  'credentials',
+];
+
+// `.env` and every `.env.<suffix>` name, wherever it sits. Floor only.
+export const ENV_FILE_NAME = '.env';
+
+// Endings that make a file secret wherever it sits: certificates and private keys. A document that
+// merely ends in `.key` (a presentation file, an HLS key file) is floored too; recorded cost. Floor only.
+export const SECRET_SUFFIXES: readonly string[] = ['.pem', '.p12', '.pfx', '.key'];
+
+// Whether one path component names a secret file: the component, or the part of it after any `=`
+// (`dd if=id_rsa`), is a listed name or a `.env` name, or the component ends in a listed ending. Each
+// part is compared in place and an ending is tested once per component, so the work is linear in the
+// component however many `=` it holds.
+export function isSecretFileName(component: string): boolean {
+  if (SECRET_SUFFIXES.some((suffix) => component.endsWith(suffix))) return true;
+  for (let start = 0; ; ) {
+    const rest = component.length - start;
+    if (
+      SECRET_FILE_NAMES.some((name) => rest === name.length && component.startsWith(name, start))
+    ) {
+      return true;
+    }
+    if (
+      component.startsWith(ENV_FILE_NAME, start) &&
+      (rest === ENV_FILE_NAME.length || component[start + ENV_FILE_NAME.length] === '.')
+    ) {
+      return true;
+    }
+    const eq = component.indexOf('=', start);
+    if (eq === -1) return false;
+    start = eq + 1;
+  }
+}
 
 // Denied for read inside the sandbox but deliberately not floored: the floor has no broad directory
 // pattern, so `ls ~/.config` stays an ordinary command.

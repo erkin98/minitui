@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { PermissionRuleSchema, type PermissionRule } from '@minitui/types';
-import { isBareCommandName } from './rules.js';
+import { isBareCommandName, sameGrant } from './rules.js';
 import { storeDir } from './secret-paths.js';
 
 export function grantsFilePath(): string {
@@ -93,24 +93,12 @@ export async function loadGrants(file = grantsFilePath()): Promise<readonly Perm
   return (await readGrants(file)).grants;
 }
 
-function sameRule(a: PermissionRule, b: PermissionRule): boolean {
-  // identity and exact are part of the key — two grants for one basename bound to distinct realpaths
-  // are DISTINCT grants, and an exact grant is distinct from a cascade grant with the same text.
-  return (
-    a.pattern === b.pattern &&
-    a.effect === b.effect &&
-    a.layer === b.layer &&
-    a.identity === b.identity &&
-    a.exact === b.exact
-  );
-}
-
 async function writeGrant(rule: PermissionRule, file: string): Promise<void> {
   // a row the reader would refuse is never written: it would make the whole file unreadable
   if (!isGrantRow(rule)) throw new Error('the grant breaks the rules for a saved grant');
   const read = await readGrants(file);
   if (read.status === 'invalid') throw new Error(`the grants file is not valid: ${read.reason}`);
-  if (read.grants.some((r) => sameRule(r, rule))) return; // de-dupe
+  if (read.grants.some((r) => sameGrant(r, rule))) return; // de-dupe
   const next = { version: FILE_VERSION, grants: [...read.grants, rule] };
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   // symlink-safe + cross-fs-safe: write a fresh temp file IN THE TARGET DIR (same filesystem as

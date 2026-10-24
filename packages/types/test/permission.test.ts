@@ -79,7 +79,9 @@ describe('PermissionRequest', () => {
 describe('ApprovalMode / Reply / Rule', () => {
   it('parses the mode, reply, and rule models', () => {
     expect(ApprovalModeSchema.parse('yolo')).toBe('yolo');
-    expect(PermissionReplySchema.parse({ kind: 'always', cascade: true }).kind).toBe('always');
+    expect(
+      PermissionReplySchema.parse({ kind: 'always', cascade: true, requestId: 'r1' }).kind,
+    ).toBe('always');
     const rule: PermissionRule = PermissionRuleSchema.parse({
       pattern: 'ls *',
       effect: 'allow',
@@ -89,6 +91,22 @@ describe('ApprovalMode / Reply / Rule', () => {
     // Rule is the compatibility alias of PermissionRule.
     const aliased: Rule = rule;
     expect(aliased.effect).toBe('allow');
+  });
+  it('parses each reply kind with the id of the request it answers', () => {
+    const replies = [
+      { kind: 'once', requestId: 'r1' },
+      { kind: 'always', cascade: false, requestId: 'r2' },
+      { kind: 'reject', feedback: 'no', requestId: 'r3' },
+    ] as const;
+    for (const reply of replies) expect(PermissionReplySchema.parse(reply)).toEqual(reply);
+  });
+  it('rejects a reply that names no request, whatever its kind', () => {
+    expect(PermissionReplySchema.safeParse({ kind: 'once' }).success).toBe(false);
+    expect(PermissionReplySchema.safeParse({ kind: 'always', cascade: true }).success).toBe(false);
+    expect(PermissionReplySchema.safeParse({ kind: 'reject', feedback: 'no' }).success).toBe(false);
+  });
+  it('rejects a reply whose request id is not a string', () => {
+    expect(PermissionReplySchema.safeParse({ kind: 'once', requestId: 7 }).success).toBe(false);
   });
   it('round-trips the optional executable identity and omits it when absent', () => {
     const withId = PermissionRuleSchema.parse({

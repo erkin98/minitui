@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { effectFor, type RuleSet } from '../../src/permission/rules.js';
+import type { PermissionRule } from '@minitui/types';
+import { effectFor, sameGrant, type RuleSet } from '../../src/permission/rules.js';
 
 const set = (rules: RuleSet['rules']): RuleSet => ({ rules });
 
@@ -63,5 +64,31 @@ describe('effectFor — a deny written as several words', () => {
     const denyForce = set([{ pattern: 'git push --force', effect: 'deny', layer: 'user' }]);
     expect(effectFor(denyForce, 'git push --force origin')).toBe('deny');
     expect(effectFor(denyForce, 'git --no-pager push --force')).toBeUndefined();
+  });
+});
+
+describe('sameGrant — one definition of the same grant', () => {
+  const base: PermissionRule = {
+    pattern: 'ffmpeg',
+    effect: 'allow',
+    layer: 'user',
+    identity: '/usr/bin/ffmpeg',
+    exact: true,
+  };
+  it('is true for two rules equal in all five fields', () => {
+    expect(sameGrant(base, { ...base })).toBe(true);
+  });
+  it.each([
+    ['pattern', { pattern: 'ffprobe' }],
+    ['effect', { effect: 'ask' }],
+    ['layer', { layer: 'project' }],
+    ['identity', { identity: '/opt/bin/ffmpeg' }],
+    ['exact', { exact: undefined }],
+  ] as const)('is false for two rules that differ only in %s', (_field, change) => {
+    expect(sameGrant(base, { ...base, ...change })).toBe(false);
+  });
+  it('treats an absent identity as different from a bound one', () => {
+    const { identity: _identity, ...unbound } = base;
+    expect(sameGrant(base, unbound)).toBe(false);
   });
 });

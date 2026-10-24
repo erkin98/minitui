@@ -4,8 +4,13 @@ import { hasSubstitution } from './substitution.js';
 import { unwrapArgv, type PeeledWrapper } from './wrappers.js';
 import { unaccountedNodes } from './accounting.js';
 import { hasGlobOrBrace, hasLineBreak, isNonCommandName } from './names.js';
-import { hasUnquotedGlobOrBrace, isRelativeDotDot, isUnresolved } from './operands.js';
-import { currentHost, foldsCase, type Host } from './host.js';
+import {
+  hasRelativeOperand,
+  hasUnquotedGlobOrBrace,
+  isRelativeDotDot,
+  isUnresolved,
+} from './operands.js';
+import { currentHost, foldsCase, type ParseHost } from './host.js';
 
 const REDIRECT_TYPES = new Set(['file_redirect']);
 
@@ -296,9 +301,16 @@ function assignmentValues(raw: RawRoot): string[] {
 
 // Whether the host can fully account for what a root runs or touches. An assignment (a leading one, or
 // a standalone one earlier in the command) can change what runs; an operand the host cannot resolve
-// (a glob, a brace, an expansion other than exact `$HOME`) is a word the shell decides later; and a
-// relative `..` operand of rm cannot be resolved without a working directory.
-function isOpaqueByOperands(raw: RawRoot, name: string, argv: readonly string[]): boolean {
+// (a glob, a brace, an expansion other than exact `$HOME`) is a word the shell decides later; a
+// relative `..` operand of rm cannot be resolved without a working directory; and neither can any
+// relative operand of rm once the command changes directory (`directoryChanged`: it holds a `cd` or
+// `pushd`, or a wrapper option set the directory or the root for this root).
+function isOpaqueByOperands(
+  raw: RawRoot,
+  name: string,
+  argv: readonly string[],
+  directoryChanged: boolean,
+): boolean {
   const inAssignmentScope = raw.scoped || raw.assigned.length > 0;
   if (inAssignmentScope) return true;
   const unresolved = raw.owned.some(
@@ -307,7 +319,42 @@ function isOpaqueByOperands(raw: RawRoot, name: string, argv: readonly string[])
       node.type !== 'variable_assignment' &&
       isUnresolved(node, false),
   );
-  return unresolved || (name === 'rm' && argv.slice(1).some(isRelativeDotDot));
+  if (unresolved || name !== 'rm') return unresolved;
+  return argv.slice(1).some(isRelativeDotDot) || (directoryChanged && hasRelativeOperand(argv));
+}
+
+// The builtins that evaluate a quoted operand as an array subscript or a callback string, and the
+// short option that makes each of them do so. A `$(...)` inside a single-quoted operand is plain text to
+// the grammar, so no substitution node exists and the command it hides cannot be seen. `let` takes no
+// option and always evaluates its operands. `read` evaluates a subscript in any operand (`read 'a[$(id)]'`),
+// not only after `-a`. The `[` builtin and `[[` already fail to parse, so they are not in the set. Over-asking
+// on a benign `printf -v x fmt` or a `read` prompt that holds a bracket is the safe direction.
+const QUOTED_EVALUATION_OPTION: Readonly<Record<string, string>> = {
+  printf: 'v',
+  test: 'v',
+  read: 'a',
+  mapfile: 'C',
+  readarray: 'C',
+};
+
+// An option letter written alone (`-v`) or inside a cluster of single-dash letters (`-rv`).
+const hasShortOption = (token: string, letter: string): boolean =>
+  /^-[A-Za-z]+$/.test(token) && token.includes(letter, 1);
+
+function evaluatesQuotedOperand(name: string, argv: readonly string[]): boolean {
+  if (name === 'let') return true;
+  const operands = argv.slice(1);
+  if (name === 'read' && operands.some((token) => token.includes('['))) return true;
+  const letter = QUOTED_EVALUATION_OPTION[name];
+  return letter !== undefined && operands.some((token) => hasShortOption(token, letter));
+}
+
+// Whether this raw root, once its wrappers are peeled, is a command that changes the working
+// directory of the shell it runs in (`builtin cd /` peels to `cd`).
+function changesDirectory(raw: RawRoot, fold: boolean): boolean {
+  if (raw.cmd === undefined) return false;
+  const { name } = unwrapArgv([...argvOf(raw.cmd), ...raw.absorbed], fold);
+  return name === 'cd' || name === 'pushd';
 }
 
 function fail(raw: string): ParsedCommand {
@@ -349,19 +396,30 @@ function wrapperRoots(
 // bottomed out at an empty inner command; set ONLY when true, so a resolvable root keeps the plain
 // shape. Each peeled wrapper is ALSO emitted as its own non-opaque root so a managed `deny sudo`
 // still fires and no inner grant silently covers the wrapped form; the inner root stays FIRST.
-function rootsOf(raw: RawRoot, fold: boolean): CommandRoot[] | undefined {
+function rootsOf(raw: RawRoot, fold: boolean, afterCd: boolean): CommandRoot[] | undefined {
   if (raw.cmd === undefined) {
     const name = raw.operator ?? '';
     return name === '' ? undefined : [{ name, argv: [name, ...raw.targets], opaque: true }];
   }
   if (commandNameHasExpansion(raw.cmd) || commandNameHasGlob(raw.cmd)) return undefined;
   const words = [...argvOf(raw.cmd), ...raw.absorbed];
-  const { name, argv, peeled, skippedAssignment, opaque: peelOpaque } = unwrapArgv(words, fold);
+  const {
+    name,
+    argv,
+    peeled,
+    skippedAssignment,
+    setsDirectory,
+    opaque: peelOpaque,
+  } = unwrapArgv(words, fold);
   if (name.includes('$') || hasGlobOrBrace(name) || isNonCommandName(name)) return undefined;
   if ([...words, ...raw.targets].some(hasLineBreak)) return undefined;
   const extras = [...raw.targets, ...assignmentValues(raw)];
   const full = [...argv, ...extras];
-  const opaque = peelOpaque || skippedAssignment || isOpaqueByOperands(raw, name, argv);
+  const opaque =
+    peelOpaque ||
+    skippedAssignment ||
+    evaluatesQuotedOperand(name, argv) ||
+    isOpaqueByOperands(raw, name, argv, afterCd || setsDirectory);
   const inner: CommandRoot = opaque ? { name, argv: full, opaque: true } : { name, argv: full };
   return [inner, ...peeled.flatMap((wrapper) => wrapperRoots(wrapper, argv, extras))];
 }
@@ -384,8 +442,10 @@ export function extractParsedCommand(
   )
     return fail(command);
   const roots: CommandRoot[] = [];
+  // any `cd` or `pushd` anywhere in the command, before or after a delete, makes a relative delete opaque
+  const afterCd = raw.some((r) => changesDirectory(r, fold));
   for (const r of raw) {
-    const made = rootsOf(r, fold);
+    const made = rootsOf(r, fold, afterCd);
     if (made === undefined) return fail(command);
     roots.push(...made);
   }
@@ -393,7 +453,7 @@ export function extractParsedCommand(
 }
 
 // Synchronous. Requires ensureParserReady() to have resolved (createPermissionEngine awaits it).
-export function parseShellCommand(command: string, host: Host = currentHost()): ParsedCommand {
+export function parseShellCommand(command: string, host: ParseHost = currentHost()): ParsedCommand {
   // A backslash followed by a line break joins lines in the shell and splits a word in this grammar
   // (`cu\<LF>rl`), so it is refused wherever it appears, quotes included.
   if (/\\[\r\n]/.test(command)) return fail(command);

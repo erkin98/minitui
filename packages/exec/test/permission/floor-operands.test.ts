@@ -3,19 +3,32 @@ import type { ParsedCommand, PermissionRequest, PermissionRule } from '@minitui/
 import { createEngine } from '../../src/permission/engine.js';
 import { ensureParserReady } from '../../src/permission/shell/parser.js';
 import { parseShellCommand } from '../../src/permission/shell/roots.js';
-import { checkHardFloor, foldsCase, homeRoots } from '../../src/permission/hard-floor.js';
+import { storeDir } from '../../src/permission/secret-paths.js';
+import {
+  checkHardFloor,
+  foldsCase,
+  globMatcher,
+  homeRoots,
+} from '../../src/permission/hard-floor.js';
 
 beforeAll(async () => {
   await ensureParserReady();
 });
 
 type Kind = 'allow' | 'deny' | 'ask';
-type Host = { readonly home: string; readonly platform: string };
+type Host = { readonly home: string; readonly platform: string; readonly store: string };
 
-const linuxHost: Host = { home: '/home/erkin', platform: 'linux' };
-const rootHost: Host = { home: '/root', platform: 'linux' };
-const darwinHost: Host = { home: '/Users/t', platform: 'darwin' };
-const win32Host: Host = { home: 'C:\\Users\\t', platform: 'win32' };
+// A host with the default store directory (no store variable set), the one the floor used to read itself.
+const hostAt = (home: string, platform: string): Host => ({
+  home,
+  platform,
+  store: storeDir({}, home),
+});
+
+const linuxHost: Host = hostAt('/home/erkin', 'linux');
+const rootHost: Host = hostAt('/root', 'linux');
+const darwinHost: Host = hostAt('/Users/t', 'darwin');
+const win32Host: Host = hostAt('C:\\Users\\t', 'win32');
 
 let counter = 0;
 const request = (command: string): PermissionRequest => ({
@@ -218,7 +231,7 @@ describe('the home directories beside the user own are denied for rm', () => {
   });
 
   it('does not floor the children of the user own home when that home is itself /home', () => {
-    const bare: Host = { home: '/home', platform: 'linux' };
+    const bare: Host = hostAt('/home', 'linux');
     expect(floor('rm -rf /home/x', bare).blocked).toBe(false);
     expect(floor('rm -rf /home', bare).blocked).toBe(true);
     expect(floor('rm -rf /Users/x', bare).blocked).toBe(true);
@@ -235,7 +248,7 @@ describe('the home directories beside the user own are denied for rm', () => {
   });
 
   it('floors a sibling of a home that sits outside /home and /Users', () => {
-    const srvHost: Host = { home: '/srv/people/erkin', platform: 'linux' };
+    const srvHost: Host = hostAt('/srv/people/erkin', 'linux');
     expect(floor('rm -rf /srv/people/bob', srvHost).blocked).toBe(true);
     expect(floor('rm -rf ~/../bob', srvHost).blocked).toBe(true);
     expect(floor('rm -rf /srv/people/bob/build', srvHost).blocked).toBe(false);
@@ -309,7 +322,7 @@ describe('the floor knows the host', () => {
     expect(floor('SUDO rm -rf /', win32Host).blocked).toBe(true);
   });
   it('floors the parent of a home directory that sits outside /home and /Users', () => {
-    const srvHost: Host = { home: '/srv/people/erkin', platform: 'linux' };
+    const srvHost: Host = hostAt('/srv/people/erkin', 'linux');
     expect(floor('rm -rf /srv/people', srvHost).blocked).toBe(true);
     expect(floor('rm -rf /srv/people/erkin', srvHost).blocked).toBe(true);
     expect(floor('rm -rf /srv/people/erkin/build', srvHost).blocked).toBe(false);
@@ -433,5 +446,160 @@ describe('the exported floor refuses what it was handed unparsed', () => {
     expect(lone.reason).toBe(other.reason);
     expect(lone.reason).not.toContain('x');
     expect(lone.reason).not.toContain('cat');
+  });
+});
+
+// Wall-clock cost of the floor alone. The command is parsed, and the floor warmed once, before the clock
+// starts, so only the glob work is timed. Only `Date` is frozen in tests; `performance.now` is real.
+const alice: Host = hostAt('/home/alice', 'linux');
+
+function timedFloor(
+  parsed: ParsedCommand,
+  paths: readonly string[],
+  host: Host,
+): { readonly ms: number; readonly blocked: boolean } {
+  // the fastest of three runs: contention and a cold first call only slow a run, never speed it up
+  const start = performance.now();
+  const verdict = checkHardFloor(parsed, paths, host);
+  let best = performance.now() - start;
+  for (let i = 1; i < 3; i++) {
+    const again = performance.now();
+    checkHardFloor(parsed, paths, host);
+    best = Math.min(best, performance.now() - again);
+  }
+  return { ms: best, blocked: verdict.blocked };
+}
+
+describe('the floor glob match is bounded work', () => {
+  const stars = (count: number): string => '*'.repeat(count);
+
+  beforeAll(() => {
+    checkHardFloor(parseShellCommand('ls x', alice), [], alice);
+  });
+
+  it('decides an argv token of sixteen stars and a letter no name holds in under 50 ms', () => {
+    const parsed = parseShellCommand(`cat ~/.${stars(16)}Z`, alice);
+    const { ms, blocked } = timedFloor(parsed, [], alice);
+    expect(ms).toBeLessThan(50);
+    expect(blocked).toBe(false);
+  });
+
+  it('decides a resolved path of fourteen stars and a letter no name holds in under 50 ms', () => {
+    const parsed = parseShellCommand('ls x', alice);
+    const { ms, blocked } = timedFloor(parsed, [`/home/alice/.${stars(14)}Z`], alice);
+    expect(ms).toBeLessThan(50);
+    expect(blocked).toBe(false);
+  });
+
+  it('decides an rm operand of two hundred stars and a letter no name holds in under 50 ms', () => {
+    const parsed = parseShellCommand(`rm -rf /h${stars(200)}Z`, alice);
+    const { ms, blocked } = timedFloor(parsed, [], alice);
+    expect(ms).toBeLessThan(50);
+    expect(blocked).toBe(false);
+  });
+
+  // The consent size budget: 32 resolved paths of 1,024 characters, almost all stars. Written once the
+  // matcher was bounded: against the backtracking form this row does not return.
+  it('decides the consent size budget of star-heavy resolved paths in under one second', () => {
+    const paths = Array.from({ length: 32 }, () => `/home/alice/.${stars(1010)}Z`);
+    expect(paths[0]?.length).toBe(1024);
+    const { ms, blocked } = timedFloor(parseShellCommand('ls x', alice), paths, alice);
+    expect(ms).toBeLessThan(1000);
+    expect(blocked).toBe(false);
+  });
+
+  // The verdict of every glob form the floor already judged does not move.
+  it.each([
+    ['cat ~/.ss?/id_rs?', true],
+    ['cat ~/.ssh*/x', true],
+    ['cat ~/.net*', true],
+    ['cat ~/.confi?/gh', true],
+    ['cat ~/.s[s]h/id_rsa', true],
+    ['cat ~/.s[!x]h/id_rsa', true],
+    ['cat ~/.[a-z]sh/id_rsa', true],
+    ['rm -rf /ho*', true],
+    ['rm -rf /ho*/x', true],
+    ['rm -rf /h?me/x*', true],
+    ['rm -rf /home/erki*', true],
+    ['rm -rf /[h]ome', true],
+    ['rm -rf /ho[m]e/erk*', true],
+    ['rm -rf /*', true],
+    ['rm -rf ~/*', true],
+    ['cat ~/.config/*', false],
+    ['ls ~/Videos/*', false],
+    ['rm -rf /tmp/h*', false],
+  ] as const)('keeps the verdict of %s', (command, expected) => {
+    expect(floor(command, linuxHost).blocked).toBe(expected);
+  });
+});
+
+describe('the glob matcher reads one path component per star', () => {
+  it('lets a star stand for any run of characters inside one component', () => {
+    expect(globMatcher('/ho*/x', false)('/home/x')).toBe(true);
+    expect(globMatcher('/ho*', false)('/home')).toBe(true);
+    expect(globMatcher('*', false)('')).toBe(true);
+  });
+  it('never lets a star or a question mark cross a separator', () => {
+    expect(globMatcher('/ho*/x', false)('/home/a/x')).toBe(false);
+    expect(globMatcher('*', false)('a/b')).toBe(false);
+    expect(globMatcher('a?b', false)('a/b')).toBe(false);
+  });
+  it('reads a set as the characters it lists and a negated set as any one character', () => {
+    expect(globMatcher('.s[s]h', false)('.ssh')).toBe(true);
+    expect(globMatcher('.s[s]h', false)('.sxh')).toBe(false);
+    expect(globMatcher('.s[!x]h', false)('.sqh')).toBe(true);
+  });
+  it('folds case only when it is told to', () => {
+    expect(globMatcher('H*', true)('home')).toBe(true);
+    expect(globMatcher('H*', false)('home')).toBe(false);
+  });
+});
+
+// The floor has no working-directory model. A relative rm operand in a command that also changes
+// directory, or that runs under a wrapper option which sets the working directory or the root, names a
+// place the host cannot see, so that rm asks in every mode (an opaque root), as a relative `..` already does.
+describe('a relative delete after a change of directory or root asks', () => {
+  it.each([
+    ['cd / && rm -rf home', ['cd', 'rm']],
+    ['pushd / && rm -rf home', ['pushd', 'rm']],
+    ['cd ~/.. && rm -rf alice', ['cd', 'rm']],
+    ['cd / ; rm -rf -- home', ['cd', 'rm']],
+    ['builtin cd / && rm -rf home', ['builtin', 'rm']],
+    ['rm -rf home; cd /', ['rm', 'cd']],
+    ['cd build && rm -rf out', ['cd', 'rm']],
+  ] as const)('asks for %s in YOLO and under a grant for every name', async (command, names) => {
+    expect(await bothModes(command, ...names)).toEqual(['ask', 'ask']);
+  });
+
+  it.each([
+    ['env -C / rm -rf home', ['env', 'rm']],
+    ['env --chdir=/ rm -rf home', ['env', 'rm']],
+    ['env --chdir / rm -rf home', ['env', 'rm']],
+    ['sudo -D / rm -rf home', ['sudo', 'rm']],
+    ['sudo --chdir=/ rm -rf home', ['sudo', 'rm']],
+    ['unshare --wd=/ rm -rf home', ['unshare', 'rm']],
+    ['unshare -w / rm -rf home', ['unshare', 'rm']],
+    ['sudo -R / rm -rf home', ['sudo', 'rm']],
+    ['sudo --chroot=/ rm -rf home', ['sudo', 'rm']],
+    ['unshare -R / rm -rf home', ['unshare', 'rm']],
+    ['unshare --root=/ rm -rf home', ['unshare', 'rm']],
+  ] as const)('asks for %s in YOLO and under a grant for every name', async (command, names) => {
+    expect(await bothModes(command, ...names)).toEqual(['ask', 'ask']);
+  });
+
+  // Controls: these keep the verdict they have today.
+  it.each([
+    ['rm -rf build', ['rm'], ['allow', 'allow']],
+    ['env -i rm -rf build', ['env', 'rm'], ['allow', 'allow']],
+    ['sudo -u root rm -rf build', ['sudo', 'rm'], ['allow', 'allow']],
+    ['sudo -C 3 rm -rf build', ['sudo', 'rm'], ['allow', 'allow']],
+    ['env -C / ls home', ['env', 'ls'], ['allow', 'allow']],
+    ['cat notes.txt', ['cat'], ['allow', 'allow']],
+    ['rm -rf /home', ['rm'], ['deny', 'deny']],
+    ['cd ~ && rm -rf /home', ['cd', 'rm'], ['deny', 'deny']],
+    ['env -C / rm -rf /home', ['env', 'rm'], ['deny', 'deny']],
+    ['sudo -R / rm -rf /home', ['sudo', 'rm'], ['deny', 'deny']],
+  ] as const)('keeps the verdict of %s', async (command, names, expected) => {
+    expect(await bothModes(command, ...names)).toEqual(expected);
   });
 });
