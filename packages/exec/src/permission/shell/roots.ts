@@ -335,6 +335,7 @@ const QUOTED_EVALUATION_OPTION: Readonly<Record<string, string>> = {
   read: 'a',
   mapfile: 'C',
   readarray: 'C',
+  wait: 'p',
 };
 
 // An option letter written alone (`-v`), inside a cluster of single-dash letters (`-rv`), or with its
