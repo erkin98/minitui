@@ -17,7 +17,7 @@ export const CommandRootSchema = z
     // of a redirect with no command; a relative `rm` operand in a command that also changes
     // directory (`cd`, `pushd`) or that a wrapper option runs from another directory or another root;
     // and a builtin that evaluates a quoted operand the host cannot read (`printf -v`, `let`, `test -v`,
-    // `read -a` or any `read` operand holding a bracket, `mapfile -C`, `readarray -C`, `compgen`, and a declaration builtin reached through `builtin` or `command`). Consumers: such a root asks; no approval mode lifts it; an allow
+    // `read -a` or any `read` operand holding a bracket, `mapfile -C`, `readarray -C`, `wait -p`, `compgen`, and a declaration builtin reached through `builtin` or `command`). Consumers: such a root asks; no approval mode lifts it; an allow
     // rule or a grant never satisfies it; a deny rule still fires first; `always` on an uncertain ask
     // allows this request and mints no grant. The hard floor runs on every root and accepts a
     // hand-built parsed command with literal argv and no `opaque`. Omitted on a resolvable root, so

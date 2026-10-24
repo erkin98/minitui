@@ -64,6 +64,8 @@ describe('builtins that evaluate a quoted operand ask in every mode', () => {
     ["mapfile -C 'id' -c 1 a", 'mapfile'],
     ["readarray -C 'id' -c 1 a", 'readarray'],
     ["read 'a[$(id)]'", 'read'],
+    ["wait -n -p 'a[$(id)]'", 'wait'],
+    ["wait -p'a[$(id)]' %1", 'wait'],
     ["compgen -W '$(id)'", 'compgen'],
     ["compgen -C 'id' x", 'compgen'],
   ])('asks for %s', async (command, word) => {
@@ -89,8 +91,9 @@ describe('builtins that evaluate a quoted operand ask in every mode', () => {
     ["builtin readonly 'a[$(id)]'=1", 'builtin'],
     ["builtin export 'a[$(id)]'", 'builtin'],
     ["builtin unset 'a[$(id)]'", 'builtin'],
+    ["builtin wait -n -p 'a[$(id)]'", 'builtin'],
     ["command declare 'a[$(id)]'=1", 'command'],
-  ])('asks for a declaration builtin reached through a wrapper: %s', async (command, word) => {
+  ])('asks for a builtin reached through a wrapper: %s', async (command, word) => {
     expect(await bothModes(command, word)).toEqual(['ask', 'ask']);
     expect(parseShellCommand(command).roots[0]?.opaque).toBe(true);
   });
@@ -107,6 +110,8 @@ describe('builtins that evaluate a quoted operand ask in every mode', () => {
     ['read -r line', 'read'],
     ['echo hello', 'echo'],
     ['mapfile -t lines', 'mapfile'],
+    ['wait -n', 'wait'],
+    ['wait %1', 'wait'],
   ])('keeps the verdict of %s', async (command, word) => {
     expect(await bothModes(command, word)).toEqual(['allow', 'allow']);
     expect(parseShellCommand(command).roots[0]?.opaque).toBeUndefined();
