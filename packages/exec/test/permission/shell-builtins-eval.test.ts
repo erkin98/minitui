@@ -44,10 +44,14 @@ async function verdictOf(
   return first.kind;
 }
 
-// YOLO with no rules, and default mode with a grant for the command word.
-async function bothModes(command: string, word: string): Promise<[Kind, Kind]> {
-  const grant: PermissionRule = { pattern: word, effect: 'allow', layer: 'user' };
-  return [await verdictOf(command, 'yolo'), await verdictOf(command, 'default', [grant])];
+// YOLO with no rules, and default mode with a grant for each command word.
+async function bothModes(command: string, ...words: string[]): Promise<[Kind, Kind]> {
+  const grants: PermissionRule[] = words.map((pattern) => ({
+    pattern,
+    effect: 'allow',
+    layer: 'user',
+  }));
+  return [await verdictOf(command, 'yolo'), await verdictOf(command, 'default', grants)];
 }
 
 describe('builtins that evaluate a quoted operand ask in every mode', () => {
@@ -67,6 +71,30 @@ describe('builtins that evaluate a quoted operand ask in every mode', () => {
     expect(parseShellCommand(command).roots[0]?.opaque).toBe(true);
   });
 
+  // The option's operand may be written attached to it (`-v'a[...]'`, `-C'cmd'`): bash runs it too.
+  it.each([
+    ["printf -v'a[$(id)]' x", 'printf'],
+    ["mapfile -C'rm -rf ~' -c 1 a", 'mapfile'],
+    ['readarray -Cid -c1 a', 'readarray'],
+    ["read -ra'x[$(id)]'", 'read'],
+  ])('asks for an attached operand: %s', async (command, word) => {
+    expect(await bothModes(command, word)).toEqual(['ask', 'ask']);
+  });
+
+  // A declaration builtin written plainly is refused by the grammar (a parse error), but `builtin` and
+  // `command` peel to it as an ordinary command, and bash evaluates a subscript in its operand.
+  it.each([
+    ["builtin declare 'a[$(id)]'=1", 'builtin'],
+    ["builtin typeset 'a[$(id)]'=1", 'builtin'],
+    ["builtin readonly 'a[$(id)]'=1", 'builtin'],
+    ["builtin export 'a[$(id)]'", 'builtin'],
+    ["builtin unset 'a[$(id)]'", 'builtin'],
+    ["command declare 'a[$(id)]'=1", 'command'],
+  ])('asks for a declaration builtin reached through a wrapper: %s', async (command, word) => {
+    expect(await bothModes(command, word)).toEqual(['ask', 'ask']);
+    expect(parseShellCommand(command).roots[0]?.opaque).toBe(true);
+  });
+
   it('asks for a bare let, which takes no option', async () => {
     expect(await bothModes('let', 'let')).toEqual(['ask', 'ask']);
   });
@@ -78,8 +106,18 @@ describe('builtins that evaluate a quoted operand ask in every mode', () => {
     ['read x', 'read'],
     ['read -r line', 'read'],
     ['echo hello', 'echo'],
+    ['mapfile -t lines', 'mapfile'],
   ])('keeps the verdict of %s', async (command, word) => {
     expect(await bothModes(command, word)).toEqual(['allow', 'allow']);
+    expect(parseShellCommand(command).roots[0]?.opaque).toBeUndefined();
+  });
+
+  // a wrapper in front of an ordinary command changes nothing
+  it.each([
+    ['builtin echo hello', ['builtin', 'echo']],
+    ['command ls', ['command', 'ls']],
+  ] as const)('keeps the verdict of %s', async (command, words) => {
+    expect(await bothModes(command, ...words)).toEqual(['allow', 'allow']);
     expect(parseShellCommand(command).roots[0]?.opaque).toBeUndefined();
   });
 });

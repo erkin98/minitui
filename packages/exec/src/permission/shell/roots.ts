@@ -337,12 +337,25 @@ const QUOTED_EVALUATION_OPTION: Readonly<Record<string, string>> = {
   readarray: 'C',
 };
 
-// An option letter written alone (`-v`) or inside a cluster of single-dash letters (`-rv`).
+// An option letter written alone (`-v`), inside a cluster of single-dash letters (`-rv`), or with its
+// operand attached (`-va[...]`, `-Ccmd`): the letters that open the token are the cluster, whatever follows.
 const hasShortOption = (token: string, letter: string): boolean =>
-  /^-[A-Za-z]+$/.test(token) && token.includes(letter, 1);
+  (/^-([A-Za-z]+)/.exec(token)?.[1] ?? '').includes(letter);
+
+// The declaration builtins. The grammar refuses them written plainly (a parse error), but `builtin` and
+// `command` peel to them as ordinary commands, and bash evaluates a subscript in their operands
+// (`builtin declare 'a[$(...)]'=1`). Reached through a wrapper they are opaque: they ask.
+const DECLARATION_BUILTINS: ReadonlySet<string> = new Set([
+  'declare',
+  'typeset',
+  'local',
+  'readonly',
+  'export',
+  'unset',
+]);
 
 function evaluatesQuotedOperand(name: string, argv: readonly string[]): boolean {
-  if (name === 'let') return true;
+  if (name === 'let' || DECLARATION_BUILTINS.has(name)) return true;
   const operands = argv.slice(1);
   if (name === 'read' && operands.some((token) => token.includes('['))) return true;
   const letter = QUOTED_EVALUATION_OPTION[name];
