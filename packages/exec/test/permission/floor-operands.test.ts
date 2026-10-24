@@ -500,12 +500,17 @@ describe('the floor glob match is bounded work', () => {
 
   // The consent size budget: 32 resolved paths of 1,024 characters, almost all stars. Written once the
   // matcher was bounded: against the backtracking form this row does not return.
-  it('decides the consent size budget of star-heavy resolved paths in under one second', () => {
-    const paths = Array.from({ length: 32 }, () => `/home/alice/.${stars(1010)}Z`);
-    expect(paths[0]?.length).toBe(1024);
-    const { ms, blocked } = timedFloor(parseShellCommand('ls x', alice), paths, alice);
-    expect(ms).toBeLessThan(1000);
-    expect(blocked).toBe(false);
+  it('decides the consent size budget of star-heavy resolved paths, and the cost grows at most quadratically with their length', () => {
+    const pathsOf = (length: number): string[] =>
+      Array.from({ length: 32 }, () => `/home/alice/.${stars(length - 14)}Z`);
+    expect(pathsOf(1024)[0]?.length).toBe(1024);
+    const parsed = parseShellCommand('ls x', alice);
+    expect(timedFloor(parsed, pathsOf(1024), alice).blocked).toBe(false);
+    // A match is stars x subject characters, so doubling the length costs about four times as much; the
+    // bound allows three times that. The ratio, not an absolute time, because a busy machine slows both
+    // lengths alike (the absolute time was 200 ms under coverage, against a 1,000 ms bound).
+    const costOf = (length: number): number => timedFloor(parsed, pathsOf(length), alice).ms;
+    expect(costOf(1024) / Math.max(costOf(512), 0.2)).toBeLessThan(12);
   });
 
   // The verdict of every glob form the floor already judged does not move.
