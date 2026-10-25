@@ -115,6 +115,7 @@ export const videoMergeCatalog: MinituiCatalog = defineMinituiCatalog({
       // auto-fire it (an agent-widen to remoteOnly is rejected by the visibility
       // check). Every other component defaults to the clientOnly field-visibility class.
       callableFrom: 'clientOnly',
+      statusPointers: { progress: '/merge/progress', status: '/merge/status' },
     }),
   },
 });

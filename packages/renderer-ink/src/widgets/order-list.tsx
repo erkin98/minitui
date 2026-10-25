@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useBoundProp, useFocus } from '@json-render/ink';
 import type { WidgetProps } from './command-preview.js';
+import { displayText } from './display-text.js';
 import { useReportFocus } from '../focus-capture.js';
 
 // Copy with entries i and j exchanged. The undefined guard narrows the indexed reads
@@ -54,7 +55,7 @@ export const OrderList: React.FC<WidgetProps> = ({ element, emit, bindings }) =>
       {items.map((it, i) => (
         <Text key={`${it}-${i}`} inverse={isActive && i === cursor}>
           {isActive && i === cursor ? '> ' : '  '}
-          {i + 1}. {it}
+          {i + 1}. {displayText(it)}
         </Text>
       ))}
     </Box>

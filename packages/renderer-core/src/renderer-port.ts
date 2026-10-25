@@ -6,14 +6,15 @@ import type { LifecycleEmitter } from './events/emitter.js';
 /**
  * Why a renderer refuses to mount or update. A renderer refuses by throwing an Error whose `code` is
  * a member, before any render, at mount and at update. The host treats the first two codes as
- * builder errors and rethrows them; the other three go to the repair path.
+ * builder errors and rethrows them; the other four go to the repair path.
  */
 export type RendererRefusalCode =
   | 'unbound-component'
   | 'initial-state-unsupported'
   | 'not-a-tree'
   | 'non-canonical-key'
-  | 'watch-unsupported';
+  | 'watch-unsupported'
+  | 'off-catalog';
 
 /**
  * THE swap boundary. No React or Ink appears in any signature — renderer-ink is

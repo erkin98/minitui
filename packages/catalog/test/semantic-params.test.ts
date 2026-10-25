@@ -17,6 +17,7 @@ describe('action params are checked at generation', () => {
     pick: true,
     index: 0,
     todos: [],
+    merge: { progress: 0, status: '' },
   };
   const press = (action: string, params?: Record<string, JsonValue>): AppSpec => ({
     root: 'b',
@@ -59,10 +60,6 @@ describe('action params are checked at generation', () => {
 
   it.each([
     [
-      'literal params',
-      press('merge', { inputs: ['/abs/a.mp4', '/abs/b.mp4'], codec: 'h264', output: '/abs/o.mp4' }),
-    ],
-    [
       'state references',
       press('merge', {
         inputs: { $state: '/inputs' },
@@ -73,22 +70,6 @@ describe('action params are checked at generation', () => {
     [
       'a reference to a number',
       press('removeState', { statePath: '/todos', index: { $state: '/index' } }),
-    ],
-    [
-      'a complete conditional',
-      press('merge', {
-        inputs: ['/abs/a.mp4', '/abs/b.mp4'],
-        codec: { $cond: { $state: '/pick' }, $then: 'h264', $else: 'vp9' },
-        output: '/abs/o.mp4',
-      }),
-    ],
-    [
-      'markers inside a literal array',
-      press('merge', {
-        inputs: [{ $state: '/inputs/0' }, { $state: '/inputs/1' }],
-        codec: 'h264',
-        output: '/abs/o.mp4',
-      }),
     ],
     [
       'pushState with $id',
@@ -105,6 +86,55 @@ describe('action params are checked at generation', () => {
   ])('accepts %s', (_name, spec) => {
     expect(codes(check(spec))).not.toContain('bad-params');
     expect(check(spec)).toEqual([]);
+  });
+
+  const planCatalog = defineMinituiCatalog({
+    id: 'plan',
+    components: {
+      Button: {
+        props: z.object({ label: z.string() }).strict(),
+        slots: [],
+        description: 'btn',
+        trustTier: 'interactive',
+      },
+    },
+    actions: {
+      plan: {
+        params: z.object({
+          inputs: z.array(z.string()).min(2),
+          codec: z.string(),
+          output: z.string(),
+        }),
+        description: 'plan',
+        kind: 'exec-local',
+        permission: { danger: false, resourceTemplate: 'plan', summaryTemplate: 'plan' },
+      },
+    },
+  });
+
+  it.each([
+    [
+      'literal params',
+      press('plan', { inputs: ['/abs/a.mp4', '/abs/b.mp4'], codec: 'h264', output: '/abs/o.mp4' }),
+    ],
+    [
+      'a complete conditional',
+      press('plan', {
+        inputs: ['/abs/a.mp4', '/abs/b.mp4'],
+        codec: { $cond: { $state: '/pick' }, $then: 'h264', $else: 'vp9' },
+        output: '/abs/o.mp4',
+      }),
+    ],
+    [
+      'markers inside a literal array',
+      press('plan', {
+        inputs: [{ $state: '/inputs/0' }, { $state: '/inputs/1' }],
+        codec: 'h264',
+        output: '/abs/o.mp4',
+      }),
+    ],
+  ])('accepts %s for an action with no template holes', (_name, spec) => {
+    expect(checkSemantics(spec, planCatalog, state)).toEqual([]);
   });
 
   it('accepts a marker nested in an object param', () => {

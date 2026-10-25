@@ -15,7 +15,10 @@ export type { WidgetProps };
 // STATE strings are sanitized UPSTREAM at the transport seam BEFORE they reach the
 // store — so a state-bound string (including the Markdown widget's live re-lexed text)
 // can never carry raw control chars to the screen. This is the security contract: do
-// NOT add per-widget sanitize.
+// NOT add per-widget sanitize. Carriage returns and format characters are a display matter, removed
+// at the point of drawing: each widget here passes the text it draws through displayText, and the
+// mount wraps every other factory in withDisplayText. A value written back through a binding is
+// never stripped.
 // The 4 CUSTOM CATALOG widgets (agent-placeable). CommandPreview is NOT here — it is
 // host chrome (exported from the package barrel directly; its mount site is a deferred
 // product decision, none is wired yet), so a spec cannot place it.
@@ -29,6 +32,11 @@ const CUSTOM: Record<string, ComponentType<WidgetProps>> = {
   // prop `progress` (not `value`).
   ProgressBar: ProgressWidget,
 };
+
+// The factories that draw their own text through displayText; the mount wraps every other one.
+export const SELF_DISPLAYING: ReadonlySet<ComponentType<WidgetProps>> = new Set(
+  Object.values(CUSTOM),
+);
 
 export function createInkBinding(
   catalog: MinituiCatalog,

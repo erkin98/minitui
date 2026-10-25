@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import { displayText } from './display-text.js';
 
 // json-render's REAL calling convention (its ComponentRenderProps), structurally narrowed
 // to what the custom widgets read. emit takes ONE arg — the event name; write-back goes
@@ -22,7 +23,7 @@ export const CommandPreview: React.FC<WidgetProps> = ({ element }) => {
   const command = typeof p.command === 'string' ? p.command : '';
   return (
     <Box borderStyle="round" paddingX={1}>
-      <Text color="cyan">{command}</Text>
+      <Text color="cyan">{displayText(command)}</Text>
     </Box>
   );
 };

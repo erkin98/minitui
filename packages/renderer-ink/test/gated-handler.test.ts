@@ -135,6 +135,42 @@ describe('gatedHandler', () => {
     });
   });
 
+  // the progress event a handler emits when the dispatcher reports one progress step
+  async function progressEventFor(message: string | undefined): Promise<ActionLifecycleEvent> {
+    const events: ActionLifecycleEvent[] = [];
+    const dispatcher: ActionDispatcher = {
+      dispatch: async (_name, ctx) => {
+        ctx.onEvent?.(
+          message === undefined
+            ? { kind: 'progress', value: 0.5 }
+            : { kind: 'progress', value: 0.5, message },
+        );
+        return { status: 'settled' as const, result: 'ok' };
+      },
+    };
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: [] }, 'btn-merge');
+    const progress = events.find((e) => e.phase === 'progress');
+    if (progress === undefined) throw new Error('no progress event was emitted');
+    return progress;
+  }
+
+  it('forwards the progress message, sanitised', async () => {
+    const event = await progressEventFor(`frame=10${String.fromCharCode(27)}[31m`);
+    expect(event).toMatchObject({ phase: 'progress', progress: 0.5, message: 'frame=10' });
+  });
+
+  it('a progress event without a message carries no message key', async () => {
+    const event = await progressEventFor(undefined);
+    expect('message' in event).toBe(false);
+  });
+
   it('rejects invalid params BEFORE dispatch — parse-before-execute fails closed', async () => {
     const { dispatcher, calls } = makeDispatcher({ status: 'settled', result: 'ok' });
     const events: ActionLifecycleEvent[] = [];

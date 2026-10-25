@@ -4,7 +4,7 @@ import type { AppSpec, SpecElement } from '../contract/spec.js';
 import type { MinituiCatalog } from '../define-catalog.js';
 import { standardComponentDefinitions } from '../schema-bridge.js';
 import { boundIssue } from '../sanitize/index.js';
-import { applyResourceTemplate, resolvePointer } from '../contract/action-kind.js';
+import { holePointersOf, resolvePointer } from '../contract/action-kind.js';
 import {
   collectBindings,
   actionNamesOf,
@@ -220,13 +220,58 @@ function collectMissingRequired(
   return issues;
 }
 
-// The ${/ptr} holes a resourceTemplate still contains after resolution: the pointers that failed.
-// ${/ptr} is minitui's HOST-side consent-template grammar (applyResourceTemplate)
-// — json-render never resolves it, so only resourceTemplates are scanned for it.
-function unresolvedPointers(text: string, state: JsonValue): readonly string[] {
-  return [...applyResourceTemplate(text, state).matchAll(/\$\{(\/[^}]*)\}/g)].map(
-    (match) => match[1] ?? '',
+// The ${/ptr} holes of a resourceTemplate whose pointer does not resolve to a string in the bound
+// state. The holes are read from the catalog's own template, never from the text after substitution,
+// so the work is bounded by the template and state text holding `${/` is never read as a hole.
+function unresolvedPointers(template: string, state: JsonValue): readonly string[] {
+  return holePointersOf(template).filter(
+    (pointer) => typeof resolvePointer(state, pointer) !== 'string',
   );
+}
+
+// The state roots (first path segment) that the holes of a gated action's two templates read, once each.
+function holeRoots(resourceTemplate: string, summaryTemplate: string): readonly string[] {
+  const roots = new Set<string>();
+  for (const pointer of [...holePointersOf(resourceTemplate), ...holePointersOf(summaryTemplate)]) {
+    const root = pointer.split('/')[1];
+    if (root !== undefined && root !== '') roots.add(root);
+  }
+  return [...roots];
+}
+
+// A param named by the first segment of a template hole must be bound to that state root, exactly
+// { $state: '/<root>' }: the widget the user edited, the consent text and the run then read one value.
+// An absent param is left to the params check (a required one is refused there; an optional one is
+// supplied by the host from the same state).
+function checkHoleBindings(
+  actionName: string,
+  catalog: MinituiCatalog,
+  params: Readonly<Record<string, JsonValue>> | undefined,
+  key: string,
+): readonly SemanticIssue[] {
+  const permission = catalog.permissionOf(actionName);
+  const schema = catalog.actionDefs.get(actionName)?.params;
+  if (permission === undefined || params === undefined || !(schema instanceof z.ZodObject))
+    return [];
+  const issues: SemanticIssue[] = [];
+  for (const root of holeRoots(permission.resourceTemplate, permission.summaryTemplate)) {
+    if (!Object.hasOwn(schema.shape, root) || !Object.hasOwn(params, root)) continue;
+    const bound = params[root];
+    const exact =
+      typeof bound === 'object' &&
+      bound !== null &&
+      !Array.isArray(bound) &&
+      Object.keys(bound).length === 1 &&
+      Reflect.get(bound, '$state') === `/${root}`;
+    if (!exact) {
+      issues.push({
+        code: 'bad-binding',
+        elementKey: key,
+        message: `Action param "${root}" for "${actionName}" on "${key}" must be bound to the state at "/${root}" (the action's templates read it).`,
+      });
+    }
+  }
+  return issues;
 }
 
 // The props that fail the component schema, named (empty when they pass). The names are the keys of
@@ -399,6 +444,35 @@ function checkAction(
       message: `resourceTemplate for "${actionName}" (${permission.resourceTemplate}) has a binding that does not resolve against the bound state: ${unresolved.join(', ')}.`,
     });
   }
+
+  const unresolvedSummary =
+    permission === undefined ? [] : unresolvedPointers(permission.summaryTemplate, state);
+  if (permission !== undefined && unresolvedSummary.length > 0) {
+    issues.push({
+      code: 'bad-binding',
+      elementKey: key,
+      message: `summaryTemplate for "${actionName}" (${permission.summaryTemplate}) has a binding that does not resolve against the bound state: ${unresolvedSummary.join(', ')}.`,
+    });
+  }
+
+  const status = catalog.actionDefs.get(actionName)?.statusPointers;
+  if (status !== undefined) {
+    const progress = resolvePointer(state, status.progress);
+    if (typeof progress !== 'number' || !Number.isFinite(progress)) {
+      issues.push({
+        code: 'bad-binding',
+        elementKey: key,
+        message: `State for "${actionName}" must hold a number at "${status.progress}" (its progress, from 0 to 1): seed it.`,
+      });
+    }
+    if (typeof resolvePointer(state, status.status) !== 'string') {
+      issues.push({
+        code: 'bad-binding',
+        elementKey: key,
+        message: `State for "${actionName}" must hold text at "${status.status}" (its outcome): seed it.`,
+      });
+    }
+  }
   return issues;
 }
 
@@ -495,6 +569,7 @@ function semanticIssues(
       for (const actionName of actionNamesOf(binding)) {
         issues.push(...checkAction(actionName, catalog, key, state));
         issues.push(...checkParams(actionName, catalog, binding.params, key));
+        issues.push(...checkHoleBindings(actionName, catalog, binding.params, key));
       }
     }
   }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { holePointersOf } from './contract/action-kind.js';
 import type { MinituiCatalog } from './define-catalog.js';
 
 const WATCHERS_MARKER = 'STATE WATCHERS:';
@@ -27,10 +28,6 @@ function dropWatcherSection(text: string): string {
 const paramsLine = (schema: z.ZodType): string =>
   `  params: ${JSON.stringify(z.toJSONSchema(schema))}`;
 
-// The state pointers a resource template reads, in order.
-const holePointers = (template: string): string[] =>
-  [...template.matchAll(/\$\{(\/[^}]*)\}/g)].map((m) => m[1] ?? '');
-
 /**
  * The system-prompt catalog section: ADOPT json-render's catalog.prompt() (which
  * already teaches the components + the patch-line grammar), then append the
@@ -58,9 +55,19 @@ export function buildCatalogPrompt(
       const summary = def.permission?.summaryTemplate ?? def.description;
       dangerLines.push(`- ${name} (${def.kind}, ${danger}): ${summary}`);
       dangerLines.push(paramsLine(def.params));
-      const pointers = holePointers(def.permission?.resourceTemplate ?? '');
+      const pointers = [
+        ...new Set([
+          ...holePointersOf(def.permission?.resourceTemplate ?? ''),
+          ...holePointersOf(def.permission?.summaryTemplate ?? ''),
+        ]),
+      ];
       if (pointers.length > 0) {
         dangerLines.push(`  needs a string in state at: ${pointers.join(', ')}`);
+      }
+      if (def.statusPointers !== undefined) {
+        dangerLines.push(
+          `  progress (a number from 0 to 1) and status (text) are written at: ${def.statusPointers.progress}, ${def.statusPointers.status}; seed both in state`,
+        );
       }
     }
   }
