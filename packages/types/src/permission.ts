@@ -8,6 +8,21 @@ export const CommandRootSchema = z
   .object({
     name: z.string(),
     argv: z.array(z.string()).readonly(),
+    // `opaque: true` on a root means the host cannot fully account for what that root runs or touches.
+    // Producers, in the root extractor only: a spawner, a shell or a command-string builtin; an
+    // argument runner peeled to an empty inner command; a root with an unresolved operand (an
+    // expansion other than exact `$HOME`, or an unquoted glob or brace expansion); every root in the
+    // scope of a leading or standalone assignment; the inner root behind a wrapper option the table
+    // does not model; a `NAME=value` operand skipped by the `env` or `sudo` peel; the synthetic root
+    // of a redirect with no command; a relative `rm` operand in a command that also changes
+    // directory (`cd`, `pushd`) or that a wrapper option runs from another directory or another root;
+    // and a builtin that evaluates a quoted operand the host cannot read (`printf -v`, `let`, `test -v`,
+    // `read -a` or any `read` operand holding a bracket, `mapfile -C`, `readarray -C`, `wait -p`, `compgen`, and a declaration builtin reached through `builtin` or `command`). Consumers: such a root asks; no approval mode lifts it; an allow
+    // rule or a grant never satisfies it; a deny rule still fires first; `always` on an uncertain ask
+    // allows this request and mints no grant. The hard floor runs on every root and accepts a
+    // hand-built parsed command with literal argv and no `opaque`. Omitted on a resolvable root, so
+    // such a root's shape stays {name, argv}.
+    opaque: z.boolean().optional(),
   })
   .readonly();
 export type CommandRoot = z.infer<typeof CommandRootSchema>;
@@ -53,11 +68,14 @@ export type Decision = z.infer<typeof DecisionSchema>;
 export const ApprovalModeSchema = z.enum(['default', 'yolo']);
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
+// A reply names the request it answers (`requestId`, the id the host minted for that request). The
+// gate resolves exactly that request: a reply whose id matches no request waiting for approval
+// resolves nothing, so an answer can never approve a request the person was not shown.
 export const PermissionReplySchema = z
   .discriminatedUnion('kind', [
-    z.object({ kind: z.literal('once') }),
-    z.object({ kind: z.literal('always'), cascade: z.boolean() }),
-    z.object({ kind: z.literal('reject'), feedback: z.string() }),
+    z.object({ kind: z.literal('once'), requestId: z.string() }),
+    z.object({ kind: z.literal('always'), cascade: z.boolean(), requestId: z.string() }),
+    z.object({ kind: z.literal('reject'), feedback: z.string(), requestId: z.string() }),
   ])
   .readonly();
 export type PermissionReply = z.infer<typeof PermissionReplySchema>;
@@ -71,6 +89,9 @@ export const PermissionRuleSchema = z
     // Resolved absolute executable path the grant was approved for;
     // undefined for operator config rules + legacy grants (name-only match).
     identity: z.string().optional(),
+    // Present (and then always true) only on a narrow grant: one approved command, matched by string
+    // equality after the deny pass. Never false, and absent on cascade grants and operator rules.
+    exact: z.literal(true).optional(),
   })
   .readonly();
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;

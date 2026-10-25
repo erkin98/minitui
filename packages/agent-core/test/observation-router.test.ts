@@ -194,3 +194,83 @@ describe('routeRuntimeFault (post-mount error round-trip bridge)', () => {
     expect(out.map((e) => e.type)).toEqual(['RUN_STARTED', 'RUN_FINISHED']);
   });
 });
+
+describe('a cyclic value', () => {
+  it('routeObservation does not throw or loop on a cyclic result value', () => {
+    const cyclic: Record<string, unknown> = { path: '/home/alice/x' };
+    cyclic.self = cyclic;
+    const ev = routeObservation(
+      { toolCallId: 'tc-c', result: { actionName: 'probe', ok: true, value: cyclic } },
+      policy,
+    );
+    asToolResult(ev);
+    expect(ev.isError).toBe(false);
+    expect(typeof ev.content).toBe('string');
+  });
+});
+
+describe('a fault text is windowed, redacted, then cut', () => {
+  const key = `sk-proj-${'Ab1_'.repeat(21)}Ab1`; // 95 generated characters
+  const KEY_TAIL = key.slice(-10);
+
+  it('summarizeExecEvents keeps the end of stderr, not the start', () => {
+    const stderr = `start-marker ${'x'.repeat(20_000)} end-marker`;
+    const s = summarizeExecEvents([
+      { kind: 'stderr', chunk: stderr },
+      { kind: 'exit', code: 1 },
+    ]);
+    expect(s.stderrExcerpt!.length).toBeLessThanOrEqual(4096);
+    expect(s.stderrExcerpt!.endsWith('end-marker')).toBe(true);
+    expect(s.stderrExcerpt).not.toContain('start-marker');
+  });
+
+  it('a key that a cap-first cut would split leaves no fragment in the excerpt', () => {
+    // 15 characters of the key sit before the 4096-character cut of the raw text
+    const stderr = `${'p'.repeat(100)} ${key} ${'q'.repeat(4015)}`;
+    const s = summarizeExecEvents(
+      [
+        { kind: 'stderr', chunk: stderr },
+        { kind: 'exit', code: 1 },
+      ],
+      policy,
+    );
+    expect(s.stderrExcerpt!.length).toBeLessThanOrEqual(4096);
+    expect(s.stderrExcerpt).not.toContain(KEY_TAIL);
+    expect(s.stderrExcerpt).not.toContain('sk-proj-');
+  });
+
+  const FAULT = `${'p'.repeat(16_384 - 4081 - key.length - 1)} ${key} ${'q'.repeat(4080)}`;
+
+  it('routeRuntimeFault hands the builder at most 4096 characters, with no fragment of the key', async () => {
+    expect(FAULT).toHaveLength(16_384);
+    let seen: RuntimeFault | undefined;
+    const session = {
+      async *submit(): AsyncGenerator<MinituiEvent> {
+        yield { type: 'RUN_FINISHED', threadId: 't', runId: 'r' } as MinituiEvent;
+      },
+    };
+    const fault: RuntimeFault = { actionKey: 'merge', exitCode: 1, stderrExcerpt: FAULT };
+    for await (const _ of routeRuntimeFault(fault, session, (f) => ((seen = f), 'again'), policy)) {
+      /* drain */
+    }
+    expect(seen!.stderrExcerpt.length).toBeLessThanOrEqual(4096);
+    expect(seen!.stderrExcerpt.endsWith('q')).toBe(true);
+    expect(seen!.stderrExcerpt).not.toContain(KEY_TAIL);
+  });
+
+  it('routeToolCallResult cuts the error text the same way', () => {
+    const result: ToolCallResult = {
+      toolCallId: 'tc-t',
+      toolName: 'merge',
+      ok: false,
+      content: '',
+      isError: true,
+      error: FAULT,
+    };
+    const ev = routeToolCallResult(result, policy);
+    asToolResult(ev);
+    expect(ev.error!.length).toBeLessThanOrEqual(4096);
+    expect(ev.error!.endsWith('q')).toBe(true);
+    expect(ev.error).not.toContain(KEY_TAIL);
+  });
+});

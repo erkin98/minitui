@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { defineMinituiCatalog } from '../src/define-catalog.js';
+import { defineMinituiCatalog, type MinituiCatalog } from '../src/define-catalog.js';
+import { MALFORMED_CASES, cleanSpec, gateCatalog, unicodeKeySpec } from './malformed-specs.js';
 import { checkSemantics, type SemanticIssue } from '../src/validate/semantic.js';
 import type { AppSpec } from '../src/contract/spec.js';
 
@@ -456,5 +457,54 @@ describe('missing required prop', () => {
     });
     const spec: AppSpec = { root: 's', elements: { s: { type: 'Styled', props: {} } } };
     expect(codes(checkSemantics(spec, nullableCat, {}))).not.toContain('missing-required-prop');
+  });
+});
+
+describe('checkSemantics answers a malformed spec with an issue', () => {
+  it.each(MALFORMED_CASES)('$name', ({ build, code, messagePart }) => {
+    const issues: readonly SemanticIssue[] = Reflect.apply(checkSemantics, undefined, [
+      build(),
+      gateCatalog,
+      {},
+    ]);
+    const codes = issues.map((issue) => issue.code);
+    expect(codes).toContain(code);
+    expect(codes).not.toContain('gate-internal-error');
+    if (messagePart !== undefined) {
+      expect(issues.some((issue) => issue.message.includes(messagePart))).toBe(true);
+    }
+  });
+
+  it('returns no issue for a spec whose element keys are not ASCII', () => {
+    const issues: readonly SemanticIssue[] = Reflect.apply(checkSemantics, undefined, [
+      unicodeKeySpec,
+      gateCatalog,
+      {},
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it('still returns no issue for a plain valid spec', () => {
+    const issues: readonly SemanticIssue[] = Reflect.apply(checkSemantics, undefined, [
+      cleanSpec,
+      gateCatalog,
+      {},
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it('returns one gate-internal-error issue when a check itself throws', () => {
+    const faulty: MinituiCatalog = {
+      ...gateCatalog,
+      kindOf(): never {
+        throw new Error('catalog fault');
+      },
+    };
+    const issues: readonly SemanticIssue[] = Reflect.apply(checkSemantics, undefined, [
+      cleanSpec,
+      faulty,
+      {},
+    ]);
+    expect(issues.map((issue) => issue.code)).toEqual(['gate-internal-error']);
   });
 });

@@ -501,3 +501,50 @@ describe('JsonPatch (RFC-6902)', () => {
     expect(getterCalls).toBe(0);
   });
 });
+
+// Depth is counted from the root of the value an operation carries, so the ceiling inside a patch
+// array is the same 256 as for a bare value.
+describe('JsonPatch value depth', () => {
+  const nest = (depth: number): unknown => {
+    let v: unknown = 0;
+    for (let i = 0; i < depth; i++) v = { a: v };
+    return v;
+  };
+  const withValue = (op: 'add' | 'replace' | 'test', value: unknown): unknown[] => [
+    { op, path: '/x', value },
+  ];
+
+  it.each([['add'], ['replace'], ['test']] as const)(
+    'accepts a %s value nested 254, 255 and 256 deep',
+    (op) => {
+      for (const depth of [254, 255, 256]) {
+        expect(JsonPatchArraySchema.safeParse(withValue(op, nest(depth))).success).toBe(true);
+      }
+    },
+  );
+
+  it('rejects a value nested 257 deep with the depth message and a path rooted at the operation', () => {
+    const result = JsonPatchArraySchema.safeParse(withValue('add', nest(257)));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => /max depth 256/.test(i.message));
+      expect(issue?.message).toBe('JsonValue nesting exceeds max depth 256');
+      expect(issue?.path.slice(0, 2)).toEqual([0, 'value']);
+      expect(issue?.path).toHaveLength(2 + 257);
+    }
+  });
+
+  it('measures the second operation of a patch like the first', () => {
+    const patch = (value: unknown): unknown[] => [
+      { op: 'add', path: '/a', value: 1 },
+      { op: 'add', path: '/b', value },
+    ];
+    expect(JsonPatchArraySchema.safeParse(patch(nest(256))).success).toBe(true);
+    const result = JsonPatchArraySchema.safeParse(patch(nest(257)));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => /max depth 256/.test(i.message));
+      expect(issue?.path.slice(0, 2)).toEqual([1, 'value']);
+    }
+  });
+});

@@ -31,6 +31,24 @@ const TRACE = new RegExp(
     'FD-DC',
     '\\bledger\\b',
     '\\bfinding\\b',
+    // numbered pointers and a path into the reference clone
+    '\\bTask[ -]?[0-9]',
+    "\\bthis plan's\\b",
+    '\\bPR-[0-9]',
+    '\\b[Ll]esson #?[0-9]',
+    '\\brepos/[A-Za-z]',
+    // unit wording and the status-document name
+    '\\b([Ll]ater|[Ff]irst|[Nn]ext) [Ss]lices?\\b',
+    '\\binvariant \\([a-z]\\)',
+    "\\bunit [0-9]+'s\\b",
+    'WHATS-LEFT',
+    // identifier shapes
+    '\\bR[0-9]{2}-F[0-9]{2}\\b',
+    '\\bP[0-9]{2}\\.[0-9]+\\b',
+    '\\bN-[0-9]+\\.[0-9]+\\b',
+    '\\b[0-9]{2}-A[0-9]+\\b',
+    '\\b[0-9]{2}-J[0-9]+\\b',
+    '\\bSET-J[0-9]+\\b',
   ].join('|'),
 );
 
@@ -61,6 +79,24 @@ export function assertTraceGateControl(die) {
     'FD-DC02',
     'the ledger says so',
     'one finding here',
+    // pointer forms
+    '(Task 7)',
+    "this plan's scope",
+    'a PR-6 deliverable',
+    '(lesson #40)',
+    'see repos/tree-sitter for it',
+    // further forms
+    'added by later slices',
+    '(invariant (d), the egress control)',
+    "unit 11's provider seam",
+    'See WHATS-LEFT.',
+    // identifier forms
+    'R99-F99',
+    'P12.3',
+    'N-8.1',
+    '99-A9',
+    '99-J9',
+    'SET-J9',
   ];
   for (const leak of leaks) {
     if (scanForTrace(leak).length === 0) {

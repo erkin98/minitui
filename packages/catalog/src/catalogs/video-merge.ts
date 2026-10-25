@@ -49,6 +49,7 @@ export const videoMergeCatalog: MinituiCatalog = defineMinituiCatalog({
       slots: [],
       description: 'Press-to-run trigger that fires its bound action (no std Ink Button).',
       trustTier: 'interactive',
+      events: ['press'],
       capturesText: false, // Enter/Space activates — never consumes typed text
     }),
     FilePicker: defineComponent({
@@ -62,6 +63,7 @@ export const videoMergeCatalog: MinituiCatalog = defineMinituiCatalog({
       slots: [],
       description: 'Select a file/dir; the chosen path writes back through its bound value.',
       trustTier: 'interactive',
+      events: ['change'],
       // Free-text path entry: the focused widget appends typed characters to build
       // the path draft, so `q` must stay literal while it is focused — the app-shell
       // q-predicate reads this bit.
@@ -77,6 +79,7 @@ export const videoMergeCatalog: MinituiCatalog = defineMinituiCatalog({
       description:
         'Reorderable list — move items to set merge order; the new order writes back through its bound items.',
       trustTier: 'interactive',
+      events: ['reorder'],
       capturesText: false, // arrow-key reordering — no free-text entry
     }),
   },

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createDataStore } from '../src/state/data-store.js';
 import type { JsonValue } from '@minitui/types';
+import { rejectingSink, throwingSink, unhandledRejectionsDuring } from './diagnostics-sinks.js';
 
 const ESC = '\u001b'; // Real ESC byte; the store strips CSI at ingress.
 
@@ -331,5 +332,173 @@ describe('DataStore ownership and delivery', () => {
     const reported = metas[metas.length - 1]?.cause;
     expect(reported).toBeInstanceOf(Error); // the raw error, not a flattened string
     expect((reported as Error).message).toBe('reserved state key not allowed: constructor');
+  });
+});
+
+describe('DataStore reports a failed test operation without the document', () => {
+  it('puts the fixed string and the patch error in the diagnostics, and no document text', () => {
+    const sentinel = 'SENTINEL-DO-NOT-LEAK';
+    const operand = 'OPERAND-DO-NOT-LEAK';
+    const { warnings, metas, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: { secret: sentinel }, diagnostics });
+    store.applyDelta([{ op: 'test', path: '/secret', value: operand }]);
+    expect(warnings).toEqual(['dropped invalid state delta']);
+    const meta = metas[0]!;
+    expect(meta.error).toBe('invalid state delta: test operation failed');
+    expect(meta.cause).toBeInstanceOf(Error);
+    expect((meta.cause as Error).name).toBe('PatchError');
+    const text = JSON.stringify(meta) + (meta.cause as Error).message;
+    expect(text).not.toContain(sentinel);
+    expect(text).not.toContain(operand);
+    expect(store.getState()).toEqual({ secret: sentinel });
+  });
+});
+
+describe('DataStore diagnostics carry fixed error strings', () => {
+  const LONG = 'x'.repeat(100_000);
+
+  it('gives the same short error for a long pointer and for an escape-sequence pointer', () => {
+    const { warnings, metas, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: { arr: [1] }, diagnostics });
+    store.getIn(`/arr/${LONG}`);
+    store.getIn(`/arr/${LONG}${LONG}`);
+    store.getIn(`/arr/${'y'.repeat(150_000)}`);
+    store.getIn('/\u001b]52;c;ZXZpbA==\u0007');
+    expect(warnings).toHaveLength(4);
+    const errors = metas.map((meta) => meta?.error);
+    expect(errors.slice(0, 3)).toEqual(Array(3).fill('invalid array index'));
+    expect(errors[3]).toBe('state key is not canonical');
+    for (const error of errors) expect(String(error).length).toBeLessThanOrEqual(80);
+  });
+
+  it('reports a schema rejection as a fixed string and keeps the error object as the cause', () => {
+    const { warnings, metas, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ diagnostics });
+    store.setLocal('/x', { [LONG]: Number.NaN });
+    expect(warnings).toEqual(['dropped invalid setLocal value']);
+    const meta = metas[0]!;
+    expect(meta.error).toBe('value is not canonical JSON');
+    expect(meta.cause).toBeInstanceOf(Error);
+    expect(store.getState()).toEqual({});
+  });
+});
+
+describe('DataStore contains a misbehaving diagnostics sink', () => {
+  it('keeps delivering after a sink that throws saw a rejected change', () => {
+    const store = createDataStore({ initial: { n: 0 }, diagnostics: throwingSink });
+    const seen: unknown[] = [];
+    store.subscribe((state) => {
+      seen.push(state);
+    });
+    store.applyDelta([{ op: 'test', path: '/n', value: 99 }]);
+    store.applyDelta([{ op: 'replace', path: '/n', value: 1 }]);
+    expect(seen).toEqual([{ n: 1 }]);
+  });
+
+  it('leaves no unhandled rejection from a sink that returns a rejected promise', async () => {
+    const store = createDataStore({ initial: { n: 0 }, diagnostics: rejectingSink });
+    const seen: unknown[] = [];
+    store.subscribe((state) => {
+      seen.push(state);
+    });
+    const unhandled = await unhandledRejectionsDuring(() => {
+      store.applyDelta([{ op: 'test', path: '/n', value: 99 }]);
+      store.applyDelta([{ op: 'test', path: '/n', value: 98 }]);
+      store.applyDelta([{ op: 'test', path: '/n', value: 97 }]);
+    });
+    expect(unhandled).toEqual([]);
+    store.applyDelta([{ op: 'replace', path: '/n', value: 1 }]);
+    expect(seen).toEqual([{ n: 1 }]);
+  });
+});
+
+describe('DataStore refuses a value that is not plain JSON, with one diagnostic', () => {
+  it.each([
+    ['a snapshot that is a Date', 'applySnapshot', new Date(0)],
+    ['a delta that is a Date value', 'applyDelta', [{ op: 'add', path: '/x', value: new Date(0) }]],
+  ] as const)('%s', (_name, method, argument) => {
+    const { warnings, diagnostics } = capturingDiagnostics();
+    const store = createDataStore({ initial: { keep: 1 }, diagnostics });
+    const input: unknown = argument;
+    Reflect.apply(store[method], store, [input]);
+    expect(store.getState()).toEqual({ keep: 1 });
+    expect(warnings).toHaveLength(1);
+  });
+});
+
+describe('DataStore fan-out follows the live subscriber set', () => {
+  it('does not call a subscriber that an earlier subscriber removed in the same commit', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const calls: string[] = [];
+    const removeB: { current: () => void } = { current: () => undefined };
+    store.subscribe(() => {
+      calls.push('A');
+      removeB.current();
+    });
+    removeB.current = store.subscribe(() => {
+      calls.push('B');
+    });
+    store.subscribe(() => {
+      calls.push('C');
+    });
+    store.setLocal('/n', 1);
+    expect(calls).toEqual(['A', 'C']);
+    calls.length = 0;
+    store.setLocal('/n', 2);
+    expect(calls).toEqual(['A', 'C']);
+  });
+
+  it('calls a subscriber added during fan-out first on the next commit', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const calls: string[] = [];
+    let added = false;
+    store.subscribe(() => {
+      calls.push('A');
+      if (!added) {
+        added = true;
+        store.subscribe(() => {
+          calls.push('late');
+        });
+      }
+    });
+    store.setLocal('/n', 1);
+    expect(calls).toEqual(['A']);
+    store.setLocal('/n', 2);
+    expect(calls).toEqual(['A', 'A', 'late']);
+  });
+
+  it('lets a subscriber that removes itself finish its own call', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const calls: string[] = [];
+    const self: { off: () => void } = { off: () => undefined };
+    self.off = store.subscribe(() => {
+      self.off();
+      calls.push('self-after-removal');
+    });
+    store.subscribe(() => {
+      calls.push('other');
+    });
+    store.setLocal('/n', 1);
+    expect(calls).toEqual(['self-after-removal', 'other']);
+    store.setLocal('/n', 2);
+    expect(calls).toEqual(['self-after-removal', 'other', 'other']);
+  });
+
+  it('delivers a re-entrant commit to every live subscriber in order', () => {
+    const store = createDataStore({ initial: { n: 0 } });
+    const seen: string[] = [];
+    let reentered = false;
+    store.subscribe((state) => {
+      seen.push(`A${JSON.stringify(state)}`);
+      if (!reentered) {
+        reentered = true;
+        store.setLocal('/n', 2);
+      }
+    });
+    store.subscribe((state) => {
+      seen.push(`B${JSON.stringify(state)}`);
+    });
+    store.setLocal('/n', 1);
+    expect(seen).toEqual(['A{"n":1}', 'B{"n":1}', 'A{"n":2}', 'B{"n":2}']);
   });
 });

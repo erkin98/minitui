@@ -1,0 +1,26 @@
+diff --git a/dist/index.js b/dist/index.js
+index 9e53d8322bdb1d5fdd5ef682446530e89e7e3ed1..f442db05f76069c54ebf1fb1351f7c7a683756ed 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -304,7 +304,7 @@ function useFocus() {
+     return () => {
+       ctx?.unregister(id);
+     };
+-  }, [ctx, id]);
++  }, [ctx?.register, ctx?.unregister, id]);
+   const isActive = ctx?.isFocused(id) ?? false;
+   return { isActive, id };
+ }
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 9ba3b8c8b1e2263dd36d753034920b0996a3e48c..b9becd76ae914c29413686a836b37e5149030cf4 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -281,7 +281,7 @@ function useFocus() {
+     return () => {
+       ctx?.unregister(id);
+     };
+-  }, [ctx, id]);
++  }, [ctx?.register, ctx?.unregister, id]);
+   const isActive = ctx?.isFocused(id) ?? false;
+   return { isActive, id };
+ }

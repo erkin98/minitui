@@ -4,7 +4,7 @@
 // (unlike zod / @json-render, which resolve offline). `pnpm store add` primes the content store but not
 // that mirror. Resolve the offline-metadata story (does a fresh-clone `pnpm install` populate
 // `metadata/@ai-sdk`? if not, pin the SDK deps to packed tarballs like the workspace deps) before adding
-// this to `pack:check`. See WHATS-LEFT. Structure below mirrors the spec pack-consumer.
+// this to `pack:check`. Structure below mirrors the spec pack-consumer.
 //
 // Published-artifact gate: pack agent-core (+ its one internal workspace dep @minitui/types) → assert
 // tar (4 files) + manifest → install into a throwaway strict consumer with --offline → tsc (types:[],
@@ -56,13 +56,13 @@ try {
   // 1. Pack agent-core + its one internal workspace dep (workspace:* rewritten concrete on pack).
   const tgz = pack(pkgDir);
   const typesTgz = pack(join(packagesDir, 'types'));
-  // 2. Assert EXACTLY the four intended files.
+  // 2. Assert EXACTLY the five intended files; pnpm pack adds the root LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog:/workspace: rewritten concrete, engines present.
   const m = JSON.parse(

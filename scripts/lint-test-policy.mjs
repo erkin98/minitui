@@ -1,7 +1,9 @@
 /* global console, process */
 import { ESLint } from 'eslint';
-import { globSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createVitest } from 'vitest/node';
 import { TEST_FILE_GLOBS } from '../config/eslint-policy.js';
 
 const root = resolve(import.meta.dirname, '..');
@@ -43,46 +45,104 @@ let failed = results.reduce((total, result) => total + result.errorCount, 0) > 0
 
 // A delegating global wrapper that restores in finally is instrumentation, not a
 // replacement double, so it is permitted.
-// Reachability guard for the replacement-API ban. `no-vitest-replacement-api` catches
-// `vi`/`vitest` only when they are IMPORTED; with vitest's `globals: true`, `vi` becomes an
-// ambient global and `vi.mock(...)` needs no import — invisible to the rule. Forbidding
-// `globals: true` in every vitest config keeps the import ban the whole enforcement surface,
-// which is simpler and stricter than an AST member check that would risk false positives on
-// any object named `vi`.
-const hasGlobalsTrue = (source) =>
-  // ponytail: strip /* */ then // comments, then match the boolean literal — enough for
-  // hand-written configs; a computed `globals: someFlag` is not modelled (nor used here).
-  /\bglobals\s*:\s*true\b/.test(source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''));
-
-// Positive control: the matcher must flag the on-setting, clear the off-setting, and ignore
-// a commented one — else a broken regex or missing comment-strip would pass vacuously.
-if (
-  !hasGlobalsTrue('test: { globals: true }') ||
-  hasGlobalsTrue('test: { globals: false }') ||
-  hasGlobalsTrue('// globals: true — never enable')
-) {
-  throw new Error('lint:test-policy globals guard is vacuous');
+// Reachability guard for the replacement-API ban. Vitest can hand a test its replacement API without an
+// import in two ways: `globals: true` makes `vi` an ambient global, and `includeSource` lets a source
+// file reach the Vitest object through `import.meta.vitest`. The lint rule reports the import-free
+// spellings it can see in a file, but a configuration can switch either on without any file naming
+// them, so the CONFIGURATION is checked, and from Vitest itself: every project's resolved settings,
+// never config text (a text match is dodged by `!0`, a shorthand, a spread, a quoted key and a computed
+// key; the resolved value is not).
+async function resolveProjects(options) {
+  // `run: false` starts nothing and writes no cache; the runner loader keeps Vite from writing a
+  // temporary copy of the config under node_modules.
+  const vitest = await createVitest('test', {
+    watch: false,
+    run: false,
+    configLoader: 'runner',
+    ...options,
+  });
+  try {
+    return vitest.projects.map((project) => ({
+      name: project.name,
+      globals: project.config.globals === true,
+      // Vitest sets no default for this key on a test project: absent means off.
+      includeSource: project.config.includeSource?.length ?? 0,
+    }));
+  } finally {
+    await vitest.close();
+  }
 }
 
-const vitestConfigs = globSync(
+// Positive control: every spelling that a text match cannot see must still resolve to `globals: true`,
+// and a configured `includeSource` list must still resolve to a non-empty list (a misread key would
+// otherwise read as "off" for every project). Each control config imports nothing (a temporary
+// directory has no node_modules) and includes only a name no test file has. A unique directory per run
+// keeps two parallel runs apart.
+const NONE = "include: ['*.none.test.ts']";
+const RESOLVES = {
+  globals: (project) => project?.globals === true,
+  includeSource: (project) => (project?.includeSource ?? 0) > 0,
+};
+const CONTROL_CONFIGS = [
+  ['`!0`', `export default { test: { ${NONE}, globals: !0 } };`, 'globals'],
+  ['shorthand', `const globals = true;\nexport default { test: { ${NONE}, globals } };`, 'globals'],
   [
-    'vitest.shared.ts',
-    'vitest.config.ts',
-    'packages/*/vitest.config.ts',
-    'apps/*/vitest.config.ts',
-    'test/vitest.config.ts',
+    'spread',
+    `const on = { globals: true };\nexport default { test: { ${NONE}, ...on } };`,
+    'globals',
   ],
-  { cwd: root },
-);
-// Zero-file floor mirroring the lint-half guard: if the config names ever migrate off this
-// glob (e.g. to .mts) the sweep scans nothing and would pass vacuously, reopening the bypass.
-if (vitestConfigs.length === 0) throw new Error(ZERO_MATCH);
-const globalsOffenders = vitestConfigs.filter((rel) =>
-  hasGlobalsTrue(readFileSync(resolve(root, rel), 'utf8')),
-);
-if (globalsOffenders.length > 0) {
+  ['quoted key', `export default { test: { ${NONE}, 'globals': true } };`, 'globals'],
+  ['computed key', `export default { test: { ${NONE}, ['glo' + 'bals']: true } };`, 'globals'],
+  [
+    'includeSource list',
+    `export default { test: { ${NONE}, includeSource: ['src/**/*.ts'] } };`,
+    'includeSource',
+  ],
+];
+const controlRoot = mkdtempSync(join(tmpdir(), 'lint-test-policy-'));
+const unseenSpellings = [];
+try {
+  for (const [index, [spelling, text, setting]] of CONTROL_CONFIGS.entries()) {
+    const config = join(controlRoot, `control-${index}.config.mjs`);
+    writeFileSync(config, `${text}\n`);
+    const [project] = await resolveProjects({ root: controlRoot, config });
+    if (!RESOLVES[setting](project)) unseenSpellings.push(spelling);
+  }
+} finally {
+  rmSync(controlRoot, { recursive: true, force: true });
+}
+if (unseenSpellings.length > 0) {
+  throw new Error(
+    `lint:test-policy config guard is vacuous: ${unseenSpellings.join(', ')} did not resolve to the setting it spells`,
+  );
+}
+
+const projects = await resolveProjects({ root });
+// Zero-project floor mirroring the lint-half guard: if the project globs ever stop resolving, the
+// check would cover nothing and pass vacuously.
+if (projects.length === 0) throw new Error(ZERO_MATCH);
+// Floor: one project per package config, plus the root and release-scripts projects. A project glob that
+// quietly stopped matching would otherwise leave the guard checking a shorter list.
+const packageConfigs = readdirSync(join(root, 'packages'), { withFileTypes: true }).filter(
+  (entry) =>
+    entry.isDirectory() && existsSync(join(root, 'packages', entry.name, 'vitest.config.ts')),
+).length;
+const floor = packageConfigs + 2;
+if (projects.length < floor) {
+  throw new Error(
+    `lint:test-policy resolved ${projects.length} vitest projects, at least ${floor} expected (one per packages/*/vitest.config.ts plus root and release-scripts): a project went missing`,
+  );
+}
+const offenders = projects.filter((project) => project.globals || project.includeSource > 0);
+if (offenders.length > 0) {
+  const named = offenders
+    .map((project) => {
+      const settings = [project.globals && 'globals', project.includeSource > 0 && 'includeSource'];
+      return `${project.name || '(unnamed)'} (${settings.filter(Boolean).join(' + ')})`;
+    })
+    .join(', ');
   console.error(
-    `lint:test-policy: vitest 'globals: true' makes replacement APIs ambient globals and bypasses no-vitest-replacement-api — remove it from ${globalsOffenders.join(', ')}`,
+    `lint:test-policy: a vitest project resolves 'globals: true' or an 'includeSource' list, which reaches the replacement API without an import and bypasses no-vitest-replacement-api — remove it from ${named}`,
   );
   failed = true;
 }
@@ -90,5 +150,5 @@ if (globalsOffenders.length > 0) {
 if (failed) process.exitCode = 1;
 else
   console.log(
-    `lint:test-policy: ${lintedFiles.size} test files OK, ${vitestConfigs.length} vitest configs free of 'globals: true'`,
+    `lint:test-policy: ${lintedFiles.size} test files OK, ${projects.length} vitest projects resolved with globals off and no includeSource`,
   );

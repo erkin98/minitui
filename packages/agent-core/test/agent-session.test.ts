@@ -277,4 +277,34 @@ describe('AgentSession', () => {
     expect(second.started?.threadId).toBe(session.threadId);
     expect(first.started?.runId).not.toBe(second.started?.runId);
   });
+
+  it('hands a reprompt to the provider verbatim as the only user message of its turn', async () => {
+    // Every submit starts a fresh conversation, so the caller's text is the whole of what the model is
+    // told: it must arrive byte for byte (no trim, no prefix), directly after the system message.
+    const seen: Array<ReadonlyArray<{ role: string; content: unknown }>> = [];
+    const recording: ModelProvider = {
+      id: 'recording',
+      async *streamChat(req) {
+        seen.push(req.messages);
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const session = new AgentSession({
+      provider: recording,
+      toolDispatch,
+      specSink,
+      visibility,
+      tools,
+      model: 'test-model',
+      config: { system: 'sys' },
+    });
+    const reprompt = '\n  the merge action failed with exit 1 — regenerate a corrected spec  \n';
+    for await (const e of session.submit('make a merge ui')) void e;
+    for await (const e of session.submit(reprompt)) void e;
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: reprompt },
+    ]);
+  });
 });

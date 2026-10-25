@@ -23,7 +23,7 @@ function unescape(token: string): string {
  */
 export function parsePointer(pointer: string): string[] {
   if (pointer === '') return [];
-  if (pointer[0] !== '/') throw new Error(`invalid JSON pointer: ${pointer}`);
+  if (pointer[0] !== '/') throw new Error('invalid JSON pointer');
   return pointer.slice(1).split('/').map(unescape);
 }
 
@@ -46,7 +46,7 @@ export function parseArrayIndexToken(token: string): number | '-' | undefined {
 
 export function assertCanonicalStateKey(key: string): void {
   if (RESERVED_KEYS.has(key)) throw new Error(`reserved state key not allowed: ${key}`);
-  if (sanitize(key) !== key) throw new Error(`state key is not canonical: ${JSON.stringify(key)}`);
+  if (sanitize(key) !== key) throw new Error('state key is not canonical');
 }
 
 /** The guarded parser every document-touching path uses: depth-capped, reserved-key
@@ -87,7 +87,7 @@ export function getIn(doc: JsonValue, pointer: string): JsonValue | undefined {
   for (const token of tokens) {
     if (isArrayValue(current)) {
       const index = parseArrayIndexToken(token);
-      if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+      if (index === undefined) throw new Error('invalid array index');
       current = index === '-' ? undefined : current[index];
     } else if (isObject(current)) {
       current = Object.hasOwn(current, token) ? current[token] : undefined;
@@ -109,10 +109,10 @@ function setTokens(
   if (token === undefined) return value;
   if (isArrayValue(doc)) {
     const index = parseArrayIndexToken(token);
-    if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+    if (index === undefined) throw new Error('invalid array index');
     const target = index === '-' ? doc.length : index;
     if (target > doc.length) {
-      throw new Error(`array index out of range (would create a sparse hole): ${token}`);
+      throw new Error('array index out of range (would create a sparse hole)');
     }
     const next = doc.slice();
     next[target] = setTokens(target < doc.length ? doc[target]! : null, tokens, offset + 1, value);
@@ -134,7 +134,7 @@ function removeTokens(doc: JsonValue, tokens: readonly string[], offset: number)
   const leaf = offset === tokens.length - 1;
   if (isArrayValue(doc)) {
     const index = parseArrayIndexToken(token);
-    if (index === undefined) throw new Error(`invalid array index: ${JSON.stringify(token)}`);
+    if (index === undefined) throw new Error('invalid array index');
     if (index === '-' || index >= doc.length) return doc;
     const next = doc.slice();
     if (leaf) {

@@ -1,16 +1,163 @@
+import { JsonValueSchema } from '@minitui/types';
 import type { ActionBinding, AppSpec, SpecElement } from './contract/spec.js';
 import type { MinituiCatalog } from './define-catalog.js';
+import { boundIssue, hasCanonicalKeys } from './sanitize/index.js';
 
 export type AllowlistIssue = {
   readonly code:
     | 'unknown-component'
     | 'unknown-action'
     | 'off-grammar-callback'
-    | 'malformed-binding';
+    | 'malformed-binding'
+    | 'malformed-spec'
+    | 'non-canonical-key'
+    | 'watch-unsupported'
+    | 'gate-internal-error';
   readonly elementKey: string;
   readonly offending: string;
   readonly message: string;
 };
+
+// What the shared screen can raise: codes both gate halves carry.
+export type ScreenIssue = AllowlistIssue & {
+  readonly code: 'malformed-spec' | 'malformed-binding' | 'non-canonical-key';
+};
+
+// Fixed text, no thrown value in it: a throw that escapes a walker becomes this one issue.
+export const GATE_INTERNAL_ERROR_MESSAGE =
+  'The validation gate failed internally, so the spec was refused (fail closed).';
+
+// The only keys a binding may carry.
+const BINDING_KEYS: ReadonlySet<string> = new Set(['action', 'params']);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const screenIssue = (
+  code: ScreenIssue['code'],
+  elementKey: string,
+  message: string,
+): ScreenIssue => ({ code, elementKey, offending: '', message });
+
+function screenBinding(binding: unknown, key: string): readonly ScreenIssue[] {
+  if (!isRecord(binding)) {
+    return [
+      screenIssue(
+        'malformed-binding',
+        key,
+        `Binding on "${key}" is not an action object — malformed; rejected (fail closed).`,
+      ),
+    ];
+  }
+  if (typeof binding.action !== 'string') {
+    return [
+      screenIssue(
+        'malformed-binding',
+        key,
+        `Binding on "${key}" has an action that is not a name — malformed; rejected (fail closed).`,
+      ),
+    ];
+  }
+  if (Object.hasOwn(binding, 'params') && !isRecord(binding.params)) {
+    return [
+      screenIssue(
+        'malformed-binding',
+        key,
+        `Binding on "${key}" has params that are not an object — malformed; rejected (fail closed).`,
+      ),
+    ];
+  }
+  return [];
+}
+
+// An event map (el.on / el.watch) is an object whose values are one binding or a list of them.
+function screenEventMap(group: unknown, field: string, key: string): readonly ScreenIssue[] {
+  if (!isRecord(group)) {
+    return [
+      screenIssue(
+        'malformed-binding',
+        key,
+        `"${field}" on "${key}" is not an object of bindings — malformed; rejected (fail closed).`,
+      ),
+    ];
+  }
+  return Object.values(group).flatMap((entry) =>
+    (Array.isArray(entry) ? (entry as unknown[]) : [entry]).flatMap((binding) =>
+      screenBinding(binding, key),
+    ),
+  );
+}
+
+function screenElement(key: string, element: unknown): readonly ScreenIssue[] {
+  if (!isRecord(element)) {
+    return [
+      screenIssue(
+        'malformed-spec',
+        key,
+        `Element "${key}" is not an object — rejected (fail closed).`,
+      ),
+    ];
+  }
+  if (typeof element.type !== 'string') {
+    return [
+      screenIssue(
+        'malformed-spec',
+        key,
+        `Element "${key}" has a type that is not a name — rejected (fail closed).`,
+      ),
+    ];
+  }
+  if (!isRecord(element.props)) {
+    return [
+      screenIssue(
+        'malformed-spec',
+        key,
+        `Element "${key}" has props that are not an object — rejected (fail closed).`,
+      ),
+    ];
+  }
+  return ['on', 'watch'].flatMap((field) =>
+    Object.hasOwn(element, field) ? screenEventMap(element[field], field, key) : [],
+  );
+}
+
+/**
+ * The screen both gate halves run first, on a value of any shape. It refuses a spec that is not a plain
+ * JSON tree (a cycle, a value that appears in two places, nesting past the shared limit, a reserved
+ * key), then a spec whose names would change if cleaned (the renderer reads the cleaned form, so the
+ * gate must see the same names), then the shapes the walkers read. Exported to validate/semantic.ts,
+ * not from the barrel.
+ */
+export function screenSpec(spec: unknown): readonly ScreenIssue[] {
+  if (!JsonValueSchema.safeParse(spec).success) {
+    return [
+      screenIssue(
+        'malformed-spec',
+        '',
+        'The spec is not a plain JSON tree (a cycle, a repeated or over-deep value, or a reserved key) — rejected (fail closed).',
+      ),
+    ];
+  }
+  if (!isRecord(spec) || !isRecord(spec.elements)) {
+    return [
+      screenIssue(
+        'malformed-spec',
+        '',
+        'The spec has no elements object — rejected (fail closed).',
+      ),
+    ];
+  }
+  if (!hasCanonicalKeys(spec)) {
+    return [
+      screenIssue(
+        'non-canonical-key',
+        '',
+        'An element key, prop name, event name or param name holds a control character or collides with another after cleaning — use plain names (fail closed).',
+      ),
+    ];
+  }
+  return Object.entries(spec.elements).flatMap(([key, element]) => screenElement(key, element));
+}
 
 // True for a non-null object event map (el.on / el.watch). Untrusted input that
 // json-render never value-checks can arrive null or non-object; only an object
@@ -64,6 +211,27 @@ export function rejectOffCatalog(
   spec: AppSpec,
   catalog: MinituiCatalog,
 ): readonly AllowlistIssue[] {
+  return allowlistIssues(spec, catalog).map(boundIssue);
+}
+
+function allowlistIssues(spec: AppSpec, catalog: MinituiCatalog): readonly AllowlistIssue[] {
+  try {
+    const screened = screenSpec(spec);
+    return screened.length > 0 ? screened : rejectNames(spec, catalog);
+  } catch {
+    return [
+      {
+        code: 'gate-internal-error',
+        elementKey: '',
+        offending: '',
+        message: GATE_INTERNAL_ERROR_MESSAGE,
+      },
+    ];
+  }
+}
+
+// The name walk, run only on a spec the screen has passed.
+function rejectNames(spec: AppSpec, catalog: MinituiCatalog): readonly AllowlistIssue[] {
   const components = new Set(catalog.componentNames);
   const actions = new Set(catalog.actionNames);
   const issues: AllowlistIssue[] = [];
@@ -79,38 +247,32 @@ export function rejectOffCatalog(
         message: `Component "${el.type}" is not in catalog "${catalog.id}".`,
       });
     }
+    // The renderer has no implementation of state watchers, so a bound action would validate and
+    // never fire. The screen has already shown the field is an object; any object is refused.
+    if (Object.hasOwn(el, 'watch')) {
+      issues.push({
+        code: 'watch-unsupported',
+        elementKey: key,
+        offending: 'watch',
+        message: `Element "${key}" uses "watch", which is not supported — bind the action to an event under \`on\` instead.`,
+      });
+    }
     for (const binding of collectBindings(el)) {
-      // A null/non-object binding value (untrusted input json-render never
-      // value-checks) would crash the reads below. Fail closed with a repromptable
-      // issue rather than throwing out of the gate's no-throw contract.
-      const raw: unknown = binding;
-      if (raw === null || typeof raw !== 'object') {
-        issues.push({
-          code: 'malformed-binding',
-          elementKey: key,
-          offending: String(raw),
-          message: `Binding on "${key}" is not an action object — malformed; rejected (fail closed).`,
-        });
-        continue;
-      }
-      // Defense-in-depth: the frozen action grammar has NO onSuccess/onError/confirm
-      // (@minitui/types's ActionBinding is .strict() without them). json-render's
-      // own binding EXECUTES onSuccess.set (ungated state write) + onSuccess.action
-      // (chained secondary action) and reads confirm as consent text. The model
-      // stream is never runtime-parsed against the .strict() type, so a
-      // model-authored callback or a spec-authored confirm dialog rides through as
-      // an excess key. This walk REJECTS the off-grammar construct at generation
-      // time (repromptable): a chained ON-catalog action, its ungated set write, and
-      // agent-authored consent text are all off the frozen grammar (consent is
-      // host-resolved, never taken from the model). Object.hasOwn reads the runtime
-      // key the strict wire type deliberately omits (no cast).
-      for (const callback of ['onSuccess', 'onError', 'confirm', 'preventDefault'] as const) {
-        if (Object.hasOwn(binding, callback)) {
+      // The frozen action grammar is exactly `action` and `params` (@minitui/types's ActionBinding
+      // is .strict()). The model stream is never runtime-parsed against that type, so any other key
+      // rides through as an excess key, and json-render's binding reader acts on some of them: it
+      // EXECUTES onSuccess.set (an ungated state write) and onSuccess.action (a chained secondary
+      // action) and reads confirm as consent text; a callableFrom would try to widen the action's
+      // visibility class, which only the catalog author sets. This walk allows those two keys and
+      // REJECTS every other own key at generation time (repromptable), whatever its name: consent
+      // and chained callbacks are host-owned, never taken from the model.
+      for (const field of Object.keys(binding)) {
+        if (!BINDING_KEYS.has(field)) {
           issues.push({
             code: 'off-grammar-callback',
             elementKey: key,
-            offending: callback,
-            message: `Binding on "${key}" carries "${callback}" — off the frozen action grammar; consent and chained callbacks are host-owned, so it is rejected here (fail closed).`,
+            offending: field,
+            message: `Binding on "${key}" carries "${field}" — only "action" and "params" are in the frozen action grammar; consent, callbacks and visibility are host-owned, so it is rejected here (fail closed).`,
           });
         }
       }

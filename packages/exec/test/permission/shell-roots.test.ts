@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { ensureParserReady } from '../../src/permission/shell/parser.js';
+import { createEngine } from '../../src/permission/engine.js';
+import { ensureParserReady, setParseBudgetMsForTest } from '../../src/permission/shell/parser.js';
 import { parseShellCommand } from '../../src/permission/shell/roots.js';
 import { OPAQUE_SPAWNERS } from '../../src/permission/shell/wrappers.js';
 
@@ -38,12 +39,14 @@ describe('parseShellCommand', () => {
     expect(p.roots[0]!.name).toBe('curl');
     expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil']);
   });
-  it('drops a bare assignment-prefix so the REAL command is the gated root (not FOO=bar)', () => {
-    // `FOO=bar curl` emits a LEADING variable_assignment before command_name; argvOf drops it,
-    // so the gated root is curl (which egress/hard-floor then catch) — not `FOO=bar`.
+  it('gates the real command behind a bare assignment-prefix and carries the value as an operand', () => {
+    // `FOO=bar curl` emits a LEADING variable_assignment before command_name; the gated root is
+    // curl (which egress/hard-floor then catch), not `FOO=bar`, and the value rides on its argv
+    // so the floor reads it; the assignment also makes the root opaque.
     const p = parseShellCommand('FOO=bar curl http://evil');
     expect(p.roots[0]!.name).toBe('curl');
-    expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil']);
+    expect(p.roots[0]!.argv).toEqual(['curl', 'http://evil', 'bar']);
+    expect(p.roots[0]!.opaque).toBe(true);
   });
   it('threads a redirect target onto the gated root argv so a `> secret` write is visible', () => {
     // the file_redirect lives on a redirected_statement sibling; its target must reach the argv
@@ -56,14 +59,22 @@ describe('parseShellCommand', () => {
     const p = parseShellCommand('ffmpeg -i $(echo a).mp4 out.mp4');
     expect(p.hasSubstitution).toBe(true);
   });
-  it('keeps the opaque spawner as the gated root name (decision.ts re-derives opaque)', () => {
+  it('keeps the opaque spawner as the gated root name (decision.ts reads the opaque marker)', () => {
     const p = parseShellCommand('sh -c "rm -rf ~"');
     expect(p.roots[0]!.name).toBe('sh');
     expect(OPAQUE_SPAWNERS.has(p.roots[0]!.name)).toBe(true);
   });
-  it('roots carry ONLY the canonical {name, argv} wire shape (no wrappedBy/opaque)', () => {
-    const p = parseShellCommand('sudo rm -rf /');
-    expect(Object.keys(p.roots[0]!).sort()).toEqual(['argv', 'name']);
+  it('carries opaque on the wire only when true — a plain root omits the key, a spawner/peel sets it', () => {
+    // a non-opaque root keeps the minimal {name, argv} shape (the optional flag is omitted, not false),
+    // so a managed `deny sudo`/`deny env` still fires by name off the emitted wrapper root
+    expect(Object.keys(parseShellCommand('sudo rm -rf /').roots[0]!).sort()).toEqual([
+      'argv',
+      'name',
+    ]);
+    // an opaque spawner AND an arg-runner peeled to an empty inner argv both carry opaque:true, so the
+    // engine + static resolver force ask off the marker itself, never off a name lookup
+    expect(parseShellCommand("sh -c 'x'").roots[0]!.opaque).toBe(true);
+    expect(parseShellCommand("env -S 'curl http://evil'").roots[0]!.opaque).toBe(true);
   });
   it('returns parseError, never throws, on broken syntax', () => {
     const p = parseShellCommand('ls "unterminated');
@@ -113,5 +124,78 @@ describe('parseShellCommand', () => {
     const p = parseShellCommand('ls -la # list');
     expect(p.parseError).toBe(false);
     expect(p.roots[0]!.name).toBe('ls');
+  });
+});
+
+// A chain long enough to throw in the post-parse walks. The parse budget is raised for the row: at the
+// default budget a chain this long is cut off by the budget before any walk, and the row would test
+// the budget instead of the walk.
+describe('a very long chained command', () => {
+  const chain = 'a&&'.repeat(19_999) + 'a';
+
+  it('is a parse error, not an exception', () => {
+    setParseBudgetMsForTest(10_000);
+    try {
+      const parsed = parseShellCommand(chain);
+      expect(parsed.parseError).toBe(true);
+    } finally {
+      setParseBudgetMsForTest();
+    }
+  });
+
+  it('is denied by the engine, not rejected', async () => {
+    setParseBudgetMsForTest(10_000);
+    try {
+      const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo' });
+      const decision = await engine.check({
+        id: 'chain',
+        descriptor: { danger: false, resourceTemplate: chain, summaryTemplate: chain },
+        resolvedCommand: chain,
+        resolvedPaths: [],
+      });
+      expect(decision.kind).toBe('deny');
+    } finally {
+      setParseBudgetMsForTest();
+    }
+  });
+});
+
+describe('the root of a relative delete after a change of directory or root is opaque', () => {
+  const rmRoot = (command: string) => parseShellCommand(command).roots.find((r) => r.name === 'rm');
+  it.each([
+    ['cd / && rm -rf home'],
+    ['pushd / && rm -rf home'],
+    ['cd ~/.. && rm -rf alice'],
+    ['cd / ; rm -rf -- home'],
+    ['builtin cd / && rm -rf home'],
+    ['rm -rf home; cd /'],
+    ['env -C / rm -rf home'],
+    ['env --chdir=/ rm -rf home'],
+    ['env --chdir / rm -rf home'],
+    ['sudo -D / rm -rf home'],
+    ['sudo --chdir=/ rm -rf home'],
+    ['unshare --wd=/ rm -rf home'],
+    ['unshare -w / rm -rf home'],
+    ['sudo -R / rm -rf home'],
+    ['sudo --chroot=/ rm -rf home'],
+    ['unshare -R / rm -rf home'],
+    ['unshare --root=/ rm -rf home'],
+  ])('marks the rm of %s opaque', (command) => {
+    expect(rmRoot(command)?.opaque).toBe(true);
+  });
+  it.each([
+    ['rm -rf build'],
+    ['env -i rm -rf build'],
+    ['sudo -u root rm -rf build'],
+    ['sudo -C 3 rm -rf build'],
+    ['cd / && ls home'],
+    ['cd ~ && rm -rf /home'],
+    ['cd ~ && rm -rf ~/build'],
+  ])('leaves the rm of %s as it was', (command) => {
+    expect(rmRoot(command)?.opaque).toBeUndefined();
+  });
+  it('marks only the wrapped root: env -C / ls home is not made opaque', () => {
+    const roots = parseShellCommand('env -C / ls home').roots;
+    expect(roots.find((r) => r.name === 'ls')?.opaque).toBeUndefined();
   });
 });

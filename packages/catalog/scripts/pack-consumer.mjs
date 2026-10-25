@@ -58,13 +58,13 @@ try {
   const typesTgz = pack(join(packagesDir, 'types'));
   const rendererCoreTgz = pack(join(packagesDir, 'renderer-core'));
   const sanitizerTgz = pack(join(packagesDir, 'sanitizer'));
-  // 2. Assert EXACTLY the four intended files (a stray/missing file reds).
+  // 2. Assert EXACTLY the five intended files (a stray/missing file reds); pnpm pack adds LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog:/workspace: rewritten concrete, engines present.
   const m = JSON.parse(
@@ -176,6 +176,9 @@ try {
       '  buildCatalogPrompt,\n' +
       '  sanitize,\n' +
       '  sanitizeSpecStrings,\n' +
+      '  hasCanonicalKeys,\n' +
+      '  checkElementTree,\n' +
+      '  MAX_ELEMENT_DEPTH,\n' +
       '  videoMergeCatalog,\n' +
       "} from '@minitui/catalog';\n" +
       'import type {\n' +
@@ -195,6 +198,7 @@ try {
       '  SemanticIssue,\n' +
       '  ValidationIssue,\n' +
       '  ValidationResult,\n' +
+      '  ElementTreeIssue,\n' +
       "} from '@minitui/catalog';\n" +
       // Force every value re-export to resolve (TS2305 on any drop) without executing.
       'export const _values = [\n' +
@@ -203,14 +207,15 @@ try {
       '  standardComponentDefinitions, standardActionDefinitions, STD_ACTION_NAMES,\n' +
       '  defineMinituiCatalog, rejectOffCatalog, throwingFallback, checkSemantics,\n' +
       '  CATALOG_REPAIR_WORDING, runFullValidation, buildCatalogPrompt, sanitize,\n' +
-      '  sanitizeSpecStrings, videoMergeCatalog,\n' +
+      '  sanitizeSpecStrings, hasCanonicalKeys, checkElementTree, MAX_ELEMENT_DEPTH,\n' +
+      '  videoMergeCatalog,\n' +
       '] as const;\n' +
       // Type witnesses — one alias per public type name (TS2305 on any drop).
       'export type _T = [\n' +
       '  MinituiActionDef, MinituiComponentDef, TrustTier, ActionKind, PermissionDescriptor,\n' +
       '  VisibilityClass, ActionBinding, AppSpec, SpecElement, ComponentDefinition,\n' +
       '  ActionDefinition, MinituiCatalog, AllowlistIssue, SemanticIssue, ValidationIssue,\n' +
-      '  ValidationResult,\n' +
+      '  ValidationResult, ElementTreeIssue,\n' +
       '];\n' +
       // Force a couple of external re-export chains to resolve as VALUES.
       "export const _k: ActionKind = 'render-local';\n" +

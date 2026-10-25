@@ -39,9 +39,10 @@ export const ActionResultSchema = z
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 
 // The canonical fault shape for ActionOutcome { status: 'failed'; fault }.
-// actionKey identifies the element that ran;
-// stderrExcerpt is the sanitized tail of the child's stderr. Sole owner — no
-// sibling plan redefines this under {code,detail} or {code,message}.
+// actionKey carries the name of the action that ran. stderrExcerpt is text supplied by whatever
+// produced the fault and is not sanitized here or in transport: a consumer sanitizes it before it is
+// displayed or placed in a prompt. Sole owner — no sibling plan redefines this under {code,detail} or
+// {code,message}.
 export const RuntimeFaultSchema = z
   .object({
     actionKey: z.string(),

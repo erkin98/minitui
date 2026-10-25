@@ -22,11 +22,12 @@ function barrelExports(): string[] {
 
 // Frozen, inline public surface rather than an auto-written snapshot. The
 // chokepoint's surface is deliberately tiny: three entry points, the options bag, the OSC 8
-// allowlist constant, and the width helper. Surface SHRINK and GROWTH
+// allowlist constant, the width helper, and the consent character class. Surface SHRINK and GROWTH
 // both red — a strip entry point silently vanishing from (or leaking into)
 // the public seam is a security-surface change, not a refactor.
 const PUBLIC_SURFACE = [
   'ALLOWED_OSC8_SCHEMES',
+  'CONSENT_FORBIDDEN',
   'SanitizeOptions',
   'sanitize',
   'sanitizeSpecStrings',

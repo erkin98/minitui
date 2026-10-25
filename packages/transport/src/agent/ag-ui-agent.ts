@@ -6,6 +6,7 @@ import type { AppEvent } from '../events/app-event.js';
 import { subscribeToObservable } from './subscribe.js';
 import { createAbort } from './abort.js';
 import { formatUnknown } from '../format-unknown.js';
+import { reportWarning } from '../report-warning.js';
 import type { AgentPort, RunHandle } from './agent-port.js';
 
 /** Ceiling for the remote Observable-to-AsyncGenerator buffer. */
@@ -36,6 +37,8 @@ export function createAgUiAgentPort(
       const queue: AppEvent[] = [];
       const waiters: Array<(v: IteratorResult<AppEvent, undefined>) => void> = [];
       let done = false;
+      // True from the first eviction until the buffer has drained to empty: one stall episode reports once.
+      let stalled = false;
 
       const emit = (event: AppEvent): void => {
         const waiter = waiters.shift();
@@ -50,14 +53,17 @@ export function createAgUiAgentPort(
         // before it ships, so the drop stops being silent.
         if (queue.length >= maxQueue) {
           queue.shift();
-          try {
-            opts?.diagnostics?.warn('remote agent pump dropped oldest event (backpressure)', {
-              maxQueue,
-            });
-          } catch {
-            // Diagnostics is observational and cannot break delivery. Unguarded, a throwing sink
-            // here loses BOTH events — the evicted one is already gone and the push below never
-            // runs — and escapes emit() into the rxjs subscriber callback.
+          if (!stalled) {
+            stalled = true;
+            // Contained: a sink that threw here would lose BOTH events (the evicted one is already gone and
+            // the push below never runs) and escape emit() into the rxjs subscriber callback.
+            reportWarning(
+              opts?.diagnostics,
+              'remote agent pump dropped oldest event (backpressure)',
+              {
+                maxQueue,
+              },
+            );
           }
         }
         queue.push(event);
@@ -105,8 +111,11 @@ export function createAgUiAgentPort(
 
       const events: AsyncGenerator<AppEvent, undefined> = {
         next(): Promise<IteratorResult<AppEvent, undefined>> {
-          if (queue.length)
-            return Promise.resolve({ value: queue.shift() as AppEvent, done: false });
+          if (queue.length) {
+            const value = queue.shift() as AppEvent;
+            if (queue.length === 0) stalled = false; // drained: the next eviction starts a new episode
+            return Promise.resolve({ value, done: false });
+          }
           if (done) return Promise.resolve({ value: undefined, done: true });
           return new Promise((resolve) => waiters.push(resolve));
         },

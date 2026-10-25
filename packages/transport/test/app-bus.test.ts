@@ -2,6 +2,8 @@ import { runInNewContext } from 'node:vm';
 import { describe, it, expect } from 'vitest';
 import { createAppBus, type AppBus } from '../src/bus/app-bus.js';
 import type { PublishArgs } from '../src/bus/bus-port.js';
+import type { DiagnosticsPort } from '@minitui/types';
+import { rejectingSink, throwingSink, unhandledRejectionsDuring } from './diagnostics-sinks.js';
 
 function nextImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -680,5 +682,34 @@ describe('AppBus', () => {
     expect(tokens).toEqual(['seed', 'b']);
     expect(content).toEqual(['seed', 'b']);
     expect(notes).toEqual(['seed', 'b']);
+  });
+});
+
+describe('app bus contains a misbehaving diagnostics sink', () => {
+  // a subscriber that throws makes the bus report through its sink
+  function failingBus(diagnostics: DiagnosticsPort) {
+    const bus = createAppBus({ diagnostics });
+    const delivered: unknown[] = [];
+    bus.subscribe('state-delta', () => {
+      throw new Error('subscriber boom');
+    });
+    bus.subscribe('state-delta', (payload) => delivered.push(payload.delta));
+    return { bus, delivered };
+  }
+
+  it('keeps delivering to siblings when the sink throws', () => {
+    const { bus, delivered } = failingBus(throwingSink);
+    expect(() => bus.publish('state-delta', { delta: [1] })).not.toThrow();
+    expect(delivered).toEqual([[1]]);
+  });
+
+  it('leaves no unhandled rejection when the sink returns a rejected promise', async () => {
+    const { bus, delivered } = failingBus(rejectingSink);
+    const unhandled = await unhandledRejectionsDuring(() => {
+      bus.publish('state-delta', { delta: [1] });
+      bus.publish('state-delta', { delta: [2] });
+    });
+    expect(unhandled).toEqual([]);
+    expect(delivered).toEqual([[1], [2]]);
   });
 });
