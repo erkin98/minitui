@@ -6,8 +6,10 @@ import type { VisibilityChannel } from '../src/visibility/index.js';
 import type { ModelProvider } from '../src/provider/provider-port.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import { activitySnapshot } from '../src/events/event-factory.js';
+import { partsStream, runTool } from './helpers/fake-stream.js';
 
-const provider: ModelProvider = { id: 'x', async *streamChat() {} };
+// A provider that drives the SDK loop, so a turn runs through the stream function the config injects.
+const provider: ModelProvider = { id: 'x', usesSdkLoop: true, async *streamChat() {} };
 const toolDispatch: ToolDispatchPort = {
   dispatch: async (req): Promise<ToolCallResult> => ({
     toolCallId: req.toolCallId,
@@ -25,15 +27,9 @@ const visibility: VisibilityChannel = {
   projectForModel: (v) => v,
 };
 
-// Inject a fake streamText through AgentConfig.streamTextImpl (a typed seam — no cast on config). The
-// fake mirrors the real result shape: fullStream is an async-iterable PROPERTY.
-function fakeStreamText(parts: Array<Record<string, unknown>>) {
-  return (() => ({
-    fullStream: (async function* () {
-      for (const p of parts) yield p;
-    })(),
-  })) as unknown as typeof import('ai').streamText;
-}
+// Inject a stream function through AgentConfig.streamTextImpl (a typed seam). It mirrors the real result
+// shape: fullStream is an async-iterable PROPERTY.
+const fakeStreamText = partsStream;
 
 const tools = [{ name: 'ffmpeg', description: 'm', inputSchema: z.object({ a: z.number() }) }];
 
@@ -71,13 +67,13 @@ describe('AgentSession', () => {
       tools,
       model: 'test-model',
       config: {
-        streamTextImpl: (() => ({
+        streamTextImpl: () => ({
           fullStream: (async function* () {
             yield { type: 'text-delta', text: 'spec ready' };
             await new Promise((r) => setTimeout(r, 10));
             yield { type: 'finish', finishReason: 'stop' };
           })(),
-        })) as unknown as typeof import('ai').streamText,
+        }),
       },
     });
     const seen: MinituiEvent[] = [];
@@ -97,7 +93,7 @@ describe('AgentSession', () => {
       tools,
       model: 'test-model',
       config: {
-        streamTextImpl: (() => ({
+        streamTextImpl: () => ({
           fullStream: (async function* () {
             yield { type: 'text-delta', text: 'a' };
             // a slow second part the cancel should cut off
@@ -105,7 +101,7 @@ describe('AgentSession', () => {
             yield { type: 'text-delta', text: 'b' };
             yield { type: 'finish', finishReason: 'stop' };
           })(),
-        })) as unknown as typeof import('ai').streamText,
+        }),
       },
     });
     const seen: string[] = [];
@@ -131,13 +127,13 @@ describe('AgentSession', () => {
       config: {
         turnTimeoutMs: 5,
         idleTimeoutMs: 5000, // high, so the whole-turn deadline (not the idle guard) is what fires
-        streamTextImpl: (() => ({
+        streamTextImpl: () => ({
           fullStream: (async function* () {
             // The finish part never arrives before the 5ms whole-turn deadline.
             await new Promise((r) => setTimeout(r, 40));
             yield { type: 'finish', finishReason: 'stop' };
           })(),
-        })) as unknown as typeof import('ai').streamText,
+        }),
       },
     });
     const seen: MinituiEvent[] = [];
@@ -178,21 +174,14 @@ describe('AgentSession', () => {
         // streamText calls the tool's execute (which awaits dispatch), then emits a text delta we cancel
         // on. The aborted dispatch resolves isError:true, so execute THROWS by design — swallow it here
         // exactly like the real SDK does (it catches the throw and emits a tool-error part).
-        streamTextImpl: ((args: {
-          tools?: Record<
-            string,
-            { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-          >;
-        }) => ({
+        streamTextImpl: (options) => ({
           fullStream: (async function* () {
-            void args.tools?.ffmpeg
-              ?.execute({ a: 1 }, { toolCallId: 't1' })
-              ?.catch(() => undefined);
+            void runTool(options, 'ffmpeg', { a: 1 }, 't1');
             yield { type: 'text-delta', text: 'working' };
             await new Promise((r) => setTimeout(r, 50));
             yield { type: 'finish', finishReason: 'stop' };
           })(),
-        })) as unknown as typeof import('ai').streamText,
+        }),
       },
     });
     const gen = session.submit('go');
@@ -236,6 +225,39 @@ describe('AgentSession', () => {
       'TOOL_CALL_RESULT',
       'RUN_FINISHED',
     ]);
+  });
+
+  it('takes the non-SDK path when the provider does not set usesSdkLoop, even with a stream function in the config', async () => {
+    // The provider alone chooses the loop. A stream function in the config only replaces the SDK's own on
+    // the SDK path, so here the events must be the provider's chunks and not the stream function's parts.
+    const scripted: ModelProvider = {
+      id: 'scripted',
+      async *streamChat() {
+        yield { type: 'text', text: 'from the provider' };
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const session = new AgentSession({
+      provider: scripted,
+      toolDispatch,
+      specSink,
+      visibility,
+      tools,
+      model: 'test-model',
+      config: {
+        streamTextImpl: partsStream([
+          { type: 'text-delta', text: 'from the stream function' },
+          { type: 'finish', finishReason: 'stop' },
+        ]),
+      },
+    });
+    const out: MinituiEvent[] = [];
+    for await (const e of session.submit('merge these')) out.push(e);
+    expect(out).toContainEqual({ type: 'TEXT_MESSAGE_CONTENT', delta: 'from the provider' });
+    expect(out).not.toContainEqual({
+      type: 'TEXT_MESSAGE_CONTENT',
+      delta: 'from the stream function',
+    });
   });
 
   it('stays alive across turns: a second submit(reprompt) re-enters with the SAME threadId + a fresh runId', async () => {

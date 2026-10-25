@@ -1,18 +1,10 @@
 import { sanitize } from '@minitui/sanitizer';
+import { decodePointerToken, RESERVED_JSON_KEYS } from '@minitui/types';
 import type { JsonValue, Pointer } from '@minitui/types';
 
 export type { JsonValue, Pointer };
 
-// Deliberately a third copy of this literal. `@minitui/sanitizer` keeps its own
-// because it is a zero-dependency leaf that cannot import anything, and
-// `@minitui/types`' RESERVED_JSON_KEYS is module-private, so consuming it would
-// mean growing that package's public surface. Unifying is not free.
-const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_POINTER_DEPTH = 256;
-
-function unescape(token: string): string {
-  return token.replace(/~1/g, '/').replace(/~0/g, '~');
-}
 
 /**
  * The raw RFC-6901 tokenizer: no depth ceiling, no reserved-key check, no
@@ -24,7 +16,7 @@ function unescape(token: string): string {
 export function parsePointer(pointer: string): string[] {
   if (pointer === '') return [];
   if (pointer[0] !== '/') throw new Error('invalid JSON pointer');
-  return pointer.slice(1).split('/').map(unescape);
+  return pointer.slice(1).split('/').map(decodePointerToken);
 }
 
 export function isArrayValue(value: JsonValue | undefined): value is readonly JsonValue[] {
@@ -45,7 +37,7 @@ export function parseArrayIndexToken(token: string): number | '-' | undefined {
 }
 
 export function assertCanonicalStateKey(key: string): void {
-  if (RESERVED_KEYS.has(key)) throw new Error(`reserved state key not allowed: ${key}`);
+  if (RESERVED_JSON_KEYS.includes(key)) throw new Error(`reserved state key not allowed: ${key}`);
   if (sanitize(key) !== key) throw new Error('state key is not canonical');
 }
 

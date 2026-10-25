@@ -1,13 +1,13 @@
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { assertNever, type JsonValue } from '@minitui/types';
+import { assertNever, JsonObjectSchema, type JsonValue } from '@minitui/types';
 import type { ToolCallResult, ToolDispatchPort } from '../ports/index.js';
 import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility/index.js';
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import type { Conversation } from './conversation.js';
 import type { ModelProvider } from '../provider/provider-port.js';
-import type { ProviderRequest } from '../provider/provider-types.js';
+import type { ProviderChunk, ProviderRequest } from '../provider/provider-types.js';
 import {
   textContent,
   toolCallStart,
@@ -23,6 +23,7 @@ import { toRunError, ProviderError } from '../errors.js';
 import { systemClock, type Clock } from '../ports/index.js';
 import { streamErrorHandler } from './model-diagnostics.js';
 import { endingOf } from './finish-reason.js';
+import { readStreamPart, type StreamTextFn } from '../provider/stream-part.js';
 
 /**
  * Default per-pull idle deadline for the model stream. Sized to exceed a legitimate silent gap (e.g. a
@@ -32,9 +33,6 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 /** Default mid-stream-drop re-run budget (distinct from stopWhen and the SDK's own maxRetries). */
 export const DEFAULT_STREAM_MAX_RETRIES = 2;
 
-/** Coerce a loosely-typed stream-part field to a string, defaulting a non-string (or absent) one to ''. */
-const asString = (v: unknown): string => (typeof v === 'string' ? v : '');
-
 export interface ToolSchema {
   readonly name: string;
   readonly description: string;
@@ -42,7 +40,7 @@ export interface ToolSchema {
 }
 
 export interface RunTurnsDeps {
-  readonly streamTextImpl: typeof import('ai').streamText;
+  readonly streamTextImpl: StreamTextFn;
   readonly toolDispatch: ToolDispatchPort;
   readonly tools: readonly ToolSchema[];
   readonly stepCeiling?: number;
@@ -174,7 +172,7 @@ function buildTools(
  * Thin streamText() wrapper. The SDK OWNS the multi-step loop via stopWhen; this never re-feeds.
  * Maps fullStream parts to MinituiEvents pushed into the queue. Terminal errors become RUN_ERROR.
  */
-// eslint-disable-next-line complexity -- exhaustive closed-union switch over the model stream-part arms
+// eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
 export async function runTurns(args: {
   conversation: Conversation;
   threadId: string;
@@ -211,7 +209,7 @@ export async function runTurns(args: {
     let emittedContent = false;
     let sawFinish = false;
     let finishReason: unknown;
-    let finishUsage: { inputTokens: number; outputTokens: number } | undefined;
+    let finishUsage: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
     // Each attempt has its own controller, combined with the turn signal: it is aborted when the attempt ends,
     // so an abandoned attempt (an idle-timeout re-run) can neither keep streaming nor dispatch a late tool call.
     const attemptController = new AbortController();
@@ -262,116 +260,96 @@ export async function runTurns(args: {
       // retriable ProviderError (the whole-turn AbortSignal never fires on a stall). The catch below
       // decides whether the drop is re-run or surfaced.
       const parts = withIdleTimeout(
-        result.fullStream as AsyncIterable<{ type: string; [k: string]: unknown }>,
+        result.fullStream,
         idleTimeoutMs,
         () => new ProviderError('idle timeout waiting for model stream', true),
       );
       for await (const part of parts) {
         if (signal.aborted) break;
-        switch (part.type) {
-          case 'text-delta':
-            // The payload is `.text`; only the unrelated 'tool-input-delta' part carries `.delta`.
+        const step = readStreamPart(part, deps.redactionPolicy);
+        if (step === undefined) continue;
+        switch (step.kind) {
+          case 'text':
             emittedContent = true;
-            await queue.push(textContent(asString(part.text)));
+            await queue.push(textContent(step.text));
             break;
           case 'tool-call':
             // The SDK part field is toolName; the wire event field is toolCallName — mapped here.
             // A dispatched tool may have side effects, so emittedContent bars any re-run past this point.
             emittedContent = true;
-            await queue.push(toolCallStart(String(part.toolCallId), String(part.toolName)));
+            await queue.push(toolCallStart(step.toolCallId, step.toolName));
             break;
           case 'tool-result':
             // On the pinned SDK a tool-result is emitted ONLY for a successful buildTools execute,
             // whose return already crossed routeToolCallResult — but redact here too so the observation
             // is total by CONSTRUCTION, not by that assumption: a future provider-defined / server-side
             // tool could emit a tool-result that never touched execute. Idempotent on redacted text.
-            // The observation carries toolName so the renderer + observation channel see WHICH tool.
             emittedContent = true;
             await queue.push(
               agentObservation({
-                toolCallId: String(part.toolCallId),
-                toolName: String(part.toolName),
+                toolCallId: step.toolCallId,
+                toolName: step.toolName,
                 content: redact(
-                  typeof part.output === 'string'
-                    ? part.output
-                    : JSON.stringify(part.output ?? null),
+                  typeof step.output === 'string'
+                    ? step.output
+                    : JSON.stringify(step.output ?? null),
                   deps.redactionPolicy,
                 ),
                 isError: false,
               }),
             );
             break;
-          case 'tool-error': {
+          case 'tool-error':
             // The live failure path (a thrown execute). A failed dispatch carries its own observation (see
-            // DispatchFailure), emitted as is. Any other tool error — a rejected dispatch, a bad input, the
-            // SDK's own — surfaces as TOOL_CALL_RESULT isError:true with the error text redacted here too:
-            // the SDK has several tool-error producers and only a dispatch crosses the redaction chokepoint,
-            // so redacting on this arm keeps the observation total by construction.
+            // DispatchFailure), emitted as is. Any other tool error — a rejected dispatch, a bad input, a
+            // provider-run tool — surfaces as TOOL_CALL_RESULT isError:true with the text the reader
+            // already redacted.
             emittedContent = true;
-            if (part.error instanceof DispatchFailure) {
-              await queue.push(part.error.observation);
-              break;
-            }
-            const denied = (part.error as { denied?: boolean } | undefined)?.denied === true;
             await queue.push(
-              agentObservation({
-                toolCallId: String(part.toolCallId),
-                toolName: String(part.toolName),
-                content: redact(String(part.error), deps.redactionPolicy),
-                isError: true,
-                error: redact(String(part.error), deps.redactionPolicy),
-                ...(denied ? { denied: true } : {}),
-              }),
+              step.error instanceof DispatchFailure
+                ? step.error.observation
+                : agentObservation({
+                    toolCallId: step.toolCallId,
+                    toolName: step.toolName,
+                    content: step.message,
+                    isError: true,
+                    error: step.message,
+                    ...(step.denied ? { denied: true } : {}),
+                  }),
             );
             break;
-          }
-          case 'tool-approval-request': {
-            // Forward-compatible: these SDK approval parts are absent in the pinned version, so this arm
-            // never fires on the pin — the loose switch just tolerates it. A non-SDK provider carries the
-            // live approval contract via its own chunk stream. Escape hatch onto the CUSTOM event.
+          case 'approval-request':
+            // Escape hatch onto the CUSTOM event; a non-SDK provider carries the live approval contract.
             emittedContent = true;
-            const call = part.toolCall as { toolCallId?: unknown; toolName?: unknown } | undefined;
             await queue.push(
               custom('tool-approval-request', {
-                approvalId: asString(part.approvalId),
-                toolCallId: asString(call?.toolCallId),
-                toolName: asString(call?.toolName),
+                approvalId: step.approvalId,
+                toolCallId: step.toolCallId,
+                toolName: step.toolName,
               }),
             );
             break;
-          }
-          case 'tool-approval-response': {
+          case 'approval-response':
             emittedContent = true;
-            const call = part.toolCall as { toolCallId?: unknown } | undefined;
             await queue.push(
               custom('tool-approval-response', {
-                approvalId: asString(part.approvalId),
-                toolCallId: asString(call?.toolCallId),
-                approved: Boolean(part.approved),
+                approvalId: step.approvalId,
+                toolCallId: step.toolCallId,
+                approved: step.approved,
               }),
             );
             break;
-          }
-          case 'finish': {
+          case 'finish':
             // The SDK's terminal marker (always emitted on a clean stream). Its ABSENCE after the loop
             // ends means the stream was truncated.
             sawFinish = true;
-            finishReason = part.finishReason;
-            // Capture token usage off the SDK finish part for the RUN_FINISHED event.
-            const tu = (part as { totalUsage?: { inputTokens?: number; outputTokens?: number } })
-              .totalUsage;
-            if (tu !== undefined) {
-              finishUsage = {
-                inputTokens: tu.inputTokens ?? 0,
-                outputTokens: tu.outputTokens ?? 0,
-              };
-            }
+            finishReason = step.finishReason;
+            finishUsage = step.usage;
             break;
-          }
           case 'error': {
             // An explicit in-stream error is already classified + terminal — surface it, never re-run
             // (a drop is a stall/truncation with no error object; that is what the re-run tier retries).
-            const { message, retriable } = toRunError(part.error);
+            const { message, retriable } = toRunError(step.error);
             // A provider error string is consumer-facing (never re-fed to the model) but can echo a
             // secret/path from the request — redact it like every other externally-sourced string.
             await queue.push(
@@ -383,7 +361,7 @@ export async function runTurns(args: {
             return;
           }
           default:
-            break;
+            return assertNever(step);
         }
       }
       if (signal.aborted) return;
@@ -420,6 +398,50 @@ export async function runTurns(args: {
 }
 
 /**
+ * One tool call of the non-SDK loop, dispatched, as its observation. The checks the SDK makes on its own
+ * loop run first: the name must be one of the session's tools and the input must parse with that tool's
+ * input schema into a JSON object. A refused call is never dispatched. A dispatch that rejects becomes a
+ * failed result. The fixed messages name no model-chosen text.
+ */
+async function dispatchToolCall(
+  call: Extract<ProviderChunk, { type: 'tool-call' }>,
+  tools: readonly ToolSchema[],
+  toolDispatch: ToolDispatchPort,
+  policy: RedactionPolicy | undefined,
+  signal: AbortSignal,
+): Promise<MinituiEvent> {
+  const failed = (error: string): MinituiEvent =>
+    routeToolCallResult(
+      {
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        ok: false,
+        content: '',
+        isError: true,
+        error,
+      },
+      policy,
+    );
+  const schema = tools.find((t) => t.name === call.toolName);
+  if (schema === undefined) {
+    const names = tools.map((t) => t.name).join(', ');
+    return failed(`unknown tool; valid tools: ${names === '' ? 'none' : names}`);
+  }
+  const input = schema.inputSchema.safeParse(call.input);
+  const args = input.success ? JsonObjectSchema.safeParse(input.data) : undefined;
+  if (args === undefined || !args.success) return failed(`invalid input for tool ${schema.name}`);
+  try {
+    const result = await toolDispatch.dispatch(
+      { toolCallId: call.toolCallId, toolName: schema.name, args: args.data },
+      signal,
+    );
+    return routeToolCallResult(result, policy);
+  } catch (err) {
+    return failed(err instanceof Error ? err.message : 'tool dispatch failed');
+  }
+}
+
+/**
  * The NON-SDK provider path. When the injected provider is NOT the ai-sdk-provider — it leaves
  * `usesSdkLoop` unset, e.g. a scripted provider — there is NO streamText tool loop to run: the provider
  * yields a flat ProviderChunk stream. This consumes provider.streamChat(req, signal) and maps each chunk
@@ -427,7 +449,7 @@ export async function runTurns(args: {
  * dispatch site: with no SDK loop to run the tool, this dispatches it through ToolDispatchPort (crossing
  * the routeToolCallResult redaction chokepoint) and pushes the observation; a pre-composed `tool-result`
  * chunk (a remote provider reporting its OWN result) maps straight through. AgentSession routes here when
- * `provider.usesSdkLoop` is not set AND no `streamTextImpl` override is present.
+ * `provider.usesSdkLoop` is not true.
  */
 // eslint-disable-next-line complexity -- exhaustive closed-union switch over the ProviderChunk arms
 export async function runProviderStream(args: {
@@ -438,6 +460,8 @@ export async function runProviderStream(args: {
   model: LanguageModel;
   system?: string | undefined;
   toolDispatch: ToolDispatchPort;
+  /** The tools the model may call; a call to any other name is refused without a dispatch. */
+  tools: readonly ToolSchema[];
   redactionPolicy?: RedactionPolicy | undefined;
   queue: AsyncEventQueue<MinituiEvent>;
   signal: AbortSignal;
@@ -450,6 +474,7 @@ export async function runProviderStream(args: {
     model,
     system,
     toolDispatch,
+    tools,
     redactionPolicy,
     queue,
     signal,
@@ -476,18 +501,17 @@ export async function runProviderStream(args: {
         case 'tool-call': {
           // The SDK-side field is toolName; the wire event field is toolCallName — mapped here.
           await queue.push(toolCallStart(chunk.toolCallId, chunk.toolName));
-          // No SDK tool loop runs here, so THIS is the host's dispatch site — send the scripted
-          // tool-call to ToolDispatchPort and push its observation. Every dispatched result crosses
+          // No SDK tool loop runs here, so THIS is the host's dispatch site. Every outcome crosses
           // routeToolCallResult (the redaction chokepoint), like runTurns.
-          const result = await toolDispatch.dispatch(
-            {
-              toolCallId: chunk.toolCallId,
-              toolName: chunk.toolName,
-              args: chunk.input as Readonly<Record<string, JsonValue>>,
-            },
+          const observation = await dispatchToolCall(
+            chunk,
+            tools,
+            toolDispatch,
+            redactionPolicy,
             signal,
           );
-          await queue.push(routeToolCallResult(result, redactionPolicy));
+          if (signal.aborted) return;
+          await queue.push(observation);
           break;
         }
         case 'tool-result':

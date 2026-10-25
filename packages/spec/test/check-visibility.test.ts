@@ -47,24 +47,26 @@ describe('checkVisibility', () => {
   it("rejects an agent attempt to WIDEN a secret component's visibility (localOnly -> remoteOnly)", () => {
     // `visibility` is an excess field the wire SpecElement does not model — smuggled
     // past strict-props (which only checks `props`). This gate is the one that bites.
-    const spec = {
+    const raw = {
       root: 't',
       elements: { t: { type: 'Token', props: { token: '' }, visibility: 'remoteOnly' } },
       state: {},
-    } as unknown as Spec;
+    };
+    const spec: Spec = raw;
     const issues = checkVisibility(spec, catalog);
     expect(issues.map((i) => i.code)).toContain('visibility_widened');
     expect(issues[0]?.elementKey).toBe('t');
   });
 
   it("rejects an agent attempt to widen an action's callableFrom (clientOnly -> remoteOnly)", () => {
-    const spec = {
+    const raw = {
       root: 'b',
       elements: {
         b: { type: 'Box', props: {}, on: { press: { action: 'run', callableFrom: 'remoteOnly' } } },
       },
       state: {},
-    } as unknown as Spec;
+    };
+    const spec: Spec = raw;
     expect(checkVisibility(spec, catalog).map((i) => i.code)).toContain('visibility_widened');
   });
 
@@ -73,22 +75,23 @@ describe('checkVisibility', () => {
     // stops at the top-level binding is blind to it. The recursion in bindingsOf makes
     // the widen-check bite on the nested `run` (clientOnly -> remoteOnly) exactly as on
     // a top-level binding — defense-in-depth behind the prepareSpec strip.
-    const spec = {
-      root: 'b',
-      elements: {
-        b: {
-          type: 'Box',
-          props: {},
-          on: {
-            press: {
-              action: 'run',
-              onSuccess: { action: { action: 'run', callableFrom: 'remoteOnly' } },
-            },
-          },
-        },
+    const raw = `{
+      "root": "b",
+      "elements": {
+        "b": {
+          "type": "Box",
+          "props": {},
+          "on": {
+            "press": {
+              "action": "run",
+              "onSuccess": { "action": { "action": "run", "callableFrom": "remoteOnly" } }
+            }
+          }
+        }
       },
-      state: {},
-    } as unknown as Spec;
+      "state": {}
+    }`;
+    const spec: Spec = JSON.parse(raw);
     expect(checkVisibility(spec, catalog).map((i) => i.code)).toContain('visibility_widened');
   });
 
@@ -117,11 +120,12 @@ describe('checkVisibility', () => {
   });
 
   it('allows a NARROWER request — the agent may only tighten, never widen', () => {
-    const spec = {
+    const raw = {
       root: 'b',
       elements: { b: { type: 'Box', props: {}, visibility: 'localOnly' } },
       state: {},
-    } as unknown as Spec;
+    };
+    const spec: Spec = raw;
     expect(checkVisibility(spec, catalog)).toEqual([]);
   });
 });

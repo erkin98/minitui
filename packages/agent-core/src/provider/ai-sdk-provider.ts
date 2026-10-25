@@ -3,11 +3,11 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import type { ModelProvider } from './provider-port.js';
 import type { ProviderChunk, ProviderRequest } from './provider-types.js';
 import type { FinishReason } from '../session/finish-reason.js';
-import { noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
+import { assertNever, noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
 import { toRunError } from '../errors.js';
 import { routeProviderWarnings, streamErrorHandler } from '../session/model-diagnostics.js';
-
-type StreamTextFn = typeof realStreamText;
+import { readStreamPart, type StreamTextFn } from './stream-part.js';
+import type { RedactionPolicy } from '../visibility/index.js';
 
 /** Narrow a raw SDK finish reason to minitui's FinishReason union (unknowns fold to 'other'). */
 function toFinishReason(raw: unknown): FinishReason {
@@ -51,30 +51,17 @@ function classifyStreamError(err: unknown): Extract<ProviderChunk, { type: 'erro
     : { type: 'error', message, retriable: true, retryAfterMs };
 }
 
-/** Pull the tool call out of an SDK tool-approval part ({ toolCall: { toolCallId, toolName, input } }). */
-function approvalToolCall(part: Record<string, unknown>): {
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-} {
-  const call = (part.toolCall ?? {}) as {
-    toolCallId?: unknown;
-    toolName?: unknown;
-    input?: unknown;
-  };
-  return {
-    toolCallId: typeof call.toolCallId === 'string' ? call.toolCallId : '',
-    toolName: typeof call.toolName === 'string' ? call.toolName : '',
-    input: call.input,
-  };
-}
-
 /**
  * The day-1 ModelProvider: wraps the Vercel AI SDK streamText().fullStream and maps each stream part
  * into the minitui-owned ProviderChunk. This file is the only place SDK stream-part types are read.
  */
 export function createAiSdkProvider(
-  opts: { apiKey?: string; streamTextImpl?: StreamTextFn; diagnostics?: DiagnosticsPort } = {},
+  opts: {
+    apiKey?: string;
+    streamTextImpl?: StreamTextFn;
+    diagnostics?: DiagnosticsPort;
+    redactionPolicy?: RedactionPolicy | undefined;
+  } = {},
 ): ModelProvider {
   const streamText = opts.streamTextImpl ?? realStreamText;
   const diagnostics = opts.diagnostics ?? noopDiagnostics;
@@ -85,7 +72,7 @@ export function createAiSdkProvider(
     // Drives the SDK streamText tool loop — the session routes it through the SDK path, not the
     // direct-stream path. A scripted / non-SDK provider leaves this unset.
     usesSdkLoop: true,
-    // eslint-disable-next-line complexity -- exhaustive closed-union switch over the SDK stream-part arms
+    // eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
     async *streamChat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
       routeProviderWarnings(diagnostics);
       const result = streamText({
@@ -102,101 +89,75 @@ export function createAiSdkProvider(
           ? { maxOutputTokens: req.config.maxOutputTokens }
           : {}),
         abortSignal: signal,
-        onError: streamErrorHandler(diagnostics, undefined),
+        onError: streamErrorHandler(diagnostics, opts.redactionPolicy),
       });
 
-      for await (const part of result.fullStream as AsyncIterable<{
-        type: string;
-        [k: string]: unknown;
-      }>) {
+      for await (const part of result.fullStream) {
         if (signal.aborted) return;
-        switch (part.type) {
-          case 'text-delta':
-            // The payload is `.text`; only the unrelated 'tool-input-delta' part carries `.delta`.
-            yield { type: 'text', text: typeof part.text === 'string' ? part.text : '' };
+        const step = readStreamPart(part, undefined);
+        if (step === undefined) continue;
+        switch (step.kind) {
+          case 'text':
+            yield { type: 'text', text: step.text };
             break;
           case 'tool-call':
             yield {
               type: 'tool-call',
-              toolCallId: String(part.toolCallId),
-              toolName: String(part.toolName),
-              input: part.input,
+              toolCallId: step.toolCallId,
+              toolName: step.toolName,
+              input: step.input,
             };
             break;
           case 'tool-result':
-            // The SDK emits tool-result only for a successful execute — failures arrive as 'tool-error'.
             yield {
               type: 'tool-result',
-              toolCallId: String(part.toolCallId),
-              toolName: String(part.toolName),
-              output: part.output,
+              toolCallId: step.toolCallId,
+              toolName: step.toolName,
+              output: step.output,
               isError: false,
             };
             break;
-          case 'tool-error': {
-            // A thrown tool execute — preserve the failure as an isError tool-result chunk; dropping it
-            // would silence every tool failure. Derive the failure text ONCE and put it on BOTH `output`
-            // and the dedicated `error` slot: the consumer JSON-stringifies a non-string output, and a raw
-            // Error stringifies to '{}', erasing the message. A string output survives, and `error` gives
-            // the observation a first-class failure field symmetric with the tool-result arm.
-            const message = part.error instanceof Error ? part.error.message : String(part.error);
+          case 'tool-error':
+            // A failed tool call stays a failure: an isError tool-result chunk with the redacted text on
+            // both `output` and the dedicated `error` slot (a raw Error would stringify to '{}').
             yield {
               type: 'tool-result',
-              toolCallId: String(part.toolCallId),
-              toolName: String(part.toolName),
-              output: message,
+              toolCallId: step.toolCallId,
+              toolName: step.toolName,
+              output: step.message,
               isError: true,
-              error: message,
+              error: step.message,
             };
             break;
-          }
-          case 'tool-approval-request': {
-            // Forward-compatible: absent in the pinned SDK version, tolerated if a future pin adds it.
-            const call = approvalToolCall(part);
+          case 'approval-request':
             yield {
               type: 'approval-request',
-              toolCallId: call.toolCallId,
-              toolName: call.toolName,
-              input: call.input,
+              toolCallId: step.toolCallId,
+              toolName: step.toolName,
+              input: step.input,
             };
             break;
-          }
-          case 'tool-approval-response': {
-            const call = approvalToolCall(part);
+          case 'approval-response':
             yield {
               type: 'approval-response',
-              toolCallId: call.toolCallId,
-              approved: Boolean(part.approved),
+              toolCallId: step.toolCallId,
+              approved: step.approved,
             };
             break;
-          }
-          case 'finish': {
-            // The SDK's totalUsage fields are individually optional even when present — coerce to 0 so
-            // minitui's usage shape (both fields required) stays sound.
-            const totalUsage = part.totalUsage as
-              | { inputTokens?: number; outputTokens?: number }
-              | undefined;
+          case 'finish':
             yield {
               type: 'finish',
-              reason: toFinishReason(part.finishReason),
-              ...(totalUsage !== undefined
-                ? {
-                    usage: {
-                      inputTokens: totalUsage.inputTokens ?? 0,
-                      outputTokens: totalUsage.outputTokens ?? 0,
-                    },
-                  }
-                : {}),
+              reason: toFinishReason(step.finishReason),
+              ...(step.usage !== undefined ? { usage: step.usage } : {}),
             };
             break;
-          }
           case 'error':
             // Surface the classified error in-band (fatal vs retriable + retry-after) and end the stream,
             // rather than throwing — the seam then has one uniform error shape.
-            yield classifyStreamError(part.error);
+            yield classifyStreamError(step.error);
             return;
           default:
-            break;
+            return assertNever(step);
         }
       }
     },

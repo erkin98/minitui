@@ -19,7 +19,9 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g, // GitHub fine-grained personal access tokens
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
   /\bBearer\s+[A-Za-z0-9._-]{12,}\b/g, // Authorization: Bearer ...
-  /(?<=authorization\s*[:=]\s*(?:bearer|basic)\s+)\S+/gi, // the credential after an authorization header, any case
+  // The credential after an authorization header, any case. Anchored on the header word and matched forward,
+  // so the work is linear in the text; the header itself is kept (group `keep`).
+  /(?<keep>authorization\s*[:=]\s*(?:bearer|basic)\s+)\S+/gi,
   /\beyJ[A-Za-z0-9._-]{20,}\b/g, // JWT (header starts eyJ)
   /\b[sr]k_live_[A-Za-z0-9]{20,}\b/g, // Stripe live secret/restricted keys
   /\bAIza[A-Za-z0-9_-]{35}\b/g, // Google API keys
@@ -27,7 +29,23 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END[A-Z ]*PRIVATE KEY-----|$)/g, // PEM private-key block, BEGIN through END (or the end of a cut-off text)
   /(?<=password=)\S+/gi, // password=... in command/url
   /(?<=:\/\/[^:@\s/]*:)[^@\s/]+(?=@)/g, // creds in user:pass@host urls (the user may be empty)
+  // A value of eight or more characters assigned to a secret-named key: `api_key = "..."`, `token: ...`,
+  // `SECRET=...`, `"password": "..."`, `DB_PASSWORD=...`. The key and the separator are kept (group `keep`).
+  /(?<keep>(?<![A-Za-z0-9])(?:api[_-]?key|token|secret|password)\b["']?\s*[:=]\s*["']?)[^\s"']{8,}/gi,
+  // A URL whose only credential is the user part: `https://<token>@host`. A user part of twenty or more
+  // characters is too long to be a name; shorter ones (`git@host`, `alice@host`) stay visible. Matched forward
+  // after `://` up to `@`, so the work is linear in the text.
+  /(?<=:\/\/)[^:@\s/]{20,}(?=@)/g,
 ];
+
+// The replacement for a built-in pattern: the text the pattern names as `keep` (a header in front of the
+// credential), then the marker. A pattern without that group is replaced whole.
+function keepThenSecret(...args: unknown[]): string {
+  const groups = args.at(-1);
+  const kept =
+    typeof groups === 'object' && groups !== null && 'keep' in groups ? groups.keep : undefined;
+  return (typeof kept === 'string' ? kept : '') + SECRET;
+}
 
 // A host pattern is applied as a copy that is global and not sticky, so every occurrence is found whatever
 // flags the caller wrote, and the caller's object (flags, lastIndex) is never touched.
@@ -38,7 +56,7 @@ function everywhere(pattern: RegExp): RegExp {
 
 function redactSecrets(text: string, extra?: readonly RegExp[]): string {
   let out = text;
-  for (const re of SECRET_PATTERNS) out = out.replace(re, SECRET);
+  for (const re of SECRET_PATTERNS) out = out.replace(re, keepThenSecret);
   if (extra) for (const re of extra) out = out.replace(everywhere(re), SECRET);
   return out;
 }

@@ -432,6 +432,8 @@ describe('composeValidation: the state document', () => {
 
 describe('composeValidation: the screen of the whole reply', () => {
   const SCREEN_MESSAGE = 'no usable spec: emit JSONL patch lines that add /root and /elements';
+  const SHAPE_MESSAGE =
+    'the spec was refused: root and elements must be plain JSON with no key named __proto__, constructor or prototype, no value in two places, and within the size limits';
   const line = (path: string, valueJson: string) =>
     `{"op":"add","path":"/${path}","value":${valueJson}}\n`;
   const box = '{"type":"Box","props":{}}';
@@ -442,7 +444,9 @@ describe('composeValidation: the screen of the whole reply', () => {
     for (let i = 0; i < levels; i++) value = `{"n":${value}}`;
     return value;
   };
-  const refused: Array<[string, string]> = [
+  // The reply has a root and elements, and what it holds is refused: a reserved key, a value in two
+  // places, a value past the limits.
+  const shapeRefused: Array<[string, string]> = [
     [
       'an own __proto__ key inside an element',
       line('root', '"a"') + line('elements', `{"a":{"type":"Box","props":{},"__proto__":{"x":1}}}`),
@@ -463,10 +467,6 @@ describe('composeValidation: the screen of the whole reply', () => {
       'an element named prototype',
       line('root', '"a"') + line('elements', `{"a":${box},"prototype":${box}}`),
     ],
-    ['an empty reply', ''],
-    ['a whole-object reply that is not a patch line', '{"root":"a","elements":{}}\n'],
-    ['elements and no root', line('elements', `{"a":${box}}`)],
-    ['a root and no elements', line('root', '"a"')],
     [
       'a prop nested 300 levels deep',
       line('root', '"a"') +
@@ -481,15 +481,58 @@ describe('composeValidation: the screen of the whole reply', () => {
         ),
     ],
   ];
+  // A part is missing: the reply is empty, is not made of patch lines, or lacks the root or the elements.
+  const missingRefused: Array<[string, string]> = [
+    ['an empty reply', ''],
+    ['a whole-object reply that is not a patch line', '{"root":"a","elements":{}}\n'],
+    ['elements and no root', line('elements', `{"a":${box}}`)],
+    ['a root and no elements', line('root', '"a"')],
+  ];
+  const refused: Array<[string, string]> = [...shapeRefused, ...missingRefused];
 
-  it.each(refused)('%s ends with the screen message on every pass', async (_name, reply) => {
+  const endsWith = (message: string) => async (_name: string, reply: string) => {
     const run = await drive({ replies: [reply] });
     expect(run.regenerations).toBe(5);
     const envelope = lastEnvelope(run);
     expect(envelope.structural.map((i) => i.code)).toEqual(['empty_spec']);
-    expect(envelope.structural.map((i) => i.message)).toEqual([SCREEN_MESSAGE]);
+    expect(envelope.structural.map((i) => i.message)).toEqual([message]);
     expect(envelope.catalog).toEqual([]);
     expect(envelope.semantic).toEqual([]);
+  };
+  it.each(missingRefused)(
+    '%s ends with the screen message on every pass',
+    endsWith(SCREEN_MESSAGE),
+  );
+  it.each(shapeRefused)('%s ends with the shape message on every pass', endsWith(SHAPE_MESSAGE));
+
+  it('answers a missing part and a refused shape with different sentences', async () => {
+    const messages = async (reply: string) =>
+      lastEnvelope(await drive({ replies: [reply] })).structural.map((i) => i.message);
+    const missing = await messages('');
+    const shaped = await messages(
+      line('root', '"a"') + line('elements', `{"a":${box},"constructor":${box}}`),
+    );
+    expect(missing).toEqual([SCREEN_MESSAGE]);
+    expect(shaped).toEqual([SHAPE_MESSAGE]);
+    expect(missing).not.toEqual(shaped);
+  });
+
+  it('names nothing of the reply in the shape sentence', async () => {
+    const reply =
+      line('root', '"a"') +
+      line('elements', `{"a":${box},"constructor":{"type":"Box","props":{"LEAK-MARKER-157":1}}}`);
+    const run = await drive({ replies: [reply] });
+    const messages = lastEnvelope(run).structural.map((i) => i.message);
+    expect(messages).toEqual([SHAPE_MESSAGE]);
+    expect(messages.join('\n')).not.toContain('LEAK-MARKER-157');
+  });
+
+  it('counts an empty root as a missing root', async () => {
+    const reply = line('root', '""') + line('elements', `{"a":${box},"constructor":${box}}`);
+    const messages = lastEnvelope(await drive({ replies: [reply] })).structural.map(
+      (i) => i.message,
+    );
+    expect(messages).toEqual([SCREEN_MESSAGE]);
   });
 
   it.each(refused)(

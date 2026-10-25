@@ -7,6 +7,9 @@ import { createAsyncEventQueue } from '../src/events/event-stream.js';
 import { createConversation } from '../src/session/conversation.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import type { ToolCallResult, ToolDispatchPort } from '../src/ports/index.js';
+import { partsStream, type StreamTextFn } from './helpers/fake-stream.js';
+import type { DiagnosticsPort } from '@minitui/types';
+import type { RedactionPolicy } from '../src/visibility/index.js';
 
 const req: ProviderRequest = {
   messages: [{ role: 'user', content: 'merge' }],
@@ -15,13 +18,7 @@ const req: ProviderRequest = {
 
 // A fake streamText mirroring the real result shape: fullStream is an async-iterable property
 // (not a method the caller invokes).
-function fakeStreamText(parts: Array<Record<string, unknown>>) {
-  return ((_args: unknown) => ({
-    fullStream: (async function* () {
-      for (const p of parts) yield p;
-    })(),
-  })) as unknown as typeof import('ai').streamText;
-}
+const fakeStreamText = partsStream;
 
 describe('ai-sdk-provider', () => {
   it('maps each stream part type to the right ProviderChunk, including finish.totalUsage into usage', async () => {
@@ -110,6 +107,7 @@ describe('ai-sdk-provider', () => {
       threadId: 'tid',
       runId: 'run-1',
       model: 'test-model',
+      tools: [],
       toolDispatch: noopDispatch,
       queue,
       signal: new AbortController().signal,
@@ -124,6 +122,63 @@ describe('ai-sdk-provider', () => {
       expect(ev.error).toBe('exit 1');
       expect(ev.content).toBe('exit 1');
     }
+  });
+
+  it('redacts the text of a tool-error part on both the output and the error slot', async () => {
+    const secret = 'sk-ant-api03-eeeeeeeeeeeeeeeeeeeeeeee';
+    const p = createAiSdkProvider({
+      streamTextImpl: fakeStreamText([
+        {
+          type: 'tool-error',
+          toolCallId: 't1',
+          toolName: 'ffmpeg',
+          input: {},
+          error: new Error(`bad key ${secret}`),
+        },
+        { type: 'finish', finishReason: 'stop' },
+      ]),
+    });
+    const out: ProviderChunk[] = [];
+    for await (const c of p.streamChat(req, new AbortController().signal)) out.push(c);
+    expect(out[0]).toEqual({
+      type: 'tool-result',
+      toolCallId: 't1',
+      toolName: 'ffmpeg',
+      output: 'bad key [redacted-secret]',
+      isError: true,
+      error: 'bad key [redacted-secret]',
+    });
+  });
+
+  describe('the record of a stream error', () => {
+    // A stream function that reports one error through the onError it was given, then ends at once.
+    const failing: StreamTextFn = (options) => {
+      options.onError?.({ error: new Error('boom hostsecret-12345678') });
+      return partsStream([])(options);
+    };
+    const recordOf = async (redactionPolicy?: RedactionPolicy): Promise<string> => {
+      const messages: string[] = [];
+      const diagnostics: DiagnosticsPort = {
+        warn: (msg, meta) => {
+          if (msg === 'model stream error') messages.push(String(meta?.message));
+        },
+        debug() {},
+      };
+      const p = createAiSdkProvider({ streamTextImpl: failing, diagnostics, redactionPolicy });
+      for await (const _ of p.streamChat(req, new AbortController().signal)) void _;
+      expect(messages).toHaveLength(1);
+      return messages[0] ?? '';
+    };
+
+    it('scrubs a host pattern from the record when the provider is given the host policy', async () => {
+      const message = await recordOf({ extraSecretPatterns: [/hostsecret-\d+/g] });
+      expect(message).toContain('[redacted-secret]');
+      expect(message).not.toContain('hostsecret-12345678');
+    });
+
+    it('control: without the policy the same pattern is not a built-in and the record keeps it', async () => {
+      expect(await recordOf()).toContain('hostsecret-12345678');
+    });
   });
 
   it('maps tool-approval request/response parts to approval chunks (forward-compatible arms)', async () => {
