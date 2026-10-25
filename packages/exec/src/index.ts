@@ -1,5 +1,5 @@
-// @minitui/exec public barrel. Permission-engine exports are added by this plan's Task 15;
-// local-runner/sandbox/dispatch exports are added by later slices.
+// @minitui/exec public barrel. Permission-engine exports live in permission/index.ts;
+// local-runner/sandbox/dispatch exports are appended as they land.
 export {
   createPermissionEngine,
   parseShellCommand,
@@ -11,3 +11,14 @@ export {
 // the concrete return type of createPermissionEngine. PathRule (the write-path gate type) + the
 // type re-export use `export type` (NodeNext verbatimModuleSyntax).
 export type { PathRule, PermissionEngine } from './permission/index.js';
+
+// --- sandbox (appended) ---
+export { createSandboxManager } from './sandbox/index.js';
+export { SandboxUnavailableError, SandboxViolationError } from './errors.js';
+export type {
+  SandboxManagerHandle,
+  SandboxProbe,
+  SandboxPolicy,
+  WrappedArgv,
+  SandboxViolation,
+} from './sandbox/index.js';

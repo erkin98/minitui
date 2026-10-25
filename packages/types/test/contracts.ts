@@ -5,7 +5,7 @@
 // package's strict flags (tsconfig.test includes test/**/*.ts). No runtime code.
 import type { Pointer } from '../src/pointer.js';
 import type { AgentEvent, EventType } from '../src/events.js';
-import type { Decision } from '../src/permission.js';
+import type { CommandRoot, Decision, PermissionRule } from '../src/permission.js';
 import type {
   ExecEvent,
   McpBridgePort,
@@ -40,6 +40,24 @@ export type _ExecEventExact = Expect<Equal<ExecEvent, ExpectedExecEvent>>;
 
 // The deny-first decision discriminants are exactly these three.
 export type _DecisionKinds = Expect<Equal<Decision['kind'], 'allow' | 'deny' | 'ask'>>;
+
+// The shapes the permission engine and the root extractor are built against. `opaque` and `exact` are
+// optional and absent unless set, so removing either field from its schema reds the type check.
+type ExpectedCommandRoot = {
+  readonly name: string;
+  readonly argv: readonly string[];
+  readonly opaque?: boolean | undefined;
+};
+export type _CommandRootExact = Expect<Equal<CommandRoot, ExpectedCommandRoot>>;
+
+type ExpectedPermissionRule = {
+  readonly pattern: string;
+  readonly effect: 'allow' | 'ask' | 'deny';
+  readonly layer: 'managed' | 'user' | 'project';
+  readonly identity?: string | undefined;
+  readonly exact?: true | undefined;
+};
+export type _PermissionRuleExact = Expect<Equal<PermissionRule, ExpectedPermissionRule>>;
 
 // The AgentEvent union's discriminants EXACTLY mirror the EventType vocabulary —
 // the two hand-maintained lists (EVENT_TYPES enum vs AgentEventSchema) cannot drift

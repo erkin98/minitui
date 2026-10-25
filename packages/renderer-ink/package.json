@@ -9,6 +9,7 @@
     "@minitui/renderer-core": "workspace:*",
     "@minitui/sanitizer": "workspace:*",
     "@minitui/types": "workspace:*",
+    "@types/node": "catalog:",
     "fast-json-patch": "catalog:",
     "ink": "catalog:",
     "react": "catalog:"

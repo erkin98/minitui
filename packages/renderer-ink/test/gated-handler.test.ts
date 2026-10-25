@@ -7,6 +7,7 @@ import type {
   ActionLifecycleEvent,
 } from '@minitui/renderer-core';
 import type { MinituiActionDef } from '@minitui/catalog';
+import type { DiagnosticsPort } from '@minitui/types';
 import { z } from 'zod';
 
 const def: MinituiActionDef = {
@@ -153,5 +154,206 @@ describe('gatedHandler', () => {
       actionName: 'merge',
       elementKey: 'btn-merge',
     });
+  });
+});
+
+// ---- a failure after started ends in one terminal event and one report ----
+
+const ESC = String.fromCharCode(27);
+
+function recordingSink() {
+  const warnings: Array<{ msg: string; meta: Record<string, unknown> | undefined }> = [];
+  const sink: DiagnosticsPort = {
+    warn: (msg, meta) => {
+      warnings.push({ msg, meta });
+    },
+    debug() {},
+  };
+  return { sink, warnings };
+}
+
+describe('gatedHandler: a failure after started', () => {
+  const failing = (message: string): ActionDispatcher => ({
+    dispatch: async () => {
+      throw new Error(message);
+    },
+  });
+  const run = async (dispatcher: ActionDispatcher, diagnostics: DiagnosticsPort) => {
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+      diagnostics,
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    return events;
+  };
+
+  it('a rejecting dispatcher: one started, one error, one report with a fixed message', async () => {
+    const { sink, warnings } = recordingSink();
+    const first = await run(failing('first failure'), sink);
+    const second = await run(failing(`second ${ESC}[31mfailure ${'x'.repeat(2000)}`), sink);
+    for (const events of [first, second]) {
+      expect(events.map((e) => e.phase)).toEqual(['started', 'error']);
+    }
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.msg).toBe(warnings[1]?.msg);
+    const meta = JSON.stringify(warnings[1]?.meta);
+    expect(meta).not.toContain(ESC);
+    expect(String(warnings[1]?.meta?.error).length).toBeLessThanOrEqual(512);
+    expect(String(warnings[0]?.meta?.error)).toContain('first failure');
+  });
+
+  it('a throwing state thunk after started: the same', async () => {
+    const { sink, warnings } = recordingSink();
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher: makeDispatcher({ status: 'settled' }).dispatcher,
+      getStateSnapshot: () => {
+        throw new Error(`state is gone ${ESC}[2J`);
+      },
+      emitLifecycle: (e) => events.push(e),
+      diagnostics: sink,
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    expect(events.map((e) => e.phase)).toEqual(['started', 'error']);
+    expect(warnings).toHaveLength(1);
+    expect(JSON.stringify(warnings[0]?.meta)).not.toContain(ESC);
+  });
+
+  it('progress after the terminal event emits nothing', async () => {
+    const captured: DispatchContext[] = [];
+    const dispatcher: ActionDispatcher = {
+      dispatch: async (_name, ctx) => {
+        captured.push(ctx);
+        return { status: 'settled', result: 'ok' };
+      },
+    };
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    expect(events.map((e) => e.phase)).toEqual(['started', 'result']);
+    captured[0]?.onEvent?.({ kind: 'progress', value: 0.5 });
+    expect(events.map((e) => e.phase)).toEqual(['started', 'result']);
+  });
+
+  it('control: progress during the run is emitted', async () => {
+    const events: ActionLifecycleEvent[] = [];
+    const dispatcher: ActionDispatcher = {
+      dispatch: async (_name, ctx) => {
+        ctx.onEvent?.({ kind: 'progress', value: 0.25 });
+        return { status: 'settled', result: 'ok' };
+      },
+    };
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    expect(events.map((e) => e.phase)).toEqual(['started', 'progress', 'result']);
+  });
+
+  it('a sink that throws, and a sink that returns a rejected promise, change nothing', async () => {
+    const throwing: DiagnosticsPort = {
+      warn: () => {
+        throw new Error('sink down');
+      },
+      debug() {},
+    };
+    const rejecting: DiagnosticsPort = {
+      warn: async () => {
+        throw new Error('sink rejected');
+      },
+      debug() {},
+    };
+    for (const sink of [throwing, rejecting]) {
+      const events = await run(failing('boom'), sink);
+      expect(events.map((e) => e.phase)).toEqual(['started', 'error']);
+    }
+    await afterTurn();
+  });
+});
+
+// let a rejected promise from a sink surface (vitest fails the run on an unhandled rejection)
+const afterTurn = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+
+// ---- the fault text of a denied action and of invalid params is bounded and clean ----
+
+// a control character other than CR, TAB and LF, which the shared sanitiser keeps
+const hasStrippedControl = (text: string): boolean =>
+  [...text].some((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 0x09 || code === 0x0a || code === 0x0d) return false;
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+  });
+
+describe('gatedHandler: fault text', () => {
+  const faultOf = (events: ActionLifecycleEvent[]): string => {
+    const last = events.at(-1);
+    return last?.phase === 'error' ? last.fault.stderrExcerpt : '';
+  };
+
+  it('a denial reason with an escape sequence and 5,000 characters is cleaned and cut to 512', async () => {
+    const reason = `denied ${ESC}[31mred${ESC}[0m ${'z'.repeat(5000)}`;
+    const { dispatcher } = makeDispatcher({ status: 'denied', reason });
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    const text = faultOf(events);
+    expect(text).toContain('denied');
+    expect(text).not.toContain(ESC);
+    expect(text.length).toBeLessThanOrEqual(512);
+  });
+
+  it('invalid params with a long schema message start with invalid params: and are cut to 512', async () => {
+    const { dispatcher, calls } = makeDispatcher({ status: 'settled' });
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: Array.from({ length: 200 }, () => 5) }, 'btn');
+    const text = faultOf(events);
+    expect(calls).toEqual([]);
+    expect(text.startsWith('invalid params:')).toBe(true);
+    expect(hasStrippedControl(text)).toBe(false);
+    expect(text.length).toBeLessThanOrEqual(512);
+  });
+
+  it('control: a short plain reason passes through unchanged', async () => {
+    const { dispatcher } = makeDispatcher({ status: 'denied', reason: 'user said no' });
+    const events: ActionLifecycleEvent[] = [];
+    const handler = gatedHandler({
+      actionName: 'merge',
+      def,
+      dispatcher,
+      getStateSnapshot: () => ({}),
+      emitLifecycle: (e) => events.push(e),
+    });
+    await handler({ inputs: ['a.mp4'] }, 'btn');
+    expect(faultOf(events)).toBe('user said no');
   });
 });

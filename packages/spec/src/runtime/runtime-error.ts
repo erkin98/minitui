@@ -9,8 +9,9 @@ import type { RuntimeFault } from '@minitui/types';
  * builder (`toRuntimeRepair`) accepts the exact type every real caller
  * holds — agent-core's `routeRuntimeFault`, the cli `buildRepair` adapter,
  * the integration suite — an EXACT match, never a same-shape twin that
- * can drift. `stderrExcerpt` is already sanitized at the transport seam; this
- * package treats it as plain text and never re-runs the ANSI strip (that impl lives
- * only in `@minitui/sanitizer`).
+ * can drift. The producer sanitises the fault text under the types contract; this
+ * package sanitises it again with the same function (`sanitize`, re-exported by
+ * `@minitui/catalog`) before it reaches the model, and never implements a strip of
+ * its own. The fault stays untrusted by contract.
  */
 export type RuntimeError = RuntimeFault;

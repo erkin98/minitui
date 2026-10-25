@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { defineMinituiCatalog } from '../src/define-catalog.js';
-import { runFullValidation } from '../src/validate/index.js';
+import { runFullValidation, type ValidationResult } from '../src/validate/index.js';
+import { MALFORMED_CASES, cleanSpec, gateCatalog, unicodeKeySpec } from './malformed-specs.js';
 import { CATALOG_REPAIR_WORDING } from '../src/validate/runtime.js';
 import { videoMergeCatalog } from '../src/catalogs/video-merge.js';
 import type { AppSpec } from '../src/contract/spec.js';
@@ -78,5 +79,40 @@ describe('CATALOG_REPAIR_WORDING', () => {
   it("is a domain-hint string spec's toRuntimeRepair appends (not a fault->prompt builder)", () => {
     expect(typeof CATALOG_REPAIR_WORDING).toBe('string');
     expect(CATALOG_REPAIR_WORDING).toMatch(/codec|path|parameter/i);
+  });
+});
+
+describe('runFullValidation answers a malformed spec with an issue', () => {
+  it.each(MALFORMED_CASES)('$name', ({ build, code, messagePart }) => {
+    const result: ValidationResult = Reflect.apply(runFullValidation, undefined, [
+      build(),
+      gateCatalog,
+      {},
+    ]);
+    expect(result.ok).toBe(false);
+    const codes = result.ok ? [] : result.issues.map((issue) => issue.code);
+    expect(codes).toContain(code);
+    expect(codes).not.toContain('gate-internal-error');
+    if (messagePart !== undefined && !result.ok) {
+      expect(result.issues.some((issue) => issue.message.includes(messagePart))).toBe(true);
+    }
+  });
+
+  it('passes a spec whose element keys are not ASCII', () => {
+    const result: ValidationResult = Reflect.apply(runFullValidation, undefined, [
+      unicodeKeySpec,
+      gateCatalog,
+      {},
+    ]);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('still passes a plain valid spec', () => {
+    const result: ValidationResult = Reflect.apply(runFullValidation, undefined, [
+      cleanSpec,
+      gateCatalog,
+      {},
+    ]);
+    expect(result).toEqual({ ok: true });
   });
 });

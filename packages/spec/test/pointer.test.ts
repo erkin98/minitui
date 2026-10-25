@@ -68,3 +68,29 @@ describe('collectBoundPointers', () => {
     expect(ptrs).toEqual(['/a/missing', '/b/missing']);
   });
 });
+
+describe('collectBoundPointers: values that are not pointer strings', () => {
+  const specOf = (elementJson: string): Spec => {
+    const built: Spec = JSON.parse(`{"root":"r","elements":{"r":${elementJson}},"state":{}}`);
+    return built;
+  };
+
+  it.each([
+    ['a $state marker holding a number', '{"type":"Box","props":{"value":{"$state":5}}}'],
+    ['a $bindState marker holding a number', '{"type":"Box","props":{"value":{"$bindState":5}}}'],
+    ['a repeat statePath holding a number', '{"type":"Box","props":{},"repeat":{"statePath":5}}'],
+    [
+      'a repeat statePath holding the empty string',
+      '{"type":"Box","props":{},"repeat":{"statePath":""}}',
+    ],
+  ])('collects nothing and does not throw: %s', (_name, elementJson) => {
+    expect(collectBoundPointers(specOf(elementJson))).toEqual([]);
+  });
+
+  it('still collects a repeat statePath that is a non-empty string', () => {
+    const bound = collectBoundPointers(
+      specOf('{"type":"Box","props":{},"repeat":{"statePath":"/inputs"}}'),
+    );
+    expect(bound.map((b) => [b.pointer, b.source])).toEqual([['/inputs', 'repeat']]);
+  });
+});

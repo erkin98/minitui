@@ -6,9 +6,16 @@ import { dirname, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const planted = readFileSync(resolve(here, 'fixtures/illegal-import.ts.txt'), 'utf8');
+const WALLED = [
+  '@json-render/ink',
+  'react',
+  '@json-render/ink/schema',
+  '@json-render/ink/catalog',
+  'ai',
+];
 
 describe('catalog import-boundary HARD GATE fails closed', () => {
-  it('reports the React root @json-render/ink + react imports as ERRORS', async () => {
+  it('reports each walled import as an ERROR', async () => {
     const eslint = new ESLint({
       cwd: resolve(here, '..'),
       overrideConfigFile: resolve(here, '../eslint.config.js'),
@@ -18,10 +25,16 @@ describe('catalog import-boundary HARD GATE fails closed', () => {
     });
     const messages = results.flatMap((r) => r.messages);
     const errors = messages.filter((m) => m.severity === 2);
-    // Four planted specifiers must EACH be flagged — the React root, react itself, and both
-    // non-/server subpaths (/schema, /catalog). >= 4 witnesses the subpath bans specifically:
-    // drop either subpath from the wall and the count falls below four.
-    expect(errors.length).toBeGreaterThanOrEqual(4);
+    // Each planted specifier must be flagged by name — the React root, react itself, both
+    // non-/server subpaths (/schema, /catalog) and the AI SDK. The rule's message begins with the
+    // quoted specifier, which tells the root from its subpaths: drop any one entry from the wall and
+    // its own check fails, where a count of errors would still be met by the others.
+    for (const specifier of WALLED) {
+      expect(
+        errors.some((m) => m.message.startsWith(`'${specifier}'`)),
+        specifier,
+      ).toBe(true);
+    }
     expect(errors.every((m) => m.ruleId === 'no-restricted-imports')).toBe(true);
     // hard gate: zero warning-level downgrades
     expect(messages.filter((m) => m.severity === 1)).toHaveLength(0);

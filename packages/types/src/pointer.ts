@@ -40,6 +40,8 @@ interface CloneFrame {
   readonly entries: ReadonlyArray<readonly [string, unknown]>;
   readonly path: JsonPath;
   readonly array: boolean;
+  // levels below the root of the value being cloned (the root container is 0), whatever path it sits at
+  readonly depth: number;
 }
 
 interface JsonResourceBudget {
@@ -282,6 +284,7 @@ function allocateJsonValue(
     entries: container.entries,
     path,
     array: container.array,
+    depth,
   });
   return { ok: true, value: container.target };
 }
@@ -304,7 +307,7 @@ function cloneJsonTreeWithBudget(
         const pathKey = frame.array ? Number(key) : key;
         const child = allocateJsonValue(
           value,
-          frame.path.length + 1,
+          frame.depth + 1,
           [...frame.path, pathKey],
           ctx,
           seen,

@@ -23,8 +23,9 @@ function requestedClass(
  * grammar to strip it — this is the ONLY gate that catches it. The smuggled field
  * survives json-render's autoFix (relocation/prune of KNOWN fields only). A class
  * strictly WIDER (more exposed to the model) than the catalog's is a privilege
- * escalation → reject. Narrower/equal is harmless — the agent may only tighten;
- * the runtime ceiling is always the catalog's class.
+ * escalation → reject. A narrower or equal ELEMENT-level `visibility` is harmless — the agent may
+ * only tighten; the runtime ceiling is always the catalog's class. A binding-level `callableFrom`
+ * is different: the wire schema refuses any such key before this check runs, whatever its class.
  */
 export function checkVisibility(spec: Spec, catalog: MinituiCatalog): readonly SemanticIssue[] {
   const issues: SemanticIssue[] = [];

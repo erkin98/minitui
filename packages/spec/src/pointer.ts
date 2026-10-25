@@ -67,8 +67,9 @@ export function collectBoundPointers(spec: Spec): readonly BoundPointer[] {
   const out: BoundPointer[] = [];
   for (const [key, element] of Object.entries(spec.elements)) {
     collectFromProps(element.props, key, out);
-    if (element.repeat?.statePath) {
-      out.push({ pointer: toPointer(element.repeat.statePath), elementKey: key, source: 'repeat' });
+    const statePath: unknown = element.repeat?.statePath;
+    if (typeof statePath === 'string' && statePath !== '') {
+      out.push({ pointer: toPointer(statePath), elementKey: key, source: 'repeat' });
     }
     if (element.watch) {
       for (const path of Object.keys(element.watch)) {

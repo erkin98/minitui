@@ -12,25 +12,30 @@ pre-commit:
       # dist/, so the exports-resolved dist/index.d.ts wouldn't exist pre-build.
       run: pnpm run typecheck
     test-policy:
-      # Fire on any staged .test.ts(x) AND any .ts(x) under a test/ or __tests__/
-      # dir (helpers/fixtures/setup the script also scans), so pre-commit covers the same
+      # Fire on any staged test file AND any source file under a test/ or __tests__/
+      # dir (helpers/fixtures/setup the script also scans), in any of the eight source
+      # extensions the policy is keyed on, so pre-commit covers the same
       # set as the CI witness. Single-string brace glob with the alternatives inlined —
       # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).
-      glob: '{*.test.ts,*.test.tsx,*.test.mts,*.test.cts,**/test/**/*.ts,**/test/**/*.tsx,**/test/**/*.mts,**/test/**/*.cts,**/__tests__/**/*.ts,**/__tests__/**/*.tsx,**/__tests__/**/*.mts,**/__tests__/**/*.cts}'
+      glob: '{*.test.ts,*.test.tsx,*.test.mts,*.test.cts,*.test.js,*.test.jsx,*.test.mjs,*.test.cjs,**/test/**/*.ts,**/test/**/*.tsx,**/test/**/*.mts,**/test/**/*.cts,**/test/**/*.js,**/test/**/*.jsx,**/test/**/*.mjs,**/test/**/*.cjs,**/__tests__/**/*.ts,**/__tests__/**/*.tsx,**/__tests__/**/*.mts,**/__tests__/**/*.cts,**/__tests__/**/*.js,**/__tests__/**/*.jsx,**/__tests__/**/*.mjs,**/__tests__/**/*.cjs}'
       run: pnpm run lint:test-policy
     syncpack:
       glob: '**/package.json'
       run: pnpm exec syncpack lint
 
 pre-push:
+  # Run order. lefthook 1.8.2 sorts commands by priority and then by name; the order of
+  # this file does not count, and none of them sets a priority. They therefore run
+  # alphabetically: build, coverage, format, lint, pack, policy-fixtures, syncpack, test,
+  # typecheck, typecheck-composite. parallel:false only runs them one at a time; a failing
+  # command does not stop the ones after it, and the closing summary lists each outcome.
+  # Building first is relied on below, so a change of order needs a cold-tree run.
   parallel: false
   commands:
     lint:
       # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
       # rule change or a file touched outside the hook can leave the tree reding with
       # every commit green. No CI backstop exists yet (no .github/workflows).
-      # First in the sequence because parallel:false makes order execution order, and the
-      # cheapest failure should surface before the multi-minute test/build/pack commands.
       run: pnpm run lint
     format:
       run: pnpm run format:check
@@ -42,8 +47,7 @@ pre-push:
     syncpack:
       # Repo-wide version-consistency check. Pre-commit's copy fires only when a
       # package.json is staged, so manifest drift committed with --no-verify would
-      # otherwise reach the remote unchecked. Cheapest of the type/version gates,
-      # so it runs before them.
+      # otherwise reach the remote unchecked. Cheapest of the type/version gates.
       run: pnpm exec syncpack lint
     typecheck:
       # Same turbo typecheck as pre-commit, re-run repo-wide as the last gate before
@@ -53,9 +57,10 @@ pre-push:
     typecheck-composite:
       # The composite build (tsc -b) — the second cycle detector across project
       # references — runs in no other hook, so this is its only enforcement point.
-      # Ordered after typecheck above: its turbo ^build produces the upstream
-      # dist/index.d.ts that exports resolve to; a cold raw tsc -b fails because
-      # tsc emits to dist-types/, never dist/.
+      # Needs the upstream dist/index.d.ts that exports resolve to, which the turbo ^build
+      # of typecheck (and the build command) produces; a cold raw tsc -b fails because
+      # tsc emits to dist-types/, never dist/. By name it sorts after typecheck, so it
+      # runs after it.
       run: pnpm run typecheck:tsc
     test:
       run: pnpm run test:all
@@ -67,5 +72,5 @@ pre-push:
       # Published-artifact gate: pack each publishing package, assert the
       # tarball's files/manifest/exports/engines, then compile + run a strict consumer
       # against the SHIPPED tarball. Self-builds via cached turbo, so it is order-safe
-      # against the build command above. Closes the "committed but never invoked" gap.
+      # against the build command. Closes the "committed but never invoked" gap.
       run: pnpm run pack:check

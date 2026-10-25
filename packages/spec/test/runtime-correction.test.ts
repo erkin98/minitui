@@ -44,3 +44,37 @@ describe('toRuntimeRepair', () => {
     expect(toRuntimeRepair(fault).fixable).toBe(true);
   });
 });
+
+describe('toRuntimeRepair: terminal controls in the fault text', () => {
+  const ESC = String.fromCharCode(27);
+  const BEL = String.fromCharCode(7);
+  const hyperlink = `${ESC}]8;;http://example.invalid${BEL}click${ESC}]8;;${BEL}`;
+  const hostile: RuntimeError = {
+    exitCode: 2,
+    actionKey: `mer${ESC}[31mge`,
+    stderrExcerpt: `first\r${ESC}[2Jboom${BEL} ${hyperlink}`,
+  };
+
+  it('strips escapes, bells and hyperlinks from the text that goes to the model and keeps CR', () => {
+    const { reprompt } = toRuntimeRepair(hostile);
+    expect(reprompt).toContain('boom');
+    expect(reprompt).not.toContain(ESC);
+    expect(reprompt).not.toContain(BEL);
+    expect(reprompt).not.toContain('example.invalid');
+    expect(reprompt).toContain('\r');
+  });
+
+  it('leaves the returned action key as it was given', () => {
+    expect(toRuntimeRepair(hostile).actionKey).toBe(hostile.actionKey);
+  });
+
+  it('control: plain text goes through unchanged', () => {
+    const { reprompt } = toRuntimeRepair({
+      exitCode: 2,
+      actionKey: 'merge',
+      stderrExcerpt: 'No such file: a.mp4',
+    });
+    expect(reprompt).toContain('The action "merge" failed (exit 2)');
+    expect(reprompt).toContain('No such file: a.mp4');
+  });
+});

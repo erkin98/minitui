@@ -85,6 +85,9 @@ catalogs:
       specifier: 4.3.6
       version: 4.3.6
 
+patchedDependencies:
+  '@json-render/ink@0.19.0': b1dc06bbea29e01fb51dbe157db770727ec3935ed74125ec4149aa17587426b8
+
 importers:
 
   .:
@@ -146,6 +149,9 @@ importers:
       '@minitui/types':
         specifier: workspace:*
         version: link:../types
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.19
       ai:
         specifier: 'catalog:'
         version: 5.0.45(zod@4.3.6)
@@ -179,7 +185,7 @@ importers:
         version: 0.19.0(zod@4.3.6)
       '@json-render/ink':
         specifier: 'catalog:'
-        version: 0.19.0(ink@6.8.0(@types/react@19.2.3)(react@19.2.8))(react@19.2.8)(zod@4.3.6)
+        version: 0.19.0(patch_hash=b1dc06bbea29e01fb51dbe157db770727ec3935ed74125ec4149aa17587426b8)(ink@6.8.0(@types/react@19.2.3)(react@19.2.8))(react@19.2.8)(zod@4.3.6)
       '@minitui/renderer-core':
         specifier: workspace:*
         version: link:../renderer-core
@@ -296,7 +302,7 @@ importers:
         version: 0.19.0(zod@4.3.6)
       '@json-render/ink':
         specifier: 'catalog:'
-        version: 0.19.0(ink@6.8.0(@types/react@19.2.3)(react@19.2.4))(react@19.2.4)(zod@4.3.6)
+        version: 0.19.0(patch_hash=b1dc06bbea29e01fb51dbe157db770727ec3935ed74125ec4149aa17587426b8)(ink@6.8.0(@types/react@19.2.3)(react@19.2.4))(react@19.2.4)(zod@4.3.6)
       '@minitui/catalog':
         specifier: workspace:*
         version: link:../catalog
@@ -309,6 +315,9 @@ importers:
       '@minitui/types':
         specifier: workspace:*
         version: link:../types
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.19
       fast-json-patch:
         specifier: 'catalog:'
         version: 3.1.1
@@ -3946,7 +3955,7 @@ snapshots:
     dependencies:
       zod: 4.3.6
 
-  '@json-render/ink@0.19.0(ink@6.8.0(@types/react@19.2.3)(react@19.2.4))(react@19.2.4)(zod@4.3.6)':
+  '@json-render/ink@0.19.0(patch_hash=b1dc06bbea29e01fb51dbe157db770727ec3935ed74125ec4149aa17587426b8)(ink@6.8.0(@types/react@19.2.3)(react@19.2.4))(react@19.2.4)(zod@4.3.6)':
     dependencies:
       '@json-render/core': 0.19.0(zod@4.3.6)
       ink: 6.8.0(@types/react@19.2.3)(react@19.2.4)
@@ -3955,7 +3964,7 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@json-render/ink@0.19.0(ink@6.8.0(@types/react@19.2.3)(react@19.2.8))(react@19.2.8)(zod@4.3.6)':
+  '@json-render/ink@0.19.0(patch_hash=b1dc06bbea29e01fb51dbe157db770727ec3935ed74125ec4149aa17587426b8)(ink@6.8.0(@types/react@19.2.3)(react@19.2.8))(react@19.2.8)(zod@4.3.6)':
     dependencies:
       '@json-render/core': 0.19.0(zod@4.3.6)
       ink: 6.8.0(@types/react@19.2.3)(react@19.2.8)

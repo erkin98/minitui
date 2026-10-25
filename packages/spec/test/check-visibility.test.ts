@@ -125,3 +125,12 @@ describe('checkVisibility', () => {
     expect(checkVisibility(spec, catalog)).toEqual([]);
   });
 });
+
+describe('checkVisibility: callbacks that are not objects', () => {
+  it.each([['"done"'], ['5'], ['true']])('an onSuccess and onError of %s do not throw', (value) => {
+    const spec: Spec = JSON.parse(
+      `{"root":"b","elements":{"b":{"type":"Box","props":{},"on":{"press":{"action":"run","onSuccess":${value},"onError":${value}}}}},"state":{}}`,
+    );
+    expect(() => checkVisibility(spec, catalog)).not.toThrow();
+  });
+});

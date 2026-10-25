@@ -1,5 +1,5 @@
 // Published-artifact gate for the renderer swap boundary + render chokepoint: pack
-// renderer-ink + its four internal workspace deps → assert the four-file tarball +
+// renderer-ink + its four internal workspace deps → assert the five-file tarball +
 // manifest (concrete deps, engines floor, exact exports) → install into a throwaway
 // strict consumer → tsc (types:[], lib ES2023, skipLibCheck:true) forces the WHOLE
 // dist/index.d.ts AND its external re-exports to resolve → one ESM import that loads the
@@ -8,13 +8,24 @@
 // @minitui/types, @minitui/sanitizer, @minitui/renderer-core, @minitui/catalog — packed
 // alongside and pinned via pnpm overrides; their 0.0.0 versions are on no registry. Its
 // external deps (@json-render/core, @json-render/ink, ink, react, fast-json-patch) resolve
-// from the offline store — the same volatile react/ink/marked transitives the catalog and
+// from the offline store; @json-render/ink is installed WITH the repository's focus patch (the
+// library is external in the bundle, so the patch reaches a consumer only through this entry), and
+// the script fails unless the installed library carries it — the same volatile react/ink/marked transitives the catalog and
 // spec gates already resolve offline. Permanent (run by the root package gate + pre-push).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_NODE_FLOOR,
@@ -42,6 +53,11 @@ const rootPkg = JSON.parse(readFileSync(resolve(packagesDir, '..', 'package.json
 assertRootToolchainControl(die);
 assertRootToolchain(rootPkg, die);
 const tmp = mkdtempSync(join(tmpdir(), 'minitui-renderer-ink-pack-'));
+// the focus patch of @json-render/ink: the effect that registers a widget with the focus ring depends
+// on the stable register and unregister functions, not on the context value that changes on every
+// focus change
+const PATCH_FILE = '@json-render__ink@0.19.0.patch';
+const PATCHED_DEPS = '[ctx?.register, ctx?.unregister, id]';
 
 const pack = (dir) => {
   const out = JSON.parse(
@@ -62,13 +78,13 @@ try {
   const sanitizerTgz = pack(join(packagesDir, 'sanitizer'));
   const rendererCoreTgz = pack(join(packagesDir, 'renderer-core'));
   const catalogTgz = pack(join(packagesDir, 'catalog'));
-  // 2. Assert EXACTLY the four intended files (a stray/missing file reds).
+  // 2. Assert EXACTLY the five intended files (a stray/missing file reds); pnpm pack adds LICENSE.
   const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .map((p) => p.replace(/^package\//, ''))
     .sort();
-  const want = ['dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
+  const want = ['LICENSE', 'dist/index.d.ts', 'dist/index.js', 'dist/index.js.map', 'package.json'];
   if (!eq(files, want)) die('packed files ' + JSON.stringify(files) + ' ≠ ' + JSON.stringify(want));
   // 3. Inspect the packed manifest: catalog:/workspace: rewritten concrete, engines present.
   const m = JSON.parse(
@@ -125,8 +141,14 @@ try {
       '\n' +
       '  react: 19.2.4\n' +
       '  ink: 6.8.0\n' +
-      '  marked: 17.0.6\n',
+      '  marked: 17.0.6\n' +
+      'patchedDependencies:\n' +
+      "  '@json-render/ink@0.19.0': patches/" +
+      PATCH_FILE +
+      '\n',
   );
+  mkdirSync(join(tmp, 'patches'));
+  copyFileSync(resolve(packagesDir, '..', 'patches', PATCH_FILE), join(tmp, 'patches', PATCH_FILE));
   writeFileSync(
     join(tmp, 'tsconfig.json'),
     JSON.stringify({
@@ -237,6 +259,18 @@ try {
       "  throw new Error('isRenderLocalAllowed not STATE-only on shipped dist');\n",
   );
   execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  // The library file that an `import` of @json-render/ink resolves from renderer-ink must carry the
+  // patched dependency list. Without it Tab cannot reach a non-first widget in the packed build.
+  const inkRoot = realpathSync(join(tmp, 'node_modules', '@minitui', 'renderer-ink'));
+  // the package does not export its own package.json, so find its root from the main entry
+  // (<root>/dist/index.js) and read the file that the `import` condition names
+  const libMain = createRequire(join(inkRoot, 'package.json')).resolve('@json-render/ink');
+  const libRoot = dirname(dirname(libMain));
+  const libEntry = JSON.parse(readFileSync(join(libRoot, 'package.json'), 'utf8')).exports?.['.']
+    ?.import;
+  if (typeof libEntry !== 'string') die('@json-render/ink has no import entry to check');
+  if (!readFileSync(resolve(libRoot, libEntry), 'utf8').includes(PATCHED_DEPS))
+    die('the installed @json-render/ink does not carry the focus patch (' + PATCHED_DEPS + ')');
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the repo
   // toolchain (renderer-ink-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {

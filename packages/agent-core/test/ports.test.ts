@@ -104,3 +104,36 @@ describe('SpecSinkPort', () => {
     expect(ev.spec).toEqual(spec); // payload is { spec } — one shape
   });
 });
+
+describe('Clock.sleep', () => {
+  it('fixedClock and steppingClock sleep at once', async () => {
+    const started = performance.now();
+    await fixedClock(0).sleep(60_000);
+    await steppingClock(0, 1).sleep(60_000);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('systemClock: a short and a long sleep started together settle in that order', async () => {
+    const order: string[] = [];
+    const long = systemClock.sleep(120).then(() => order.push('long'));
+    const short = systemClock.sleep(20).then(() => order.push('short'));
+    await Promise.all([long, short]);
+    expect(order).toEqual(['short', 'long']);
+  });
+
+  it('systemClock: aborting the signal settles a long sleep early', async () => {
+    const ac = new AbortController();
+    const started = performance.now();
+    const sleeping = systemClock.sleep(60_000, ac.signal);
+    setTimeout(() => ac.abort(), 20);
+    await sleeping;
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('systemClock: an already-aborted signal settles at once, and a sleep never rejects', async () => {
+    const started = performance.now();
+    await expect(systemClock.sleep(60_000, AbortSignal.abort())).resolves.toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(500);
+    await expect(systemClock.sleep(5)).resolves.toBeUndefined();
+  });
+});

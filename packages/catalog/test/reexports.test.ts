@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { sanitize, sanitizeSpecStrings } from '../src/sanitize/index.js';
 import type { ActionBinding, AppSpec, SpecElement } from '../src/contract/spec.js';
+import { rejectOffCatalog } from '../src/allowlist.js';
+import { gateCatalog } from './malformed-specs.js';
 
 const ESC = '\x1b';
 
@@ -22,7 +24,6 @@ describe('spec vocabulary re-export', () => {
     };
     const el: SpecElement = { type: 'Box', props: {}, on: { press } };
     const spec: AppSpec = { root: 'a', elements: { a: el } };
-    expect(spec.root).toBe('a');
-    expect(el.on?.press).toBe(press);
+    expect(rejectOffCatalog(spec, gateCatalog)).toEqual([]);
   });
 });

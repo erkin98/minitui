@@ -9,7 +9,7 @@ function* withCallbacks(binding: ActionBinding): Iterable<ActionBinding> {
   // agent JSON, so a callback's `action` is widened to unknown before the object guard
   // — a smuggled nested action object is still walked (defense-in-depth).
   for (const cb of [binding.onSuccess, binding.onError]) {
-    if (cb && 'action' in cb) {
+    if (cb && typeof cb === 'object' && 'action' in cb) {
       const nested: unknown = cb.action;
       if (nested && typeof nested === 'object') yield* withCallbacks(nested as ActionBinding);
     }

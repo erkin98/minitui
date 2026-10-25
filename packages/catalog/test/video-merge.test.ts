@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { videoMergeCatalog } from '../src/catalogs/video-merge.js';
 import { videoMergeCatalog as fromBarrel } from '../src/catalogs/index.js';
+import { rejectOffCatalog } from '../src/allowlist.js';
+import { runFullValidation } from '../src/validate/index.js';
+import type { AppSpec } from '../src/contract/spec.js';
 
 describe('videoMergeCatalog', () => {
   it('registers the components incl. the custom FilePicker/OrderList/Button', () => {
@@ -75,5 +78,66 @@ describe('videoMergeCatalog', () => {
 
   it('re-exports videoMergeCatalog from the catalogs barrel', () => {
     expect(fromBarrel).toBe(videoMergeCatalog);
+  });
+});
+
+describe('a full merge spec', () => {
+  const spec: AppSpec = {
+    root: 'app',
+    elements: {
+      app: {
+        type: 'Box',
+        props: {},
+        children: ['picker', 'order', 'codec', 'merge', 'progress', 'status'],
+      },
+      // FilePicker/OrderList write through their json-render two-way $bindState
+      // bindings (the widget contract renderer-ink resolves) — no action binding needed.
+      picker: { type: 'FilePicker', props: { value: { $bindState: '/inputs/0' }, label: 'Input' } },
+      order: { type: 'OrderList', props: { items: { $bindState: '/inputs' } } },
+      codec: {
+        type: 'Select',
+        props: { label: 'Codec', options: [{ label: 'H.264', value: 'h264' }] },
+        on: { change: { action: 'setState', params: { statePath: '/codec', value: 'h264' } } },
+      },
+      merge: {
+        type: 'Button',
+        props: { label: 'Merge' },
+        // No permission blob in the spec: PermissionDescriptor is CATALOG-owned
+        // (host-trusted) — an ActionBinding carries only action + params.
+        on: {
+          press: {
+            action: 'merge',
+            params: {
+              inputs: { $state: '/inputs' },
+              codec: { $state: '/codec' },
+              output: '/abs/out.mp4',
+            },
+          },
+        },
+      },
+      // the adopted ProgressBar takes its fill as a number under `progress`
+      progress: { type: 'ProgressBar', props: { progress: 0 } },
+      // a Text line bound to /merge/status: the line the exec result is written to, so the
+      // gate has to accept it
+      status: { type: 'Text', props: { text: { $state: '/merge/status' } } },
+    },
+  };
+  const state = {
+    inputs: ['/abs/a.mp4', '/abs/b.mp4'],
+    codec: 'h264',
+    output: '/abs/out.mp4',
+    merge: { status: '' },
+  };
+
+  it('passes both the allowlist and full validation', () => {
+    expect(rejectOffCatalog(spec, videoMergeCatalog)).toEqual([]);
+    expect(runFullValidation(spec, videoMergeCatalog, state)).toEqual({ ok: true });
+  });
+
+  it('is refused, naming both input pointers, when the state holds no inputs', () => {
+    const result = runFullValidation(spec, videoMergeCatalog, { ...state, inputs: [] });
+    expect(result.ok).toBe(false);
+    const messages = result.ok ? [] : result.issues.map((issue) => issue.message);
+    expect(messages.some((m) => m.includes('/inputs/0') && m.includes('/inputs/1'))).toBe(true);
   });
 });

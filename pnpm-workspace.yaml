@@ -102,3 +102,8 @@ catalog:
   postject: 1.0.0-alpha.6  # injects the SEA blob into the per-arch binary (the version the Node 22 SEA docs target)
   yaml: 2.9.0              # parses release.yml in the release workflow test
   cross-env: 10.1.0        # cross-platform env-var setter; the integration-tests package pins this via catalog:
+
+# Focus fix for the adopted terminal renderer: its focus hook re-registers every widget on each focus
+# change, which resets focus to the first widget. The patch depends on the stable register/unregister.
+patchedDependencies:
+  '@json-render/ink@0.19.0': patches/@json-render__ink@0.19.0.patch

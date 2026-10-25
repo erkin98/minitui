@@ -26,7 +26,7 @@ export const sharedVitestConfig = defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      include: [fromRoot('./packages/*/src/**/*.ts')],
+      include: [fromRoot('./packages/*/src/**/*.{ts,tsx}')],
       exclude: [fromRoot('./packages/*/dist/**')],
       thresholds: {
         statements: 85,

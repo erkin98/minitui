@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { Parser, Language, type Node as SyntaxNode } from 'web-tree-sitter';
+import { Parser, Language, type Node as SyntaxNode, type Tree } from 'web-tree-sitter';
 
 export type { SyntaxNode };
 
@@ -46,18 +46,18 @@ function resolveGrammarWasmPath(): string | undefined {
 let parserPromise: Promise<Parser> | undefined;
 let readyParser: Parser | undefined;
 
-// Cap a single parse so a pathological input can never hang the host. web-tree-sitter exposes
-// NO setTimeoutMicros (verified absent in repos/tree-sitter/lib/binding_web/src/parser.ts); the
-// only per-parse bound is ParseOptions.progressCallback, which fires periodically with
-// { currentOffset, hasError } (no time) and cancels the parse when it returns true. We measure a
-// wall-clock deadline ourselves. 50ms is generous for a shell line yet bounded.
+// Cap a single parse so a pathological input can never hang the host. The installed web-tree-sitter
+// still declares setTimeoutMicros but marks it deprecated, so minitui bounds a parse with
+// ParseOptions.progressCallback by choice: it fires periodically with { currentOffset, hasError }
+// (no time) and cancels the parse when it returns true. We measure a wall-clock deadline ourselves.
+// 50ms is generous for a shell line yet bounded.
 const DEFAULT_PARSE_BUDGET_MS = 50;
 let parseBudgetMs = DEFAULT_PARSE_BUDGET_MS;
 
 // Under a SEA single-file binary there is no on-disk module-relative wasm — `import.meta.url`
 // resolves to nothing inside the blob. Node's SEA API embeds the two wasm files as assets (the SEA
 // build's sea-config) and returns their bytes via `node:sea.getRawAsset`; `Language.load`/`Parser.init` both
-// accept bytes (`repos/tree-sitter` language.ts:232, parser.ts:114). In dev / npm installs
+// accept bytes (web-tree-sitter `Language.load` and `Parser.init`). In dev / npm installs
 // `sea.isSea()` is false, so we fall back to the disk path (grammar) and package-resolved runtime.
 // Any failure returns undefined → the disk path is tried → a broken load still fails closed below.
 async function seaWasmBytes(assetName: string): Promise<Uint8Array | undefined> {
@@ -90,6 +90,7 @@ export async function ensureParserReady(): Promise<void> {
       const lang = await Language.load(grammarSource);
       const parser = new Parser();
       parser.setLanguage(lang);
+      warmUp(parser);
       return parser;
     })();
   }
@@ -100,29 +101,75 @@ export async function ensureParserReady(): Promise<void> {
   }
 }
 
+// A tree lives in wasm memory the garbage collector never sees, so every tree the parser hands out is
+// released explicitly once the strings it holds have been copied out. Releasing twice, or a tree the
+// runtime already dropped, is not an error.
+function dropTree(tree: Tree | null): void {
+  try {
+    tree?.delete();
+  } catch {
+    /* already released — nothing left to free */
+  }
+}
+
+export function freeTree(root: SyntaxNode): void {
+  dropTree(root.tree);
+}
+
+// The first parse after the wasm module loads was measured several times slower than the next ones;
+// under CPU load it can pass the per-parse budget and be refused as a parse error. One parse of a
+// representative long command here moves that cost to start-up, which already pays for the wasm load.
+// Bounded like every other parse (a hung warm-up would leave ensureParserReady pending, so every check
+// would wait forever); best effort, the tree is dropped.
+const WARMUP_COMMAND = 'ffmpeg -i /a/b/c.mp4 -i /d/e/f.mp4 out.mp4 && '.repeat(42) + 'ls';
+// Twenty times the parse budget, 1 s by default. Beside 64 busy loops the warm-up added about 45 ms to
+// the median start-up.
+const WARMUP_BUDGET_FACTOR = 20;
+function warmUp(parser: Parser): void {
+  const start = performance.now();
+  try {
+    dropTree(
+      parser.parse(WARMUP_COMMAND, undefined, {
+        progressCallback: () => performance.now() - start > WARMUP_BUDGET_FACTOR * parseBudgetMs,
+      }),
+    );
+  } catch {
+    /* best effort: the next parse is the cold one, as it is today */
+  }
+  try {
+    parser.reset(); // a cancelled or thrown parse is resumed by the next parse unless reset
+  } catch {
+    /* parser wedged — every later parse fails closed either way */
+  }
+}
+
 // SYNCHRONOUS parse. Requires ensureParserReady() to have resolved first; if the parser is
 // not ready (init failed or not yet awaited), returns parseError — fail closed, never throws.
+// On success the CALLER owns the tree and releases it with freeTree; every failing path releases it here.
 export function parseToTree(command: string): { root: SyntaxNode } | { parseError: true } {
   if (!readyParser) return { parseError: true };
+  let tree: Tree | null = null;
   try {
     // Bound the parse with a wall-clock deadline via the real progress-callback API: returning
     // true cancels the parse, and a cancelled parse returns null (web-tree-sitter) — fail-closed.
     const start = performance.now();
-    const tree = readyParser.parse(command, undefined, {
+    tree = readyParser.parse(command, undefined, {
       progressCallback: () => performance.now() - start > parseBudgetMs,
     });
     // rootNode.hasError is the built-in whole-subtree check (catches anonymous ERROR/MISSING
     // nodes a namedChildren walk would miss); a null tree means cancel/no-language — both closed.
     // A budget-cancelled parse leaves the parser mid-state: web-tree-sitter RESUMES where it left
-    // off on the next parse unless reset (repos/tree-sitter/.../parser.ts:261-271), which would
+    // off on the next parse unless reset (web-tree-sitter `Parser.reset`), which would
     // contaminate the NEXT command on this module-memoized instance — the security chokepoint.
     // reset() before every fail-closed return so each command parses from a clean slate.
     if (!tree?.rootNode || tree.rootNode.hasError) {
+      dropTree(tree);
       readyParser.reset();
       return { parseError: true };
     }
     return { root: tree.rootNode };
   } catch {
+    dropTree(tree);
     try {
       readyParser?.reset();
     } catch {

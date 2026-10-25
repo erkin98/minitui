@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { EventEmitter } from 'node:events';
-import { mountInk, withSynchronizedOutput } from '../src/mount.js';
+import { mountInk, withSynchronizedOutput, type MountInkArgs } from '../src/mount.js';
 import type { AppSpec, JsonValue } from '@minitui/types';
-import type { ActionDispatcher } from '@minitui/renderer-core';
+import type { ActionDispatcher, WidgetCatalogBinding } from '@minitui/renderer-core';
+import type React from 'react';
+import type { WidgetProps } from '../src/widgets/command-preview.js';
 import { makeCatalog } from './support/make-catalog.js';
 import { createInkBinding } from '../src/widgets/bindings.js';
 import { z } from 'zod';
+import { controlledIo } from './support/store-io.js';
+import { FakeStdin, FakeStdout, asReadStream, asWriteStream } from './support/fake-streams.js';
+import { awaitMounted } from './support/focus-waits.js';
 
 // Text is a std json-render component; the binding resolves it because the catalog lists it.
 const catalog = makeCatalog({
@@ -26,57 +30,39 @@ const dirtySpec: AppSpec = {
   elements: { r: { type: 'Text', props: { text: '\u001B[31mhi\u001B]52;c;ZXZpbA==\u0007' } } },
 };
 
-// the raw controlled io (json-render StoreAdapterConfig shape) — mountInk builds the StateStore.
-function controlledIo() {
-  let snap: Record<string, unknown> = {};
-  const subs = new Set<() => void>();
-  return {
-    getSnapshot: () => snap,
-    setSnapshot: (n: Record<string, unknown>) => {
-      snap = n;
-      subs.forEach((f) => f());
-    },
-    subscribe: (f: () => void) => {
-      subs.add(f);
-      return () => {
-        subs.delete(f);
-      };
-    },
-  };
-}
-
-// fake stdout mirroring ink-testing-library's own: 100 columns, frame-recording, NO isTTY —
-// so withSynchronizedOutput passes it through and the captured frames stay escape-free.
-// This is the exact stream shape the headless test harness injects.
-class FakeStdout extends EventEmitter {
-  get columns() {
-    return 100;
-  }
-  readonly frames: string[] = [];
-  write = (frame: string): boolean => {
-    this.frames.push(frame);
-    return true;
-  };
-}
-
 const noopConsent = { request: undefined, subscribe: () => () => {}, resolve: () => {} };
+
+// A successful mount gets TTY-shaped fake streams: the adopted focus provider binds the keyboard on
+// every mount, so raw mode is always requested and the real stdin cannot take it. After the first
+// commit the mount must be alive: a frame has been written and the effects have run.
+async function mounted(args: Omit<MountInkArgs, 'io'>, stdout: FakeStdout = new FakeStdout()) {
+  const stdin = new FakeStdin();
+  const handle = mountInk({
+    ...args,
+    io: { stdin: asReadStream(stdin), stdout: asWriteStream(stdout), debug: true },
+  });
+  await awaitMounted(stdout);
+  return { handle, stdin, stdout };
+}
 const ok: ActionDispatcher = { dispatch: async () => ({ status: 'settled' as const }) };
 
 describe('mountInk prepareSpec chokepoint', () => {
-  it('sanitizes spec strings at bind (no raw OSC-52 clipboard write reaches the frame)', () => {
+  it('sanitizes spec strings at bind (no raw OSC-52 clipboard write reaches the frame)', async () => {
     // Assert on the ACTUAL rendered frame (what reaches the terminal) via the io seam — the
     // real public surface — not an internal field. debug:true makes ink write each full frame to
     // our fake stdout; the fake is non-TTY so withSynchronizedOutput passes it through escape-free.
     const stdout = new FakeStdout();
-    const handle = mountInk({
-      spec: dirtySpec,
-      catalog,
-      binding: createInkBinding(catalog),
-      dispatcher: ok,
-      store: controlledIo(),
-      consent: noopConsent,
-      io: { stdout: stdout as unknown as NodeJS.WriteStream, debug: true },
-    });
+    const { handle } = await mounted(
+      {
+        spec: dirtySpec,
+        catalog,
+        binding: createInkBinding(catalog),
+        dispatcher: ok,
+        store: controlledIo(),
+        consent: noopConsent,
+      },
+      stdout,
+    );
     const frame = stdout.frames.join('');
     expect(frame).toContain('hi'); // the harmless text survived the surgical strip
     expect(frame).not.toContain(']52;c;'); // the OSC-52 clipboard-write sequence is gone
@@ -84,8 +70,8 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('re-sanitizes on update (the update path runs the SAME prepareSpec chokepoint)', () => {
-    const handle = mountInk({
+  it('re-sanitizes on update (the update path runs the SAME prepareSpec chokepoint)', async () => {
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: { text: 'clean' } } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -100,7 +86,7 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('strips agent-authored confirm + onSuccess/onError callbacks (frozen action grammar)', () => {
+  it('strips agent-authored confirm + onSuccess/onError callbacks (frozen action grammar)', async () => {
     // The wire ActionBinding schema is strict and forbids confirm/onSuccess/onError at the type
     // level, so this agent-authored fixture is genuinely type-invalid input — built via JSON.parse
     // (which returns `any`), not a cast. json-render's action provider WOULD run onSuccess.set
@@ -126,7 +112,7 @@ describe('mountInk prepareSpec chokepoint', () => {
         },
       }),
     );
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: attackSpec,
       catalog,
       binding: createInkBinding(catalog),
@@ -147,10 +133,10 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('applyStatePatch honors ALL SIX RFC-6902 ops against the controlled io', () => {
+  it('applyStatePatch honors ALL SIX RFC-6902 ops against the controlled io', async () => {
     const io = controlledIo();
     io.setSnapshot({ a: 1, arr: ['x', 'y'] });
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -205,11 +191,11 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('rejects a non-canonical array index and leaves the controlled snapshot unchanged', () => {
+  it('rejects a non-canonical array index and leaves the controlled snapshot unchanged', async () => {
     const io = controlledIo();
     io.setSnapshot({ items: ['a', 'b'] });
     const before = io.getSnapshot();
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -224,11 +210,11 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('rejects an inherited source member and leaves the controlled snapshot unchanged', () => {
+  it('rejects an inherited source member and leaves the controlled snapshot unchanged', async () => {
     const io = controlledIo();
     io.setSnapshot({ own: true });
     const before = io.getSnapshot();
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -243,12 +229,12 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('rejects pointer depth before token allocation and leaves the snapshot unchanged', () => {
+  it('rejects pointer depth before token allocation and leaves the snapshot unchanged', async () => {
     const io = controlledIo();
     io.setSnapshot({ safe: true });
     const before = io.getSnapshot();
     const tooDeep = `/${Array.from({ length: 257 }, () => 'x').join('/')}`;
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -263,11 +249,11 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('rejects root removal at the object-rooted renderer boundary atomically', () => {
+  it('rejects root removal at the object-rooted renderer boundary atomically', async () => {
     const io = controlledIo();
     io.setSnapshot({ safe: true });
     const before = io.getSnapshot();
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -280,10 +266,10 @@ describe('mountInk prepareSpec chokepoint', () => {
     handle.unmount();
   });
 
-  it('bounds repeated root-copy growth without committing a partial snapshot', () => {
+  it('bounds repeated root-copy growth without committing a partial snapshot', async () => {
     const io = controlledIo();
     io.setSnapshot({ seed: true });
-    const handle = mountInk({
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -325,8 +311,8 @@ describe('mountInk prepareSpec chokepoint', () => {
     ).toThrow(/EvilWidget.*catalog allowlist/i);
   });
 
-  it('update() with an off-catalog spec throws through the same gate', () => {
-    const handle = mountInk({
+  it('update() with an off-catalog spec throws through the same gate', async () => {
+    const { handle } = await mounted({
       spec: { root: 'r', elements: { r: { type: 'Text', props: {} } } },
       catalog,
       binding: createInkBinding(catalog),
@@ -374,42 +360,54 @@ describe('mountInk prepareSpec chokepoint', () => {
     ).toThrow(/evilAction.*not in the catalog allowlist/i);
   });
 
-  it('a catalog-listed component the binding cannot resolve renders the loud fallback, never a std leak', () => {
-    // The pre-render assert passes (Spinner IS in this catalog), the registry map has no entry
-    // for it (the binding resolves nothing), and Spinner is one of json-render's std 27 — so the
-    // ONLY thing keeping the std implementation out of the frame is the forced
-    // includeStandard={false}. Flipping it to the library default would render the real std
-    // Spinner here instead of the loud fallback marker.
+  it('the standard components stay out even when the registry build finds a type unresolved', async () => {
+    // The pre-render walk resolves each type through the binding and refuses one that does not
+    // resolve. This binding resolves Spinner the FIRST time (that walk) and nothing afterwards (the
+    // registry build), so the spec reaches the renderer with no registry entry for Spinner. Spinner
+    // is one of json-render's std 27, so the ONLY thing keeping the std implementation out of the
+    // frame is the forced includeStandard={false}: flipping it would draw the real Spinner and its
+    // label here instead of the loud fallback marker.
     const spinnerCatalog = makeCatalog({ components: { Spinner: { trustTier: 'display' } } });
+    const real = createInkBinding(spinnerCatalog);
+    let resolved = 0;
+    const counting: WidgetCatalogBinding<React.ComponentType<WidgetProps>> = {
+      catalogId: 'counting',
+      resolve: (id) => (resolved++ === 0 ? real.resolve(id) : undefined),
+    };
     const stdout = new FakeStdout();
-    const handle = mountInk({
-      spec: { root: 's', elements: { s: { type: 'Spinner', props: {} } } },
-      catalog: spinnerCatalog,
-      binding: { catalogId: 'unresolving', resolve: () => undefined },
-      dispatcher: ok,
-      store: controlledIo(),
-      consent: noopConsent,
-      io: { stdout: stdout as unknown as NodeJS.WriteStream, debug: true },
-    });
+    const { handle } = await mounted(
+      {
+        spec: { root: 's', elements: { s: { type: 'Spinner', props: { label: 'SPIN-LABEL' } } } },
+        catalog: spinnerCatalog,
+        binding: counting,
+        dispatcher: ok,
+        store: controlledIo(),
+        consent: noopConsent,
+      },
+      stdout,
+    );
     const frame = stdout.frames.join('');
     expect(frame).toContain('off-catalog: Spinner'); // fallback marker — the std registry stayed out
+    expect(frame).not.toContain('SPIN-LABEL'); // the std Spinner would draw its label
     handle.unmount();
   });
 
-  it('forwards io.{stdout,stderr,stdin,debug} into ink render — the headless-capture seam', () => {
+  it('forwards io.{stdout,stderr,stdin,debug} into ink render — the headless-capture seam', async () => {
     // The headless test harness injects ink-testing-library-shaped fake streams HERE; without
     // the io passthrough mountInk would hardwire process.stdout and no headless suite could
     // capture frames. debug:true makes ink write each full frame straight to our stdout.
     const stdout = new FakeStdout();
-    const handle = mountInk({
-      spec: { root: 'r', elements: { r: { type: 'Text', props: { text: 'HELLO-FRAME' } } } },
-      catalog,
-      binding: createInkBinding(catalog),
-      dispatcher: ok,
-      store: controlledIo(),
-      consent: noopConsent,
-      io: { stdout: stdout as unknown as NodeJS.WriteStream, debug: true },
-    });
+    const { handle } = await mounted(
+      {
+        spec: { root: 'r', elements: { r: { type: 'Text', props: { text: 'HELLO-FRAME' } } } },
+        catalog,
+        binding: createInkBinding(catalog),
+        dispatcher: ok,
+        store: controlledIo(),
+        consent: noopConsent,
+      },
+      stdout,
+    );
     // ink wrote the rendered frame to OUR stdout, not process.stdout (std Text renders props.text).
     expect(stdout.frames.join('')).toContain('HELLO-FRAME');
     // the fake is non-TTY, so withSynchronizedOutput passed it through untouched — no DEC-2026 leak.

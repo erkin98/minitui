@@ -18,7 +18,11 @@ import {
 } from '../events/event-factory.js';
 import { repeatedToolCallDetector, DEFAULT_STEP_CEILING } from '../guards/loop-guard.js';
 import { withIdleTimeout } from '../guards/timeout.js';
+import { noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
 import { toRunError, ProviderError } from '../errors.js';
+import { systemClock, type Clock } from '../ports/index.js';
+import { streamErrorHandler } from './model-diagnostics.js';
+import { endingOf } from './finish-reason.js';
 
 /**
  * Default per-pull idle deadline for the model stream. Sized to exceed a legitimate silent gap (e.g. a
@@ -49,6 +53,31 @@ export interface RunTurnsDeps {
   /** Host redaction policy passed to routeToolCallResult on every dispatch result (extraSecretPatterns). */
   readonly redactionPolicy?: RedactionPolicy | undefined;
   readonly model: LanguageModel;
+  /** Output-token ceiling for one model call; forwarded only when defined. */
+  readonly maxOutputTokens?: number | undefined;
+  /** Waits between re-runs; default systemClock. */
+  readonly clock?: Clock | undefined;
+  /** Where stream errors are reported; default noopDiagnostics. */
+  readonly diagnostics?: DiagnosticsPort | undefined;
+}
+
+/** Wait before re-run k (k from 1): 250, 500, 1000, 2000, then 4000 ms. */
+const rerunDelayMs = (k: number): number => Math.min(250 * 2 ** (k - 1), 4000);
+
+type ToolResultEvent = Extract<MinituiEvent, { type: 'TOOL_CALL_RESULT' }>;
+
+/**
+ * A failed dispatch, thrown from a tool's execute so the SDK reports it to the model as a failure. It
+ * carries the observation the dispatch produced, which the stream mapping emits as is: both loops report a
+ * failed tool with the same event.
+ */
+class DispatchFailure extends Error {
+  readonly observation: ToolResultEvent;
+  constructor(message: string, observation: ToolResultEvent) {
+    super(message);
+    this.name = 'DispatchFailure';
+    this.observation = observation;
+  }
 }
 
 /** Build the SDK tool set: each tool's execute delegates to ToolDispatchPort — the host's exec/gate. */
@@ -62,7 +91,8 @@ function buildTools(
   // ReturnType<typeof tool>, which resolves the overloaded generic to its LAST overload
   // (Tool<never, never>) and reds a string-returning execute. ToolSet is also the exact type
   // streamText({ tools }) accepts.
-  const out: ToolSet = {};
+  // No prototype: a call to `constructor`, `toString` or `__proto__` is an unknown tool like any other.
+  const out = Object.create(null) as ToolSet;
   for (const s of schemas) {
     // `invalid` is reserved for the synthetic repair-reroute tool registered below — a catalog tool
     // of that name would be silently shadowed by it. Reject the collision (the frozen v1 catalog has
@@ -73,14 +103,22 @@ function buildTools(
     out[s.name] = tool({
       description: s.description,
       inputSchema: s.inputSchema,
-      execute: async (input, { toolCallId }: { toolCallId: string }) => {
+      execute: async (
+        input,
+        options: { toolCallId: string; abortSignal?: AbortSignal | undefined },
+      ) => {
+        // The signal the SDK hands this call (the attempt's signal) wins over the turn signal, so an
+        // abandoned attempt's late tool call is not dispatched. Nothing runs once it is aborted.
+        const callSignal = options.abortSignal ?? signal;
+        if (callSignal.aborted) throw new Error('tool call aborted before dispatch');
+        const { toolCallId } = options;
         // ToolDispatchPort takes { toolName, args } and returns { ok, toolName, content, isError,
         // error?, denied? }. The validated input IS the args record.
         let result: ToolCallResult;
         try {
           result = await toolDispatch.dispatch(
             { toolCallId, toolName: s.name, args: input as Readonly<Record<string, JsonValue>> },
-            signal,
+            callSignal,
           );
         } catch (err) {
           // A REJECTED dispatch (an unexpected throw, not the modelled ok:false result) still crosses the
@@ -103,14 +141,12 @@ function buildTools(
         // re-feeds to the model AS A FAILURE. Returning the content would re-feed the failure as a
         // successful tool-result and drop the isError bit. The thrown message carries the REDACTED
         // error/content and keeps the `denied` distinction — a host permission-gate refusal, not an
-        // execution failure — BOTH in the message text AND as a structured bit: attach `denied` to
-        // the thrown Error so the fullStream tool-error mapping re-emits it on the observation (the
-        // SDK echoes the thrown Error verbatim as the tool-error part's `error`).
+        // execution failure. The thrown Error also carries the observation itself (the SDK echoes it
+        // verbatim as the tool-error part's `error`), so the stream mapping emits exactly what the other
+        // loop emits for the same outcome.
         if (ev.isError) {
           const message = ev.error ?? ev.content;
-          const failure = new Error(result.denied ? `Denied: ${message}` : message);
-          if (result.denied) (failure as { denied?: boolean }).denied = true;
-          throw failure;
+          throw new DispatchFailure(result.denied ? `Denied: ${message}` : message, ev);
         }
         return ev.content;
       },
@@ -118,10 +154,10 @@ function buildTools(
   }
   // The synthetic `invalid` tool a repaired (still-unknown) call reroutes to. Its result tells the
   // model what it got wrong so it self-corrects on the next step. Registered so the SDK's re-parse of
-  // the repaired call resolves, but excluded from activeTools below so the model can never call it
-  // directly. It is NOT a ToolDispatchPort dispatch — no exec, no gate, so it does NOT cross
-  // routeToolCallResult (the payload is the model's own bad tool name + the SDK error text: nothing
-  // to redact).
+  // the repaired call resolves. It is left out of activeTools below, but the model can still name it in a
+  // call: calling it dispatches nothing. It is NOT a ToolDispatchPort dispatch — no exec, no gate, so it
+  // does NOT cross routeToolCallResult (the payload is the model's own bad tool name + the SDK error
+  // text: nothing to redact).
   out.invalid = tool({
     description:
       'Internal: reports a malformed tool call back to the model so it retries correctly.',
@@ -150,6 +186,8 @@ export async function runTurns(args: {
   const { conversation, threadId, runId, queue, signal, deps } = args;
   const idleTimeoutMs = deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const streamMaxRetries = deps.streamMaxRetries ?? DEFAULT_STREAM_MAX_RETRIES;
+  const clock = deps.clock ?? systemClock;
+  const onError = streamErrorHandler(deps.diagnostics ?? noopDiagnostics, deps.redactionPolicy);
 
   // Build the tool set ONCE, outside the re-run loop: it does not depend on the attempt. A deterministic
   // config throw here (e.g. a reserved tool name) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
@@ -172,7 +210,12 @@ export async function runTurns(args: {
   for (let attempt = 0; ; attempt += 1) {
     let emittedContent = false;
     let sawFinish = false;
+    let finishReason: unknown;
     let finishUsage: { inputTokens: number; outputTokens: number } | undefined;
+    // Each attempt has its own controller, combined with the turn signal: it is aborted when the attempt ends,
+    // so an abandoned attempt (an idle-timeout re-run) can neither keep streaming nor dispatch a late tool call.
+    const attemptController = new AbortController();
+    const attemptSignal = AbortSignal.any([signal, attemptController.signal]);
 
     try {
       const result = deps.streamTextImpl({
@@ -200,7 +243,7 @@ export async function runTurns(args: {
         // eslint-disable-next-line @typescript-eslint/require-await
         experimental_repairToolCall: async (failed) => {
           const lower = failed.toolCall.toolName.toLowerCase();
-          if (lower !== failed.toolCall.toolName && toolSet[lower]) {
+          if (lower !== failed.toolCall.toolName && Object.hasOwn(toolSet, lower)) {
             return { ...failed.toolCall, toolName: lower };
           }
           return {
@@ -209,7 +252,10 @@ export async function runTurns(args: {
             toolName: 'invalid',
           };
         },
-        abortSignal: signal,
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+        abortSignal: attemptSignal,
+        // Without a handler the SDK prints the error, with the request body and the response headers.
+        onError,
       });
 
       // Race each pull of fullStream against the idle deadline — a silently-stalled stream throws a
@@ -256,15 +302,16 @@ export async function runTurns(args: {
             );
             break;
           case 'tool-error': {
-            // The live failure path (a thrown execute, including the isError throw in buildTools above):
-            // surface it as TOOL_CALL_RESULT isError:true. Carry toolName + the structured error AND the
-            // `denied` bit — buildTools attaches `denied` to the thrown Error, which the SDK echoes
-            // verbatim as this part's `error`, so a permission-gate refusal stays distinguishable from an
-            // execution failure on the observation (not only in the message text). Redact the error text
-            // here too: the SDK has three tool-error producers and only the buildTools execute crosses the
-            // redaction chokepoint, so redacting on this arm makes the observation total by construction —
-            // idempotent on the already-redacted text a rejected/isError throw carries.
+            // The live failure path (a thrown execute). A failed dispatch carries its own observation (see
+            // DispatchFailure), emitted as is. Any other tool error — a rejected dispatch, a bad input, the
+            // SDK's own — surfaces as TOOL_CALL_RESULT isError:true with the error text redacted here too:
+            // the SDK has several tool-error producers and only a dispatch crosses the redaction chokepoint,
+            // so redacting on this arm keeps the observation total by construction.
             emittedContent = true;
+            if (part.error instanceof DispatchFailure) {
+              await queue.push(part.error.observation);
+              break;
+            }
             const denied = (part.error as { denied?: boolean } | undefined)?.denied === true;
             await queue.push(
               agentObservation({
@@ -309,6 +356,7 @@ export async function runTurns(args: {
             // The SDK's terminal marker (always emitted on a clean stream). Its ABSENCE after the loop
             // ends means the stream was truncated.
             sawFinish = true;
+            finishReason = part.finishReason;
             // Capture token usage off the SDK finish part for the RUN_FINISHED event.
             const tu = (part as { totalUsage?: { inputTokens?: number; outputTokens?: number } })
               .totalUsage;
@@ -339,21 +387,34 @@ export async function runTurns(args: {
         }
       }
       if (signal.aborted) return;
-      if (sawFinish) {
+      // fullStream ended without a `finish` part — a truncated stream — or with one whose reason says how
+      // the run ends: a failed or dropped generation is raised as a retriable error (the re-run rule below
+      // applies), a cut, filtered or halted one ends the run as a non-retriable error.
+      const ending = sawFinish ? endingOf(finishReason) : endingOf(undefined);
+      if (ending.kind === 'finished') {
         await queue.push(runFinished(threadId, runId, finishUsage));
         return;
       }
-      // fullStream ended without a `finish` part — a truncated stream.
-      throw new ProviderError('stream closed before finish', true);
+      if (ending.retriable) throw new ProviderError(ending.message, true);
+      await queue.push(runError(ending.message, 'non-retriable'));
+      return;
     } catch (err) {
       if (signal.aborted) return;
       const { message, retriable } = toRunError(err);
-      // Re-run a retriable drop that emitted nothing this attempt, within the retry budget.
-      if (retriable && !emittedContent && attempt < streamMaxRetries) continue;
+      // Re-run a retriable drop that emitted nothing this attempt, within the retry budget. The abandoned
+      // attempt ends before the wait, and the wait yields to timers so the turn deadline can end the loop.
+      if (retriable && !emittedContent && attempt < streamMaxRetries) {
+        attemptController.abort();
+        await clock.sleep(rerunDelayMs(attempt + 1), signal);
+        if (signal.aborted) return;
+        continue;
+      }
       await queue.push(
         runError(redact(message, deps.redactionPolicy), retriable ? undefined : 'non-retriable'),
       );
       return;
+    } finally {
+      attemptController.abort();
     }
   }
 }
@@ -467,10 +528,18 @@ export async function runProviderStream(args: {
             }),
           );
           break;
-        case 'finish':
-          // The non-SDK path forwards the chunk's own usage (already the optional shape).
-          await queue.push(runFinished(threadId, runId, chunk.usage));
+        case 'finish': {
+          // The non-SDK path forwards the chunk's own usage (already the optional shape). The reason
+          // ends the run as what it was; this loop has no re-run tier, so a failed generation is the
+          // retriable RUN_ERROR itself.
+          const ending = endingOf(chunk.reason);
+          await queue.push(
+            ending.kind === 'finished'
+              ? runFinished(threadId, runId, chunk.usage)
+              : runError(ending.message, ending.retriable ? undefined : 'non-retriable'),
+          );
           return;
+        }
         case 'error':
           await queue.push(
             runError(

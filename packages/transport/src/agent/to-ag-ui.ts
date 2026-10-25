@@ -13,6 +13,10 @@ import { EventType, type BaseEvent } from '@ag-ui/core';
  * HTTP+SSE endpoint and must speak real AG-UI wire protocol; the in-process path
  * (local-agent.ts) never crosses this boundary — it feeds MinituiEvent straight through
  * toAppEvent.
+ *
+ * The mapping is one event to one event: it does not synthesise the message and tool-call start and end
+ * frames the AG-UI protocol verifier requires, so a text or tool-call stream produced here is not yet
+ * protocol-valid.
  */
 export interface AgUiSynthesisContext {
   readonly threadId: string;
