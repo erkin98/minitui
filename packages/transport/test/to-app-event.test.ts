@@ -154,9 +154,9 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     expect(ev).toMatchObject({ kind: 'tool-result', isError: true, denied: true });
   });
 
-  it('routes CUSTOM to a visibility note (default modelVisible)', () => {
+  it('routes CUSTOM to a visibility note that stays local when it names no class', () => {
     const ev = toAppEvent({ type: EventType.CUSTOM, name: 'note', value: 'picked 2 files' });
-    expect(ev).toEqual({ kind: 'visibility', note: 'picked 2 files', visClass: 'modelVisible' });
+    expect(ev).toEqual({ kind: 'visibility', note: 'picked 2 files', visClass: 'localOnly' });
   });
 
   it('routes RAW to visibility reading the REAL payload field `event` (never value/name) and honors a BFF-set visClass', () => {
@@ -173,19 +173,19 @@ describe('toAppEvent (single normalization chokepoint)', () => {
 
   it('stringifies a non-string RAW event payload', () => {
     const ev = toAppEvent({ type: EventType.RAW, event: { probe: 1 } });
-    expect(ev).toEqual({ kind: 'visibility', note: '{"probe":1}', visClass: 'modelVisible' });
+    expect(ev).toEqual({ kind: 'visibility', note: '{"probe":1}', visClass: 'localOnly' });
   });
 
-  it('falls back to modelVisible for an unknown visClass', () => {
+  it('falls back to localOnly for an unknown visClass', () => {
     const ev = toAppEvent({ type: EventType.CUSTOM, name: 'note', value: 'x', visClass: 'bogus' });
-    expect(ev).toMatchObject({ kind: 'visibility', visClass: 'modelVisible' });
+    expect(ev).toMatchObject({ kind: 'visibility', visClass: 'localOnly' });
   });
 
   it('distinguishes an own null CUSTOM value from a missing value', () => {
     expect(toAppEvent({ type: EventType.CUSTOM, name: 'note', value: null })).toEqual({
       kind: 'visibility',
       note: 'null',
-      visClass: 'modelVisible',
+      visClass: 'localOnly',
     });
     expect(toAppEvent({ type: EventType.CUSTOM, name: 'note' })).toMatchObject({
       kind: 'run-error',
@@ -385,7 +385,7 @@ describe('toAppEvent (single normalization chokepoint)', () => {
     expect(() => toAppEvent(throwingType)).not.toThrow();
     expect(toAppEvent(throwingType)).toMatchObject({ kind: 'run-error', retriable: false });
     const visibility = toAppEvent({ type: EventType.RAW, event: hostilePayload });
-    expect(visibility).toEqual({ kind: 'visibility', note: '', visClass: 'modelVisible' });
+    expect(visibility).toEqual({ kind: 'visibility', note: '', visClass: 'localOnly' });
     for (const event of [Symbol('raw'), () => undefined]) {
       const normalized = toAppEvent({ type: EventType.RAW, event });
       expect(normalized.kind).toBe('visibility');

@@ -51,9 +51,22 @@ const STATE_FAULT =
   'the state must be a JSON object: write /state as an object whose keys are plain printable text, ' +
   'with no control characters and none named __proto__, constructor or prototype';
 
-// The whole reply is not a plain JSON tree within the limits, or it holds no root or no elements (an
-// empty reply, a reply that is not made of patch lines). One message; it names nothing of the reply.
+// Both fixed sentences name nothing of the reply. The first asks for what is missing; the second names
+// what a present root and elements must not hold.
 const SCREEN_FAULT = 'no usable spec: emit JSONL patch lines that add /root and /elements';
+const SHAPE_FAULT =
+  'the spec was refused: root and elements must be plain JSON with no key named __proto__, constructor or prototype, no value in two places, and within the size limits';
+
+// Both parts are there: whatever the screen then refuses is the shape of what is there, not a missing part.
+function hasBothParts(spec: { readonly root?: unknown; readonly elements?: unknown }): boolean {
+  return (
+    typeof spec.root === 'string' &&
+    spec.root !== '' &&
+    typeof spec.elements === 'object' &&
+    spec.elements !== null &&
+    !Array.isArray(spec.elements)
+  );
+}
 
 function issue(message: string): SpecIssue {
   return { severity: 'error', code: 'empty_spec', message };
@@ -116,7 +129,9 @@ async function validateCompiled(
   // The screen: the compiled value must be one plain JSON tree, within the shared limits, with no reserved
   // key at any depth and no value in two places. Validation only; every later walk reads a bounded value.
   if (!JsonValueSchema.safeParse({ root: compiled.root, elements: compiled.elements }).success) {
-    return failed(attempt, { structural: [issue(SCREEN_FAULT)] });
+    return failed(attempt, {
+      structural: [issue(hasBothParts(compiled) ? SHAPE_FAULT : SCREEN_FAULT)],
+    });
   }
 
   // auto-fix relocates misplaced fields and nothing else; the raw auto-fixed value is what every later

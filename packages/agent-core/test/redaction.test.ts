@@ -110,8 +110,8 @@ const RULES: ReadonlyArray<
   ['a Google API key', `AIza${rep('a', 35)}`, (t) => `google ${t} ok`, 'AIzashort'],
   ['an npm token', `npm_${rep('a', 36)}`, (t) => `npm ${t} ok`, 'npm_short'],
   [
-    'a password= value',
-    'hunter2secret',
+    'a password= value shorter than eight characters',
+    'hunter2',
     (t) => `run --password=${t} now`,
     'reset your password later',
   ],
@@ -159,6 +159,22 @@ const RULES: ReadonlyArray<
     (t) => `authorization=basic ${t}`,
     'authorization header is optional',
   ],
+  ['an api_key assignment', 's3cr3tvalue99', (t) => `api_key = "${t}"`, 'the api key is rotated'],
+  ['a token: value', 'abcd1234efgh', (t) => `token: ${t}`, 'max_tokens: 4096'],
+  ['a SECRET= value', 'hunter2hunter2', (t) => `SECRET=${t}`, 'secrets are kept elsewhere'],
+  [
+    'a JSON password field',
+    'correcthorsebattery',
+    (t) => `{"password": "${t}"}`,
+    '{"password_hint": "the usual"}',
+  ],
+  ['a prefixed environment name', 'deploy-12345678', (t) => `DEPLOY_TOKEN=${t}`, 'token: short'],
+  [
+    'a URL user part of twenty or more characters',
+    '0123456789abcdef0123456789abcdef01234567',
+    (t) => `git clone https://${t}@github.com/owner/repo.git`,
+    'git clone ssh://git@github.com/owner/repo.git',
+  ],
 ];
 
 describe('every secret rule bites and leaves its look-alike alone', () => {
@@ -170,6 +186,67 @@ describe('every secret rule bites and leaves its look-alike alone', () => {
 
   it.each(RULES)('leaves the look-alike of %s unchanged', (_name, _token, _text, lookalike) => {
     expect(redact(lookalike, policy)).toBe(lookalike);
+  });
+});
+
+describe('a credential behind a header or a secret-named key', () => {
+  it('keeps the header and the key, and replaces only the credential', () => {
+    expect(redact(`authorization: bearer ${rep('tokentoken', 3)}`, policy)).toBe(
+      `authorization: bearer ${SECRET}`,
+    );
+    expect(redact('api_key = "s3cr3tvalue99"', policy)).toBe(`api_key = "${SECRET}"`);
+  });
+
+  it('redacts the credential after a header padded with twenty blanks', () => {
+    const token = rep('tokentoken', 3);
+    const out = redact(`Authorization:${rep(' ', 20)}Basic${rep(' ', 20)}${token}`, policy);
+    expect(out).toContain(SECRET);
+    expect(out).not.toContain(token);
+  });
+});
+
+describe('a URL user part', () => {
+  it('hides a part of twenty characters and keeps one of nineteen', () => {
+    expect(redact('https://aaaaaaaaaaaaaaaaaaaa@h.example.invalid/x', policy)).toBe(
+      `https://${SECRET}@h.example.invalid/x`,
+    );
+    expect(redact('https://aaaaaaaaaaaaaaaaaaa@h.example.invalid/x', policy)).toBe(
+      'https://aaaaaaaaaaaaaaaaaaa@h.example.invalid/x',
+    );
+  });
+
+  it('keeps plain user names visible', () => {
+    for (const url of ['ssh://git@github.com/o/r.git', 'https://alice@example.invalid/x']) {
+      expect(redact(url, policy)).toBe(url);
+    }
+  });
+});
+
+describe('the work of one redact call is linear in its text', () => {
+  // Each subject is about 200 KB, a hundred times a large tool output. Measured with the forward-matched
+  // header rule: under 6 ms each, 13 ms at worst beside other work and under coverage; with a header rule
+  // that looks back over the blanks before every position, 18 to 53 s for the blank runs. The bound is one
+  // second: about eighty times the worst time seen under load, and the old rule is ten to fifty times over it.
+  const K = 200_000;
+  const subjects: ReadonlyArray<readonly [name: string, text: string]> = [
+    ['a run of blanks', `a${rep(' ', K)}b`],
+    ['a run of newlines', rep('\n', K)],
+    ['tabs and newlines', rep('\t\n', K / 2)],
+    ['an authorization header then blanks', `authorization:${rep(' ', K)}`],
+    ['a bearer header then blanks', `authorization: bearer${rep(' ', K)}x`],
+    ['a secret-named key then blanks', `api_key${rep(' ', K / 2)}:${rep(' ', K / 2)}`],
+    ['a password= value of 200 KB', `password=${rep('x', K)}`],
+    ['a URL user with no @', `://u:${rep('x', K)}`],
+    ['a URL user part of 200 KB then @', `://${rep('x', K)}@h`],
+    ['a URL user part of 200 KB with no @', `://${rep('x', K)}`],
+    ['many scheme markers', rep('://aaaaaaaaaaaaaaaaaaaaaa', K / 25)],
+    ['a PEM block with no END', `-----BEGIN PRIVATE KEY-----${rep('A', K)}`],
+    ['the home directory repeated', rep('/home/alice/', K / 12)],
+  ];
+  it.each(subjects)('redacts %s within one second', (_name, text) => {
+    const started = performance.now();
+    redact(text, policy);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

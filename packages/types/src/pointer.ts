@@ -30,7 +30,17 @@ export const JSON_RESOURCE_LIMITS = Object.freeze({
   maxPatchOperations: 256,
 });
 
-const RESERVED_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+/** The object keys that reach a prototype: refused as JSON keys and as pointer tokens everywhere. */
+export const RESERVED_JSON_KEYS: readonly string[] = Object.freeze([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
+
+/** Decodes one RFC-6901 reference token: `~1` to `/`, then `~0` to `~`. */
+export function decodePointerToken(token: string): string {
+  return token.replace(/~1/g, '/').replace(/~0/g, '~');
+}
 
 type MutableJsonContainer = JsonValue[] | Record<string, JsonValue>;
 type JsonPath = Array<string | number>;
@@ -211,7 +221,7 @@ function inspectRecord(
   for (const key of keys) {
     const property = readDataProperty(value, key, path, ctx);
     if (!property.ok) return property;
-    if (RESERVED_JSON_KEYS.has(property.key)) {
+    if (RESERVED_JSON_KEYS.includes(property.key)) {
       return rejectJson(ctx, `reserved key "${property.key}" not allowed in JsonValue`, [
         ...path,
         property.key,
@@ -393,7 +403,7 @@ export const guardReservedKeys = (raw: unknown, ctx: z.RefinementCtx): unknown =
     for (const key of Reflect.ownKeys(raw)) {
       const property = readDataProperty(raw, key, [], ctx);
       if (!property.ok) return undefined;
-      if (RESERVED_JSON_KEYS.has(property.key)) {
+      if (RESERVED_JSON_KEYS.includes(property.key)) {
         ctx.addIssue({
           code: 'custom',
           message: `reserved key "${property.key}" not allowed in JsonValue`,
@@ -486,7 +496,7 @@ function clonePatchProperty(
   ctx: z.RefinementCtx,
   budget: JsonResourceBudget,
 ): PatchPropertyResult {
-  if (typeof key !== 'string' || RESERVED_JSON_KEYS.has(key)) {
+  if (typeof key !== 'string' || RESERVED_JSON_KEYS.includes(key)) {
     return rejectPatch(ctx, 'JSON patch operation has an invalid key', [index]);
   }
   const descriptor = Reflect.getOwnPropertyDescriptor(raw, key);

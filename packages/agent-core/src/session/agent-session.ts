@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { streamText as realStreamText, type LanguageModel } from 'ai';
+import type { StreamTextFn } from '../provider/stream-part.js';
 import type { AppSpec } from '@minitui/types';
 import type { ModelProvider } from '../provider/provider-port.js';
 import {
@@ -29,8 +30,11 @@ export interface AgentConfig {
   readonly streamMaxRetries?: number;
   /** Output-token ceiling for one model call; forwarded to the model only when set. */
   readonly maxOutputTokens?: number;
-  /** Test seam: inject a fake streamText. Production leaves this undefined (the real SDK is used). */
-  readonly streamTextImpl?: typeof realStreamText;
+  /**
+   * Test seam: the streamText the SDK-driven loop calls. Production leaves this undefined (the installed
+   * SDK is used). It does not choose the loop: the provider's usesSdkLoop does.
+   */
+  readonly streamTextImpl?: StreamTextFn;
   /**
    * Host redaction policy applied to every tool result on the model-feed path — the safety valve for
    * org-specific secret shapes the built-in heuristics miss (extraSecretPatterns) and for a custom
@@ -229,10 +233,9 @@ export class AgentSession {
 
   /**
    * Route the turn. SDK path (runTurns — the SDK-owned streamText tool loop) when the provider drives
-   * the SDK loop (the day-1 ai-sdk-provider sets usesSdkLoop) OR a fake streamText is injected for a
-   * test. Otherwise the NON-SDK path (runProviderStream) that consumes provider.streamChat directly —
-   * what a scripted provider needs (no streamTextImpl, no usesSdkLoop); without this branch the injected
-   * script is dead and only RUN_STARTED reaches out.
+   * the SDK loop (the day-1 ai-sdk-provider sets usesSdkLoop); a test seam streamTextImpl replaces the
+   * SDK function on that path and chooses nothing. Otherwise the NON-SDK path (runProviderStream) that
+   * consumes provider.streamChat directly, which is what a scripted provider needs.
    */
   #startRunner(args: {
     conversation: Conversation;
@@ -241,7 +244,7 @@ export class AgentSession {
     signal: AbortSignal;
   }): Promise<void> {
     const { conversation, runId, queue, signal } = args;
-    if (this.#config.streamTextImpl === undefined && this.#provider.usesSdkLoop !== true) {
+    if (this.#provider.usesSdkLoop !== true) {
       return runProviderStream({
         provider: this.#provider,
         conversation,
@@ -250,6 +253,7 @@ export class AgentSession {
         model: this.#model,
         system: this.#config.system,
         toolDispatch: this.#toolDispatch,
+        tools: this.#tools,
         redactionPolicy: this.#config.redactionPolicy,
         queue,
         signal,

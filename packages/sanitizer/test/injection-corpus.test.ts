@@ -168,6 +168,14 @@ describe('Terminal-DiLLMa injection corpus', () => {
 // widening it to admit javascript:/data: is invisible there. renderer-sgr mode
 // keeps an ALLOWED-scheme link LIVE, so it is the only path where the scheme
 // decision is observable, and the only path that reds if the allowlist grows.
+// renderer-sgr mode keeps SGR colour and so takes its own pass over CSI sequences; an 8-bit CSI must be
+// dropped whole there too, not only in default mode.
+describe('the C1 8-bit CSI in renderer-sgr mode', () => {
+  it('drops a 0x9b cursor sequence whole, keeping the letters around it', () => {
+    expect(sanitize('a\x9b2Jb', { allow: 'renderer-sgr' })).toBe('ab');
+  });
+});
+
 describe('OSC 8 scheme allowlist bites in renderer-sgr mode (where the scheme decision shows)', () => {
   const cases: ReadonlyArray<{
     name: string;

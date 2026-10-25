@@ -263,10 +263,10 @@ describe('a re-run waits, on the injected clock', () => {
 
   it('a thrown non-retriable failure with nothing emitted: one call and no wait', async () => {
     let calls = 0;
-    const throwing = ((): never => {
+    const throwing = (): never => {
       calls += 1;
       throw new Error('maximum context length exceeded');
-    }) as unknown as typeof import('ai').streamText;
+    };
     const { clock, waits } = recordingClock();
     const { model } = scriptedModel([]);
     const session = makeSession({

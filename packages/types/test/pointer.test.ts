@@ -2,17 +2,33 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
   assertJsonResourceBudget,
+  decodePointerToken,
   guardedRecord,
   JSON_RESOURCE_LIMITS,
   JsonObjectSchema,
   JsonValueSchema,
   PointerSchema,
+  RESERVED_JSON_KEYS,
   JsonPatchSchema,
   JsonPatchArraySchema,
   type JsonValue,
   type Pointer,
   type JsonPatch,
 } from '../src/pointer.js';
+
+describe('the shared reserved keys and the pointer token decoder', () => {
+  it('reserves exactly the three keys that reach a prototype, in a frozen list', () => {
+    expect([...RESERVED_JSON_KEYS].sort()).toEqual(['__proto__', 'constructor', 'prototype']);
+    expect(Object.isFrozen(RESERVED_JSON_KEYS)).toBe(true);
+  });
+
+  it('decodes ~1 before ~0, so ~01 stays the two characters ~1', () => {
+    expect(decodePointerToken('a~1b')).toBe('a/b');
+    expect(decodePointerToken('a~0b')).toBe('a~b');
+    expect(decodePointerToken('~01')).toBe('~1');
+    expect(decodePointerToken('plain')).toBe('plain');
+  });
+});
 
 describe('JsonValue', () => {
   it('accepts nested objects, arrays, primitives and null', () => {
