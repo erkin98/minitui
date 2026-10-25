@@ -13,20 +13,24 @@ import {
 } from '@minitui/types';
 import type {
   ActionDispatcher,
+  ActionLifecycleEvent,
   LifecycleEmitter,
   RenderHandle,
   WidgetCatalogBinding,
 } from '@minitui/renderer-core';
 import type { MinituiCatalog } from '@minitui/catalog';
-import { checkElementTree, hasCanonicalKeys, throwingFallback } from '@minitui/catalog'; // render-time gate primitive (component-only) and the shared tree rule
+import { checkElementTree, hasCanonicalKeys } from '@minitui/catalog'; // the shared tree rule
 import { RendererRefusal } from './refusal.js';
 import { applyStatePatchTo } from './state-patch.js';
 import { reportFault } from './binder/report.js';
-import { sanitizeSpecStrings } from '@minitui/sanitizer';
+import { refusalLine } from './binder/refusal-line.js';
+import { sanitize, sanitizeSpecStrings } from '@minitui/sanitizer';
 import { buildHandlers, ELEMENT_KEY } from './binder/build-handlers.js';
 import { ConsentOverlay, type ConsentController } from './widgets/consent-overlay.js';
 import { createFocusTypeChannel, FocusTypeProvider } from './focus-capture.js';
 import type { WidgetProps } from './widgets/command-preview.js';
+import { SELF_DISPLAYING } from './widgets/bindings.js';
+import { withDisplayText } from './widgets/display-text.js';
 
 // Array.isArray narrows a union containing a readonly array to any[], which leaks `any` into
 // the caller; this guard keeps the prepared-binding walk fully typed.
@@ -51,6 +55,9 @@ export interface MountInkArgs {
   // the outcome vocabulary; it only signals "the user quit, cleanly".
   readonly onQuit?: (() => void) | undefined;
   readonly onCancel?: (() => void) | undefined; // Esc → the host maps this to a cancelled quit
+  // Whether ink itself exits on Ctrl-C. Off by default: the mount treats Ctrl-C as a cancel and first
+  // denies a pending request, and the host restores the terminal and exits.
+  readonly exitOnCtrlC?: boolean | undefined;
   // Optional fake stdio for headless capture. The headless test harness injects
   // ink-testing-library-shaped streams here; forwarded VERBATIM into ink's render(tree, options),
   // defaulting to the real process streams. The seam lives ONLY on this ink-specific entry —
@@ -86,9 +93,9 @@ export interface InkMountHandle extends RenderHandle {
 
 // --- catalog allowlist: the render-time gate fires BEFORE render ---
 // json-render wraps every element in an error boundary; a render-phase throw is swallowed
-// (the boundary flips to an error state and renders null), so a throwing fallback can NEVER
-// fail the mount. This synchronous walk is the reliable gate: unknown component type OR
-// unknown on/watch action -> throw, outside React.
+// (the boundary flips to an error state and renders null), so a throw inside a render can NEVER
+// fail the mount. This synchronous walk is the reliable gate: an unknown component type OR an
+// unknown on/watch action throws a coded refusal (off-catalog) before render, outside React.
 type SpecBinding = {
   action: string;
   params?: Record<string, unknown> | undefined;
@@ -108,20 +115,15 @@ function eachBinding(el: AppSpec['elements'][string], visit: (b: SpecBinding) =>
   }
 }
 
+// A name the catalog does not list: the message is fixed text and the sanitised name, never raw text.
+const offCatalog = (what: 'component' | 'action', name: string): RendererRefusal =>
+  new RendererRefusal('off-catalog', `${what} "${sanitize(name)}" is not in the catalog allowlist`);
+
 export function assertSpecOnCatalog(spec: AppSpec, catalog: MinituiCatalog): void {
-  for (const [key, el] of Object.entries(spec.elements)) {
-    if (!catalog.componentDefs.has(el.type)) {
-      // Call the catalog's exported render-time primitive (throws naming the type) from this
-      // synchronous PRE-render walk. The action branch keeps its own error — the primitive is
-      // component-only.
-      throwingFallback(el.type);
-    }
+  for (const el of Object.values(spec.elements)) {
+    if (!catalog.componentDefs.has(el.type)) throw offCatalog('component', el.type);
     eachBinding(el, (b) => {
-      if (!catalog.actionDefs.has(b.action)) {
-        throw new Error(
-          `unknown action "${b.action}" (element "${key}") is not in the catalog allowlist`,
-        );
-      }
+      if (!catalog.actionDefs.has(b.action)) throw offCatalog('action', b.action);
     });
   }
 }
@@ -286,7 +288,7 @@ function buildComponentMap(
   const map: Record<string, React.ComponentType<WidgetProps>> = {};
   for (const id of catalog.componentDefs.keys()) {
     const factory = binding.resolve(id)?.factory;
-    if (factory) map[id] = factory;
+    if (factory) map[id] = SELF_DISPLAYING.has(factory) ? factory : withDisplayText(factory);
   }
   return map;
 }
@@ -309,7 +311,22 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
   const specListeners = new Set<() => void>();
   const notifySpec = (): void => specListeners.forEach((f) => f());
 
-  const emitLifecycle = (e: Parameters<LifecycleEmitter['emit']>[0]): void => onLifecycle?.emit(e);
+  // The refusal row: the last refused or failed gated action, cleared when the next one starts. It is
+  // updated before the host's sink runs, so a throwing sink cannot leave it stale.
+  let refusalText: string | undefined;
+  const emitLifecycle = (e: ActionLifecycleEvent): void => {
+    const next =
+      e.phase === 'error'
+        ? refusalLine(e.actionName, e.fault)
+        : e.phase === 'started'
+          ? undefined
+          : refusalText;
+    if (next !== refusalText) {
+      refusalText = next;
+      notifySpec();
+    }
+    onLifecycle?.emit(e);
+  };
 
   const actionRequests = new Set<(req: ActionRequest) => void>();
   // a throwing subscriber is reported and the others, and the action itself, still run
@@ -461,6 +478,14 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
         isActive: (onQuit !== undefined || onCancel !== undefined) && request === undefined,
       },
     );
+    // Ctrl-C cancels, as Esc does, and first denies a pending request so no decision is left open. ink
+    // does not consume the key (exitOnCtrlC is off), and this listener is active with or without a
+    // pending request; the overlay acts on plain keys only.
+    useInput((input, key) => {
+      if (!key.ctrl || input !== 'c') return;
+      if (consent.request !== undefined) consent.resolve({ kind: 'deny' });
+      onCancel?.();
+    });
     return (
       <FocusTypeProvider value={focusTypes}>
         <JSONUIProvider store={store} handlers={handlers}>
@@ -479,6 +504,7 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
                 Fallback as never /* narrowed props — receives the full component-render props at runtime */
               }
             />
+            {refusalText !== undefined ? <Text wrap="truncate-end">{refusalText}</Text> : null}
           </Box>
           <ConsentOverlay controller={view} live={() => consent.request} />
         </JSONUIProvider>
@@ -500,6 +526,7 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
     // route console.log around the sanitizer chokepoint (the same native-log bypass the render-local
     // allowlist rejects). It also makes the global patch state leak across renders in one process.
     patchConsole: false,
+    exitOnCtrlC: args.exitOnCtrlC ?? false,
     // ink's RenderOptions is THIRD-PARTY and its optional fields carry no `| undefined`; under
     // exactOptionalPropertyTypes an explicit `undefined` value is rejected, so an omitted
     // debug/accessible flag is OMITTED from the object entirely (never widen a third-party type).

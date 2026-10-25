@@ -2,6 +2,7 @@ import React from 'react';
 import { Text, useInput } from 'ink';
 import { useFocus } from '@json-render/ink';
 import type { WidgetProps } from './command-preview.js';
+import { displayText } from './display-text.js';
 import { useReportFocus } from '../focus-capture.js';
 
 // Primary CTA. Joins json-render's focus ring: useFocus() auto-registers this button on
@@ -27,7 +28,7 @@ export const Button: React.FC<WidgetProps> = ({ element, emit }) => {
   return (
     <Text inverse={isActive} {...(isActive ? { color: 'cyan' } : {})}>
       {isActive ? '> ' : '  '}
-      {label}
+      {displayText(label)}
     </Text>
   );
 };

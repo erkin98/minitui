@@ -23,8 +23,8 @@ export interface GatedHandlerArgs {
 const HANDLER_FAILED = 'gated action failed after it started';
 
 // outcome.status -> the canonical-union lifecycle event the renderer surfaces.
-// Per-variant payloads: result -> `result`, awaiting -> `awaiting` (carries `requestId`),
-// denied/failed -> `fault: RuntimeFault`.
+// Per-variant payloads: result -> `result`, awaiting -> `awaiting` (returned by no shipped dispatcher,
+// kept for one that returns before the answer), denied/failed -> `fault: RuntimeFault`.
 function outcomeToEvent(
   actionName: string,
   elementKey: string,
@@ -34,9 +34,8 @@ function outcomeToEvent(
     case 'settled':
       return { phase: 'result', actionName, elementKey, result: outcome.result };
     case 'awaiting':
-      // A pending consent is a FIRST-CLASS `awaiting` phase carrying the `requestId`,
-      // NOT smuggled through `progress` as fake 0% progress. The consumer (renderer chrome)
-      // can then correlate the pending gate by `requestId` and show an "awaiting approval" state.
+      // No shipped dispatcher returns awaiting: its permission check blocks until the user answers. A
+      // dispatcher that returns before the answer maps to this phase, with the requestId.
       return { phase: 'awaiting', actionName, elementKey, requestId: outcome.requestId };
     case 'denied': {
       // deny carries only a reason; surface it as a RuntimeFault so the lifecycle stays one shape.
@@ -93,7 +92,13 @@ export function gatedHandler(args: GatedHandlerArgs) {
         // root owns the store delta.)
         onEvent: (ev: ExecEvent) => {
           if (ev.kind === 'progress' && !ended) {
-            emitLifecycle({ phase: 'progress', actionName, elementKey, progress: ev.value });
+            emitLifecycle({
+              phase: 'progress',
+              actionName,
+              elementKey,
+              progress: ev.value,
+              ...(ev.message !== undefined ? { message: boundText(ev.message) } : {}),
+            });
           }
         },
       };

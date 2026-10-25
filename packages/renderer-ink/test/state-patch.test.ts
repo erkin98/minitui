@@ -189,3 +189,17 @@ describe('the cost of a patch of moves', () => {
     handle.unmount();
   });
 });
+
+describe('the message of a reserved key', () => {
+  it('names no key', () => {
+    const { handle } = mount({});
+    const refused: JsonPatch[][] = [
+      [{ op: 'add', path: '/__proto__/x', value: 1 }],
+      [{ op: 'add', path: '/a/constructor', value: 1 }],
+    ];
+    for (const patch of refused) {
+      expect(() => handle.applyStatePatch(patch)).toThrow(/^reserved state key not allowed$/);
+    }
+    handle.unmount();
+  });
+});

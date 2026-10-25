@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { AppSpec } from '@minitui/types';
+import type { AppSpec, JsonValue } from '@minitui/types';
 import { MAX_ELEMENT_DEPTH } from '@minitui/catalog';
-import { mountInk } from '../src/mount.js';
+import { assertSpecOnCatalog, mountInk } from '../src/mount.js';
 import { createInkBinding } from '../src/widgets/bindings.js';
 import { makeCatalog } from './support/make-catalog.js';
 import { controlledIo } from './support/store-io.js';
@@ -122,11 +122,11 @@ describe('the tree guard at mount and at update', () => {
   });
 
   it('values that share references to 24 levels are refused fast, as a non-canonical key', () => {
-    let shared: Record<string, unknown> = { text: 'x' };
+    let shared: JsonValue = { text: 'x' };
     for (let level = 0; level < 24; level++) shared = { left: shared, right: shared };
     const spec: AppSpec = {
       root: 'a',
-      elements: { a: { type: 'Text', props: { text: 'x', deep: shared } as never } },
+      elements: { a: { type: 'Text', props: { text: 'x', deep: shared } } },
     };
     const started = performance.now();
     const result = refusal(() => mountSpec(spec));
@@ -277,5 +277,40 @@ describe('the canonical-key checks of the state patch stay in force', () => {
     expect(message).toMatch(/not canonical/);
     expect(JSON.stringify(io.getSnapshot())).toBe(before);
     handle.unmount();
+  });
+});
+
+describe('a name outside the catalog is refused with the code off-catalog', () => {
+  const evilComponent: AppSpec = {
+    root: 'e',
+    elements: { e: { type: 'EvilWidget', props: {} } },
+  };
+
+  it('an off-catalog component is refused with the code off-catalog, at mount and at update', () => {
+    expect(refusal(() => mountSpec(evilComponent)).code).toBe('off-catalog');
+    const { handle } = mountSpec(leaf);
+    expect(refusal(() => handle.update(evilComponent)).code).toBe('off-catalog');
+    handle.unmount();
+  });
+
+  it('an off-catalog action is refused with the code off-catalog', () => {
+    const spec: AppSpec = {
+      root: 't',
+      elements: {
+        t: {
+          type: 'Text',
+          props: { text: 'x' },
+          on: { press: { action: 'formatDisk', params: {} } },
+        },
+      },
+    };
+    expect(refusal(() => mountSpec(spec)).code).toBe('off-catalog');
+  });
+
+  it('the refusal message holds no escape byte from the name', () => {
+    const spec: AppSpec = { root: 'e', elements: { e: { type: `Evil${ESC}[31m`, props: {} } } };
+    const result = refusal(() => assertSpecOnCatalog(spec, catalog));
+    expect(result.message).toContain('Evil');
+    expect(result.message).not.toContain(ESC);
   });
 });

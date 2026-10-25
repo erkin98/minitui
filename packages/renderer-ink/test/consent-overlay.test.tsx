@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import {
@@ -134,5 +134,16 @@ describe('ConsentOverlay', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Merge ' + mark + holeA + ' into ' + holeB);
     expect(frame).not.toContain(control);
+  });
+});
+
+describe('the consent vocabulary of the renderer', () => {
+  it('stays the three decisions, whatever the permission reply carries', () => {
+    expectTypeOf<ConsentDecision>().toEqualTypeOf<
+      | { readonly kind: 'allow' }
+      | { readonly kind: 'deny' }
+      | { readonly kind: 'always'; readonly cascade: boolean }
+    >();
+    expectTypeOf<ConsentController['resolve']>().parameters.toEqualTypeOf<[ConsentDecision]>();
   });
 });

@@ -7,7 +7,7 @@ describe('WidgetCatalogBinding', () => {
     // cannot witness the file's existence. A dynamic import is not erased: it
     // rejects until src/widget-binding.ts exists, then resolves to the module namespace.
     const mod = await import('../src/widget-binding.js');
-    expect(mod).toBeDefined();
+    expect(Object.keys(mod)).toEqual([]);
   });
 
   it('resolves a known component to factory + trust tier, undefined otherwise', () => {

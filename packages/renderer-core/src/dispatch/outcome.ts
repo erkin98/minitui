@@ -5,7 +5,8 @@ import type { RuntimeFault } from '@minitui/types';
  *  - settled:  ran to completion (result optional — render-local mutations carry none).
  *  - denied:   the permission gate refused; `reason` is the HOST-resolved denial text.
  *  - failed:   ran but faulted; `fault` is the sanitized RuntimeFault for self-correction.
- *  - awaiting: blocked on a pending permission/consent decision; `requestId` tracks it.
+ *  - awaiting: returned by no shipped dispatcher (the permission check blocks until the user
+ *              answers); kept for a dispatcher that returns before the answer.
  */
 export type ActionOutcome =
   | { status: 'settled'; result?: unknown }

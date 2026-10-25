@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import type { RendererPort, RenderHandle } from '../src/renderer-port.js';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import type { RendererPort, RenderHandle, RendererRefusalCode } from '../src/renderer-port.js';
 import type { AppSpec, JsonPatch, ActionRequest } from '@minitui/types';
 
 describe('RendererPort / RenderHandle', () => {
@@ -10,7 +10,18 @@ describe('RendererPort / RenderHandle', () => {
     // own imports are all type-only too, so this resolves even before the dispatch/events
     // sibling files land.)
     const mod = await import('../src/renderer-port.js');
-    expect(mod).toBeDefined();
+    expect(Object.keys(mod)).toEqual([]);
+  });
+
+  it('lists exactly the six refusal codes', () => {
+    expectTypeOf<RendererRefusalCode>().toEqualTypeOf<
+      | 'unbound-component'
+      | 'initial-state-unsupported'
+      | 'not-a-tree'
+      | 'non-canonical-key'
+      | 'watch-unsupported'
+      | 'off-catalog'
+    >();
   });
 
   it('mount returns a RenderHandle with update/applyStatePatch/onAction/unmount', async () => {

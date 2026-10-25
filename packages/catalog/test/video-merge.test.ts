@@ -110,13 +110,13 @@ describe('a full merge spec', () => {
             params: {
               inputs: { $state: '/inputs' },
               codec: { $state: '/codec' },
-              output: '/abs/out.mp4',
+              output: { $state: '/output' },
             },
           },
         },
       },
       // the adopted ProgressBar takes its fill as a number under `progress`
-      progress: { type: 'ProgressBar', props: { progress: 0 } },
+      progress: { type: 'ProgressBar', props: { progress: { $state: '/merge/progress' } } },
       // a Text line bound to /merge/status: the line the exec result is written to, so the
       // gate has to accept it
       status: { type: 'Text', props: { text: { $state: '/merge/status' } } },
@@ -126,7 +126,7 @@ describe('a full merge spec', () => {
     inputs: ['/abs/a.mp4', '/abs/b.mp4'],
     codec: 'h264',
     output: '/abs/out.mp4',
-    merge: { status: '' },
+    merge: { progress: 0, status: '' },
   };
 
   it('passes both the allowlist and full validation', () => {

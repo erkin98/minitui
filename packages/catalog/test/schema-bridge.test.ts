@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { schema } from '@json-render/ink/server';
 import {
   inkSchema,
   standardComponentDefinitions,
@@ -8,7 +9,7 @@ import {
 
 describe('schema-bridge', () => {
   it('re-exports the Ink schema factory', () => {
-    expect(inkSchema).toBeDefined();
+    expect(inkSchema).toBe(schema);
   });
   it('re-exports the 5 std actions including the STATE trio and exit/log', () => {
     for (const a of ['setState', 'pushState', 'removeState', 'exit', 'log']) {

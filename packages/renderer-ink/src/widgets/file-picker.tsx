@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useBoundProp, useFocus } from '@json-render/ink';
 import type { WidgetProps } from './command-preview.js';
+import { displayText } from './display-text.js';
 import { useReportFocus } from '../focus-capture.js';
 
 // File/dir select bound to a pointer. CONTROLLED: the chosen path comes from the bound
@@ -26,16 +27,16 @@ export const FilePicker: React.FC<WidgetProps> = ({ element, emit, bindings }) =
         setValue(draft); // write-back through the binding path
         emit('change'); // event only — the value is already in state
       } else if (key.backspace || key.delete) setDraft((d) => d.slice(0, -1));
-      else if (input) setDraft((d) => d + input);
+      else if (input && !key.ctrl && !key.meta) setDraft((d) => d + input);
     },
     { isActive },
   );
   return (
     <Box>
-      <Text color="green">{label}: </Text>
+      <Text color="green">{displayText(label)}: </Text>
       <Text inverse={isActive}>
         {isActive ? '> ' : '  '}
-        {draft || value}
+        {displayText(draft || value)}
       </Text>
     </Box>
   );

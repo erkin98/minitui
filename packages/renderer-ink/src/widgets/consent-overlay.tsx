@@ -97,11 +97,15 @@ export const ConsentOverlay: React.FC<{
       // never reaches this overlay and an always-grant can never open one.
       // A request that is not wholly on screen cannot be allowed: the size is read at key time, so a
       // terminal that shrank a moment ago counts. Deny and Esc always work.
+      // Allow keys act only as plain keys: a Ctrl or Alt chord (Ctrl-A in a shell, Alt-y) is not a yes.
+      // A pasted chunk of more than one character arrives as one input and matches no key; a single
+      // pasted character cannot be told from a key press (the pinned ink has no bracketed paste).
       const allowed = !layoutOf(request, terminal.read()).tooTall;
+      const plain = !key.ctrl && !key.meta;
       if (k === 'y') {
-        if (allowed) controller.resolve({ kind: 'allow' });
+        if (allowed && plain) controller.resolve({ kind: 'allow' });
       } else if (k === 'a') {
-        if (allowed) controller.resolve({ kind: 'always', cascade: false });
+        if (allowed && plain) controller.resolve({ kind: 'always', cascade: false });
       } else if (k === 'n' || key.escape) controller.resolve({ kind: 'deny' });
     },
     { isActive: Boolean(request) },

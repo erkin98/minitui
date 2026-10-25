@@ -142,6 +142,7 @@ describe('the shipped prompt', () => {
   });
 
   it('prints the params of every action as a JSON Schema line under the action', () => {
+    expect(videoMergeCatalog.actionDefs.size).toBe(4);
     for (const [name, def] of videoMergeCatalog.actionDefs) {
       const at = shippedLines.findIndex(
         (l) => l.startsWith(`- ${name} (`) || l.startsWith(`- ${name}: render-local`),

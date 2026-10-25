@@ -152,7 +152,7 @@ describe('mountInk prepareSpec chokepoint', () => {
       { op: 'test', path: '/c', value: 2 },
       { op: 'remove', path: '/arr/0' },
     ]);
-    const snap = io.getSnapshot() as Record<string, unknown>;
+    const snap = io.getSnapshot();
     expect(snap).toMatchObject({ progress: 0.5, a: 2, c: 2 });
     expect('b' in snap).toBe(false); // move deleted the source key
     expect(snap.arr).toEqual(['y']); // remove spliced, not holed
@@ -421,34 +421,23 @@ describe('mountInk prepareSpec chokepoint', () => {
 // the private-mode escapes, and non-TTY streams (pipe/CI) are passed through untouched.
 describe('withSynchronizedOutput (DEC-2026 tear-free frame bracketing)', () => {
   it('brackets each TTY write in ESC[?2026h … ESC[?2026l', () => {
-    const writes: string[] = [];
-    const fake = {
-      isTTY: true,
-      write: (s: unknown) => {
-        writes.push(String(s));
-        return true;
-      },
-    } as unknown as NodeJS.WriteStream;
-    const ok = withSynchronizedOutput(fake).write('FRAME');
+    const fake = new FakeStdout({ tty: true });
+    const ok = withSynchronizedOutput(asWriteStream(fake)).write('FRAME');
     expect(ok).toBe(true);
-    expect(writes).toEqual(['\u001B[?2026h', 'FRAME', '\u001B[?2026l']);
+    expect(fake.frames).toEqual(['\u001B[?2026h', 'FRAME', '\u001B[?2026l']);
   });
 
   it('passes columns/rows/isTTY through so ink still measures the viewport', () => {
-    const fake = {
-      isTTY: true,
-      columns: 100,
-      rows: 40,
-      write: () => true,
-    } as unknown as NodeJS.WriteStream;
-    const wrapped = withSynchronizedOutput(fake);
+    const wrapped = withSynchronizedOutput(
+      asWriteStream(new FakeStdout({ tty: true, columns: 100, rows: 40 })),
+    );
     expect(wrapped.columns).toBe(100);
     expect(wrapped.rows).toBe(40);
     expect(wrapped.isTTY).toBe(true);
   });
 
   it('leaves a non-TTY stream (pipe/CI) untouched — no escapes leak into logs', () => {
-    const fake = { isTTY: false, write: () => true } as unknown as NodeJS.WriteStream;
-    expect(withSynchronizedOutput(fake)).toBe(fake);
+    const stream = asWriteStream(new FakeStdout());
+    expect(withSynchronizedOutput(stream)).toBe(stream);
   });
 });

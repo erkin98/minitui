@@ -18,7 +18,7 @@ describe('barrel @minitui/renderer-core', () => {
       lifecycle?: RC.ActionLifecycleEvent;
       emitter?: RC.LifecycleEmitter;
     } = {};
-    expect(witness).toBeDefined();
+    expect(witness).toEqual({});
   });
 
   it('has zero runtime exports — the whole swap-boundary surface is type-only', () => {
