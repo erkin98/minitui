@@ -69,6 +69,8 @@ export class FakeStdout extends EventEmitter {
 // The one place a fake is typed as the Node stream ink's options name. The fakes implement what ink
 // reads from a stream; they are not complete Node streams.
 export const asReadStream = (stdin: FakeStdin): NodeJS.ReadStream =>
+  // eslint-disable-next-line no-restricted-syntax -- ink names the full Node stream type
   stdin as unknown as NodeJS.ReadStream;
 export const asWriteStream = (stdout: FakeStdout): NodeJS.WriteStream =>
+  // eslint-disable-next-line no-restricted-syntax -- ink names the full Node stream type
   stdout as unknown as NodeJS.WriteStream;

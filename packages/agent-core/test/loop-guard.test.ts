@@ -13,14 +13,14 @@ describe('repeatedToolCallDetector', () => {
       step([{ toolName: 'ffmpeg', input: { a: 1 } }]),
       step([{ toolName: 'ffmpeg', input: { a: 2 } }]),
     ];
-    expect(await stop({ steps })).toBe(false);
+    expect(stop({ steps })).toBe(false);
   });
 
   it('stops when the SAME tool+input repeats `limit` times in a row', async () => {
     const stop = repeatedToolCallDetector(3);
     const same = { toolName: 'probe', input: { f: '/v.mp4' } };
     const steps = [step([same]), step([same]), step([same])];
-    expect(await stop({ steps })).toBe(true);
+    expect(stop({ steps })).toBe(true);
   });
 
   it('resets the run length when a different call breaks the streak', async () => {
@@ -28,6 +28,6 @@ describe('repeatedToolCallDetector', () => {
     const same = { toolName: 'probe', input: { f: '/v.mp4' } };
     const other = { toolName: 'probe', input: { f: '/w.mp4' } };
     const steps = [step([same]), step([same]), step([other]), step([same])];
-    expect(await stop({ steps })).toBe(false);
+    expect(stop({ steps })).toBe(false);
   });
 });

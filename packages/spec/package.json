@@ -5,8 +5,7 @@
   "dependencies": {
     "@json-render/core": "catalog:",
     "@minitui/catalog": "workspace:*",
-    "@minitui/types": "workspace:*",
-    "zod": "catalog:"
+    "@minitui/types": "workspace:*"
   },
   "devDependencies": {
     "eslint": "catalog:",
@@ -14,7 +13,8 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   },
   "engines": {
     "node": ">=22.13"
@@ -28,6 +28,7 @@
   "files": [
     "dist"
   ],
+  "license": "Apache-2.0",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsup",

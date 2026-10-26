@@ -224,7 +224,7 @@ function timedSystemClock(): { clock: Clock; started: number[]; settled: number[
     started,
     settled,
     clock: {
-      now: systemClock.now,
+      now: () => systemClock.now(),
       sleep: async (ms, signal) => {
         started.push(ms);
         await systemClock.sleep(ms, signal);

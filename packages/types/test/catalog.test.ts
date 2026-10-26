@@ -34,15 +34,19 @@ describe('ActionKind', () => {
     // message is locked so any drift from the shipped format is gate-visible.
     // The exhaustive-route test above never reaches the default branch, so this is
     // the only coverage of assertNever's runtime throw path.
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever('surprise' as never, 'ActionKind')).toThrow(
       /^unhandled ActionKind: "surprise"$/,
     );
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever('x' as never)).toThrow(/^unhandled: "x"$/);
   });
   it('stays total for values JSON.stringify cannot render', () => {
     // JSON.stringify throws on a BigInt and returns undefined for a symbol — assertNever
     // must still throw ITS OWN descriptive error rather than one of theirs.
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever(10n as never)).toThrow(/^unhandled: 10n$/);
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever(Symbol('x') as never)).toThrow(/^unhandled: Symbol\(x\)$/);
   });
   it('reports the unhandled member when the value has a hostile toJSON and toString', () => {
@@ -59,6 +63,7 @@ describe('ActionKind', () => {
       },
     };
 
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever(hostileObject as never, 'ActionKind')).toThrow(
       /^unhandled ActionKind: /,
     );
@@ -71,6 +76,7 @@ describe('ActionKind', () => {
       },
     });
 
+    // eslint-disable-next-line no-restricted-syntax -- assertNever takes never
     expect(() => assertNever(hostileFunction as never)).toThrow(/^unhandled: /);
   });
 });

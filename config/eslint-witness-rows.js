@@ -146,10 +146,33 @@ const OWNER_ROWS = [
     [`${owner}: dynamic ink permitted`, path, dynamic('ink')],
     [`${owner}: type-position react permitted`, path, typeOf('react')],
   ]),
+  [
+    'catalog test: import from its scripts walled',
+    tst('catalog'),
+    `import { x } from '../scripts/pack-consumer.mjs';\nexport { x };\n`,
+    [DAG],
+  ],
+  [
+    'sanitizer test: the runtime-leaf helper permitted',
+    tst('sanitizer'),
+    `import { externalBundledInputs } from '../scripts/runtime-leaf.mjs';\nexport { externalBundledInputs };\n`,
+  ],
   ['exec root: static child_process permitted', src('exec'), SPAWN],
   ['exec root: dynamic child_process walled', src('exec'), dynamic('node:child_process'), [CAP]],
+  // Every exec source file outside the spawner, the sandbox and the barrel is walled, present or future.
+  ['exec errors: static child_process walled', 'packages/exec/src/errors.ts', SPAWN, [IMP]],
+  ['exec sandbox: static child_process permitted', EXEC_SANDBOX, SPAWN],
   ['exec permission: static child_process walled', EXEC_PERMISSION, SPAWN, [IMP]],
   ['exec permission: dynamic runtime walled', EXEC_PERMISSION, dynamic(RUNTIME), [CAP]],
+  // A test-named file inside exec source sits under the exec spawn wall too: the capability rule AND the
+  // syntax arm that closes the dynamic form must both report, so a later block for test files cannot
+  // replace the wall's selectors there.
+  [
+    'exec permission: dynamic child_process walled in a test-named source file',
+    'packages/exec/src/permission/__witness__.test.ts',
+    dynamic('node:child_process'),
+    [CAP, 'no-restricted-syntax'],
+  ],
   ['exec permission: type-position runtime permitted', EXEC_PERMISSION, typeOf(RUNTIME)],
   [
     'exec permission: type-position child_process permitted',
@@ -393,7 +416,8 @@ for (const path of 'test/__witness__ src/__witness__.test src/__witness__.spec s
   witness('test glob .mjs: vi import', `packages/types/${path}.mjs`, VI_TEST, [VI_API]);
 }
 
-// Wall-exempt script directories: package source may not import from them; scripts and tests may.
+// Wall-exempt script directories: package source may not import from them; scripts may, and a test only
+// the two named pure helpers.
 witness(
   'package src -> its scripts dir',
   src('types'),

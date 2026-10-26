@@ -50,7 +50,7 @@ describe('pending channel', () => {
   it('exposes pending requests on the async iterable', async () => {
     const ch = createPendingChannel();
     const seen: string[] = [];
-    (async () => {
+    void (async () => {
       for await (const q of ch.requests) {
         seen.push(q.id);
         if (seen.length === 1) break;
@@ -124,9 +124,9 @@ describe('pending channel', () => {
 
   it('a refused duplicate never reaches the request buffer', async () => {
     const ch = createPendingChannel();
-    ch.ask(req('d1', 'ffmpeg -i a.mp4 out.mp4'));
-    ch.ask(req('d1', 'ffmpeg -i other.mp4 out.mp4')); // refused at once
-    ch.ask(req('d2', 'ffmpeg -i c.mp4 out.mp4'));
+    void ch.ask(req('d1', 'ffmpeg -i a.mp4 out.mp4'));
+    void ch.ask(req('d1', 'ffmpeg -i other.mp4 out.mp4')); // refused at once
+    void ch.ask(req('d2', 'ffmpeg -i c.mp4 out.mp4'));
     const iter = ch.requests[Symbol.asyncIterator]();
     const first = await iter.next();
     const second = await iter.next();
@@ -146,9 +146,9 @@ describe('pending channel', () => {
     // disposeAll must drop the buffered request, not only reject the waiter — otherwise a UI that
     // subscribes after a dispose replays the stale consent as if it were still live.
     const ch = createPendingChannel();
-    ch.ask(req('stale'));
+    void ch.ask(req('stale'));
     ch.disposeAll('gone');
-    ch.ask(req('fresh'));
+    void ch.ask(req('fresh'));
     const iter = ch.requests[Symbol.asyncIterator]();
     const first = await iter.next();
     expect(first.value!.id).toBe('fresh');

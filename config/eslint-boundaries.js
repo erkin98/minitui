@@ -99,11 +99,24 @@ export const BOUNDARY_ZONES = [
   pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink'),
   // Package source may not import from a wall-exempt scripts directory: those directories (and the
   // repo-level scripts/) lift the capability walls, so reaching one from shipped source would
-  // launder a walled import through it. Tests keep their access (the sanitizer leaf test loads its script).
+  // launder a walled import through it. Tests are held to the named list in the zone below.
   {
     target: './packages/*/src/**/*',
     from: ['./packages/*/scripts/**/*', './scripts/**/*'],
     message: 'package source may not import from a wall-exempt scripts directory.',
+  },
+  // A test may import from a wall-exempt scripts directory only the pure helpers named here: a script
+  // that spawns would hand a test the capability its own wall forbids. In glob mode the plugin
+  // matches each exception against the path the import resolver returns, which is the .d.mts
+  // declaration beside a .mjs when there is one, hence the **/ form and the pair of extensions.
+  {
+    target: ['./packages/*/test/**/*', './apps/*/test/**/*', './test/**/*'],
+    from: ['./packages/*/scripts/**/*', './scripts/**/*'],
+    except: [
+      '**/packages/sanitizer/scripts/runtime-leaf.{mjs,d.mts}',
+      '**/scripts/grammar-checksum.{mjs,d.mts}',
+    ],
+    message: 'a test may import from a scripts directory only the named pure helpers.',
   },
   // Witness for the pkgZone encoding itself. The two fixture zones at the top are bare
   // file-target zones with no `except`, so they prove nothing about the from:'./packages'

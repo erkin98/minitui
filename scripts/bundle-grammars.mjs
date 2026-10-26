@@ -53,13 +53,24 @@ if (import.meta.url === pathToFileURL(argv[1]).href) {
     await cp(runtimeWasm, join(target, 'tree-sitter.wasm'));
   }
 
-  // Verify the COPIED grammar against the committed manifest — fail loud on any drift/tamper.
+  // Verify every copied wasm against the committed manifest: the grammar and the parser runtime. A
+  // missing entry is as fatal as a mismatch.
   const checksums = JSON.parse(readFileSync(join(here, 'grammar-checksums.json'), 'utf8'));
-  const copied = join(execRoot, 'tree-sitter-bash.wasm');
-  if (!verifyChecksum(copied, checksums['tree-sitter-bash.wasm'])) {
-    throw new Error(
-      `grammar checksum mismatch: ${copied} does not match scripts/grammar-checksums.json ` +
-        `(run 'sha256sum ${copied}' and update the manifest if this is an intentional grammar upgrade)`,
-    );
+  for (const name of ['tree-sitter-bash.wasm', 'tree-sitter.wasm']) {
+    const expected = checksums[name];
+    if (typeof expected !== 'string') {
+      throw new Error(
+        `grammar checksum missing: scripts/grammar-checksums.json has no entry for ${name}`,
+      );
+    }
+    for (const target of [join(execRoot, 'dist'), execRoot]) {
+      const copied = join(target, name);
+      if (!verifyChecksum(copied, expected)) {
+        throw new Error(
+          `grammar checksum mismatch: ${copied} does not match scripts/grammar-checksums.json ` +
+            `(run 'sha256sum ${copied}' and update the manifest if this is an intentional upgrade)`,
+        );
+      }
+    }
   }
 }

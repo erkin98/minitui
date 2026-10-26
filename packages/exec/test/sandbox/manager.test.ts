@@ -169,7 +169,7 @@ describe('sandbox manager', () => {
   it('violationsForCommand maps store lines to structured host-resolved violations', async () => {
     const { loadRuntime, calls } = makeFakeRuntime();
     const s = await initSession(policy, loadRuntime);
-    const violations = await violationsForCommand(s, 'cat ~/.ssh/id_rsa > /tmp/x');
+    const violations = violationsForCommand(s, 'cat ~/.ssh/id_rsa > /tmp/x');
     expect(calls.getViolationsForCommand).toEqual(['cat ~/.ssh/id_rsa > /tmp/x']);
     expect(violations).toEqual([
       expect.objectContaining({ kind: 'fs-write', path: '/Users/x/.ssh/id_rsa' }),
