@@ -76,8 +76,8 @@ catalog:
   # alpha.2 declares @cfworker/json-schema an OPTIONAL peer but imports it UNCONDITIONALLY at
   # module-init (upstream typescript-sdk#2093), so it is effectively a HARD dep — pin it here
   # explicitly (4.x line, satisfies alpha.2's peer range) or MCP crashes on load with a missing
-  # "optional" peer. The exec package declares it via "@cfworker/json-schema": "catalog:" alongside the
-  # @modelcontextprotocol/client dep (only exec imports MCP, so its transitive schema-validator dep lives there too).
+  # "optional" peer. The change that first imports the MCP client declares both, the client and this
+  # validator, in @minitui/exec (only exec imports MCP).
   # Drop this pin once the client moves to a beta that lazy-imports the schema validator.
   '@cfworker/json-schema': 4.1.1
   '@anthropic-ai/sandbox-runtime': 0.0.60
@@ -93,7 +93,9 @@ catalog:
   tsup: 8.3.5
   tsx: 4.19.2              # the release scripts run via `pnpm tsx`; single-sourced here so the version lives in ONE file
   vitest: 4.0.17            # matches the json-render project (^4.0.17); the adopted renderer's test tooling is vitest 4
+  '@vitest/coverage-v8': 4.0.17
   eslint: 9.13.0
+  '@eslint/js': 9.13.0
   eslint-plugin-import: 2.31.0
   typescript-eslint: 8.12.2
   # release-script tooling — pinned here so the version lives in ONE file (the catalog),

@@ -1,10 +1,10 @@
 /* global console, process */
 import { ESLint } from 'eslint';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createVitest } from 'vitest/node';
-import { TEST_FILE_GLOBS } from '../config/eslint-policy.js';
+import { CAST_DIRECTIVE_ALLOWLIST, TEST_FILE_GLOBS } from '../config/eslint-policy.js';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -42,6 +42,34 @@ const output = await formatter.format(results);
 if (output.length > 0) console.error(output);
 
 let failed = results.reduce((total, result) => total + result.errorCount, 0) > 0;
+
+// The allowlisted cast rows: one reasoned directive per row, counted per file.
+const CAST_DIRECTIVE = /eslint-disable(?:-next-line|-line)?[^\n]*\bno-restricted-syntax\b/g;
+const countCastDirectives = (text) => text.match(CAST_DIRECTIVE)?.length ?? 0;
+// Positive control: a planted directive counts as one and a clean line as none.
+if (
+  countCastDirectives('// eslint-disable-next-line no-restricted-syntax -- x\nconst a = 1;\n') !==
+    1 ||
+  countCastDirectives('const a = 1;\n') !== 0
+) {
+  throw new Error('lint:test-policy cast-directive count is vacuous');
+}
+const castCounts = new Map();
+for (const file of lintedFiles) {
+  const count = countCastDirectives(readFileSync(file, 'utf8'));
+  if (count > 0) castCounts.set(relative(root, file).replaceAll('\\', '/'), count);
+}
+const castFiles = new Set([...castCounts.keys(), ...Object.keys(CAST_DIRECTIVE_ALLOWLIST)]);
+for (const file of castFiles) {
+  const want = CAST_DIRECTIVE_ALLOWLIST[file] ?? 0;
+  const got = castCounts.get(file) ?? 0;
+  if (want !== got) {
+    console.error(
+      `lint:test-policy: ${file} holds ${got} cast directives, the allowlist says ${want}`,
+    );
+    failed = true;
+  }
+}
 
 // A delegating global wrapper that restores in finally is instrumentation, not a
 // replacement double, so it is permitted.

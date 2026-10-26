@@ -268,6 +268,16 @@ export default tseslint.config(
       // legible and survives a preset swap: no dangling promises, no `any` escape hatch.
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
+      // A suppression comment hides a type gap from the compiler: a description does not make it allowed.
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-expect-error': true,
+          'ts-ignore': true,
+          'ts-nocheck': true,
+          'ts-check': false,
+        },
+      ],
       // A triple-slash types/path/lib reference hands a package a type dependency that no import wall
       // sees (a React type in a renderer-agnostic package, the vitest globals in a test).
       '@typescript-eslint/triple-slash-reference': [
@@ -434,20 +444,24 @@ export default tseslint.config(
       'minitui/no-static-capability-import': ['error', { allow: ['@modelcontextprotocol'] }],
     },
   },
-  // (b) intra-exec child_process wall: only exec/ (the spawner) and sandbox/ (the wrapper) may reach
-  // the builtin; permission/, mcp/, dispatch/ may NOT — dispatch/ routes through the sandbox-wrapped
-  // runner, mcp/ through the sandbox-wrapped stdio transport. This REPLACES (a) for these files, so it
+  // (b) intra-exec child_process wall: only the spawner directory (exec/), the sandbox directory (sandbox/)
+  // and the barrel (index.ts) may reach the builtin; every other exec source file, present or future, may
+  // NOT — dispatch/ routes through the sandbox-wrapped runner, mcp/ through the sandbox-wrapped stdio
+  // transport. This REPLACES (a) for these files, so it
   // re-carries the SDK + React/Ink bans TOGETHER with the two child_process paths (a superset) — but
   // NOT the MCP/sandbox paths (mcp/ legitimately imports the MCP client). child_process is a NODE
   // BUILTIN, so the biting rule is no-restricted-imports (import/no-restricted-paths can never match a
   // bare builtin — a vacuous gate here). The no-restricted-syntax arm closes the dynamic forms.
   {
     files: [
-      `packages/exec/src/permission/**/*.${SOURCE_EXT}`,
-      `packages/exec/src/mcp/**/*.${SOURCE_EXT}`,
-      `packages/exec/src/dispatch/**/*.${SOURCE_EXT}`,
+      `packages/exec/src/**/*.${SOURCE_EXT}`,
       'test/eslint-boundary-fixture/exec-walls/mcp-spawn.ts',
       'test/eslint-boundary-fixture/exec-walls/mcp-dynimport.ts',
+    ],
+    ignores: [
+      'packages/exec/src/exec/**',
+      'packages/exec/src/sandbox/**',
+      'packages/exec/src/index.ts',
     ],
     rules: {
       'no-restricted-imports': [
@@ -534,12 +548,10 @@ export default tseslint.config(
     },
   },
   {
-    // Config/test files carry no in-project type info — package tsconfigs are
-    // include:["src/**"], so anything under a package's test/ dir, plus the root
-    // determinism files and every tsup/vitest config, sits outside every tsconfig's
-    // program. Turn the type-checked rules AND the project requirement back off for
-    // them so they parse syntactically instead of erroring "not found by the project
-    // service" under the type-aware preset above.
+    // Files no tsconfig program includes: JavaScript, the tool and vitest configs, the root determinism
+    // test, the scripts tests, the boundary fixtures and the virtual witness paths. They are linted
+    // without type information. Package and app test files are in their package's tsconfig.test.json
+    // and get the typed lane below.
     files: [
       '**/*.js',
       '**/*.jsx',
@@ -554,6 +566,62 @@ export default tseslint.config(
       '**/vitest.config.ts',
       ...TEST_FILE_GLOBS,
     ],
+    ignores: ['packages/*/test/**/*.{ts,tsx}', 'apps/*/test/**/*.{ts,tsx}'],
     ...tseslint.configs.disableTypeChecked,
+  },
+  // The virtual witness paths name no file: they stay on the syntactic lane wherever they sit.
+  { files: ['**/__witness__.test.{ts,tsx}'], ...tseslint.configs.disableTypeChecked },
+  {
+    // Package and app tests are type-checked through their package's tsconfig.test.json (every package
+    // has one). Five rule families are off for tests by name: see the reason beside each.
+    files: ['packages/*/test/**/*.{ts,tsx}', 'apps/*/test/**/*.{ts,tsx}'],
+    ignores: ['**/__witness__.test.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ['./packages/*/tsconfig.test.json', './apps/*/tsconfig.test.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    linterOptions: { reportUnusedDisableDirectives: 'error' },
+    rules: {
+      // a real implementation of a Promise-returning port is async without an await
+      '@typescript-eslint/require-await': 'off',
+      // hostile input enters tests through JSON.parse into a typed variable
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      // type-level assertion aliases start with an underscore
+      '@typescript-eslint/naming-convention': 'off',
+      // tests reject and throw non-Error values on purpose
+      '@typescript-eslint/prefer-promise-reject-errors': 'off',
+      '@typescript-eslint/only-throw-error': 'off',
+      // async listeners and deliberately rejecting sinks are what these tests hand to void callbacks
+      '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: false }],
+    },
+  },
+  {
+    // A cast to never or through unknown hides a type gap. Allowed only at the rows counted in
+    // CAST_DIRECTIVE_ALLOWLIST (config/eslint-policy.js), each with a reasoned disable directive.
+    // The exec-wall fixtures and the exec source tree keep the selectors of the exec wall, which this
+    // block would replace.
+    files: TEST_FILE_GLOBS,
+    ignores: ['test/eslint-boundary-fixture/exec-walls/**', 'packages/exec/src/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TSAsExpression > TSNeverKeyword.typeAnnotation',
+          message: 'A cast to never hides a type gap: build a real value of the type.',
+        },
+        {
+          selector:
+            'TSAsExpression[expression.type="TSAsExpression"][expression.typeAnnotation.type="TSUnknownKeyword"]',
+          message: 'A cast through unknown hides a type gap: build a real value of the type.',
+        },
+      ],
+    },
   },
 );

@@ -4,8 +4,8 @@ import { createAsyncEventQueue } from '../src/events/event-stream.js';
 describe('AsyncEventQueue', () => {
   it('delivers pushed values in order then ends on close', async () => {
     const q = createAsyncEventQueue<number>();
-    q.push(1);
-    q.push(2);
+    void q.push(1);
+    void q.push(2);
     q.close();
     const out: number[] = [];
     for await (const v of q) out.push(v);
@@ -18,9 +18,9 @@ describe('AsyncEventQueue', () => {
     const consumer = (async () => {
       for await (const v of q) collected.push(v);
     })();
-    q.push('a');
+    void q.push('a');
     await Promise.resolve();
-    q.push('b');
+    void q.push('b');
     q.close();
     await consumer;
     expect(collected).toEqual(['a', 'b']);
@@ -28,7 +28,7 @@ describe('AsyncEventQueue', () => {
 
   it('throws into the consumer when fail() is called', async () => {
     const q = createAsyncEventQueue<number>();
-    q.push(1);
+    void q.push(1);
     q.fail(new Error('boom'));
     const seen: number[] = [];
     await expect(

@@ -118,6 +118,38 @@ const expectedByFile = new Map([
     'test/eslint-boundary-fixture/illegal-vitest-computed-process.test.ts',
     ['minitui/no-vitest-replacement-api'],
   ],
+  // Test files may not build doubles through the mocker or the scoped vitest packages, whatever name they
+  // import; only the coverage provider is tooling.
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-mocker.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-scoped.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-scoped-dynamic.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  ['test/eslint-boundary-fixture/legal-vitest-coverage-provider.test.ts', []],
+  // The typed test lane, the ts-comment ban and the two cast bans bite in package and app tests.
+  [
+    'apps/eslint-policy-fixture/test/illegal-floating-promise.test.ts',
+    ['@typescript-eslint/no-floating-promises'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-ts-expect-error.test.ts',
+    ['@typescript-eslint/ban-ts-comment'],
+  ],
+  ['test/eslint-boundary-fixture/illegal-cast-never.test.ts', ['no-restricted-syntax']],
+  ['test/eslint-boundary-fixture/illegal-cast-through-unknown.test.ts', ['no-restricted-syntax']],
+  // A test may import from a scripts directory only the two named pure helpers.
+  [
+    'test/eslint-boundary-fixture/illegal-test-scripts-import.test.ts',
+    ['import/no-restricted-paths'],
+  ],
+  ['test/eslint-boundary-fixture/legal-test-scripts-import.test.ts', []],
   ['test/eslint-boundary-fixture/illegal-vitest-eval.test.ts', ['no-eval']],
   ['test/eslint-boundary-fixture/illegal-vitest-implied-eval.test.ts', ['no-implied-eval']],
   ['test/eslint-boundary-fixture/illegal-vitest-function-call.test.ts', ['no-restricted-globals']],

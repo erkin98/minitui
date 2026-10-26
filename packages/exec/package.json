@@ -4,11 +4,9 @@
   "private": false,
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "catalog:",
-    "@cfworker/json-schema": "catalog:",
     "@minitui/renderer-core": "workspace:*",
     "@minitui/sanitizer": "workspace:*",
     "@minitui/types": "workspace:*",
-    "@modelcontextprotocol/client": "catalog:",
     "tree-sitter-bash": "catalog:",
     "web-tree-sitter": "catalog:",
     "zod": "catalog:"
@@ -34,6 +32,7 @@
   "files": [
     "dist"
   ],
+  "license": "Apache-2.0",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsup",
