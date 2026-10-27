@@ -7,12 +7,14 @@ packages:
 engineStrict: true
 saveExact: true
 
-# single React/Ink copy across the graph — two copies break Ink's reconciler
+# single React/Ink copy across the graph — two copies break Ink's reconciler, enforced by overrides below
 publicHoistPattern:
   - 'react'
   - 'react-*'
   - '@types/react'
   - 'ink'
+overrides:
+  react: 'catalog:'
 
 # supply-chain posture — mirrors the codex project, the strictest
 # of the adopted repos: 7-day quarantine on freshly-published versions, no exotic
