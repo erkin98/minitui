@@ -16,7 +16,7 @@
     "syncpack": "13.0.0",
     "tsup": "catalog:",
     "tsx": "catalog:",
-    "turbo": "2.2.3",
+    "turbo": "2.9.7",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"

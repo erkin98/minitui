@@ -24,51 +24,62 @@ pre-commit:
       run: pnpm exec syncpack lint
 
 pre-push:
-  # Run order. lefthook 1.8.2 sorts commands by priority and then by name; the order of
-  # this file does not count, and none of them sets a priority. They therefore run
-  # alphabetically: build, coverage, format, lint, pack, policy-fixtures, syncpack, test,
-  # typecheck, typecheck-composite. parallel:false only runs them one at a time; a failing
-  # command does not stop the ones after it, and the closing summary lists each outcome.
-  # Building first is relied on below, so a change of order needs a cold-tree run.
-  parallel: false
+  # Run order, by priority (lower runs first; lefthook 1.8.2 sorts commands by priority and then by
+  # name, and the order of this file does not count): syncpack 1, format 2, policy-fixtures 3, build 4,
+  # lint 5, typecheck 6, typecheck-composite 7, test 8, coverage 9, pack 10. The cheap checks come
+  # first and piped stops the run at the first failing command, so a bad push is rejected in seconds
+  # when one of them fails, and only that failure is shown. build is fourth because lint's type-aware
+  # rules, typecheck, typecheck-composite, test and pack read the built dist trees of the packages, so
+  # a change of order needs a cold-tree run.
+  piped: true
   commands:
     lint:
+      priority: 5
       # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
       # rule change or a file touched outside the hook can leave the tree reding with
       # every commit green. No CI backstop exists yet (no .github/workflows).
       run: pnpm run lint
     format:
+      priority: 2
       run: pnpm run format:check
     policy-fixtures:
+      priority: 3
       # The policy-fixture proof that the capability/replacement-mock AST rules actually
       # bite. Enforced here, not only in the un-hooked `pnpm lint`, so
       # a regressed rule cannot reach the remote green.
       run: pnpm run lint:policy-fixtures
     syncpack:
+      priority: 1
       # Repo-wide version-consistency check. Pre-commit's copy fires only when a
       # package.json is staged, so manifest drift committed with --no-verify would
       # otherwise reach the remote unchecked. Cheapest of the type/version gates.
       run: pnpm exec syncpack lint
     typecheck:
+      priority: 6
       # Same turbo typecheck as pre-commit, re-run repo-wide as the last gate before
       # the remote: a commit made with --no-verify, or a tree drifted since the last
       # hook run, must not push type errors.
       run: pnpm run typecheck
     typecheck-composite:
+      priority: 7
       # The composite build (tsc -b) — the second cycle detector across project
       # references — runs in no other hook, so this is its only enforcement point.
       # Needs the upstream dist/index.d.ts that exports resolve to, which the turbo ^build
       # of typecheck (and the build command) produces; a cold raw tsc -b fails because
-      # tsc emits to dist-types/, never dist/. By name it sorts after typecheck, so it
-      # runs after it.
+      # tsc emits to dist-types/, never dist/. By priority it runs right after
+      # typecheck.
       run: pnpm run typecheck:tsc
     test:
+      priority: 8
       run: pnpm run test:all
     coverage:
+      priority: 9
       run: pnpm run test:coverage
     build:
+      priority: 4
       run: pnpm run build:all
     pack:
+      priority: 10
       # Published-artifact gate: pack each publishing package, assert the
       # tarball's files/manifest/exports/engines, then compile + run a strict consumer
       # against the SHIPPED tarball. Self-builds via cached turbo, so it is order-safe
