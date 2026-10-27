@@ -43,24 +43,38 @@ const timed = <T>(run: () => T): { readonly ms: number; readonly value: T } => {
 };
 
 // How the cost of a sink grows with its input: the fastest run at the full size over the fastest run at
-// 1/shrink of it. Linear work grows about `shrink` times and quadratic work about `shrink` squared. A slow or
-// busy machine slows both sizes alike, so this ratio moves far less with the load than an absolute time does;
-// it is used by the rows whose absolute time was measured to come near its bound when the whole suite and
-// the other hook steps ran together. A timer cannot tell below 0.2 ms, so the smaller time is floored there.
-const growth = (build: (size: number) => () => unknown, full: number, shrink: number): number =>
-  fastest(build(full)) / Math.max(fastest(build(full / shrink)), 0.2);
+// 1/shrink of it. Linear work grows about `shrink` times and quadratic work about `shrink` squared. A busy
+// machine does not slow both sizes alike: it stretches a long run more than a short one, and the ratio of two
+// plain minimums at a shrink of 8 read above 24 for linear work in 9 of 25 runs of this file beside 32 busy
+// loops. So the smaller size is timed as a batch of `shrink` runs, which makes both samples about as long;
+// the ratio is the least of three such measurements, so that one misread does not decide the row; and the
+// shrink is 16 with a bound of 64, four times the linear reading, which a quadratic sink at about 256 is far
+// over. Linear work read at most 19.8 in 144 cold readings of the two rows, quiet and beside 32 and 64 busy
+// loops. A timer cannot tell below 0.2 ms, so the smaller time is floored there.
+const growth = (build: (size: number) => () => unknown, full: number, shrink: number): number => {
+  const big = build(full);
+  const small = build(full / shrink);
+  const batch = (): void => {
+    for (let k = 0; k < shrink; k++) small();
+  };
+  let least = Infinity;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    least = Math.min(least, fastest(big) / Math.max(fastest(batch) / shrink, 0.2));
+  }
+  return least;
+};
 
 describe('the store-directory check is linear in the token', () => {
   // 4,000 anchored groups is 16,000 characters; the split-and-join form took 584 ms and grows with the
-  // square of the groups. The cost must grow at most about linearly: eightfold for eightfold more groups,
-  // and the bound allows three times that.
+  // square of the groups. The cost must grow at most about linearly: sixteenfold for sixteenfold more
+  // groups, and the bound allows four times that.
   const storeToken = (groups: number): (() => unknown) => {
     const parsed = parsedOf({ name: 'cat', argv: ['cat', 'a=~/'.repeat(groups)] });
     return () => checkHardFloor(parsed, [], alice);
   };
   it('grows at most about linearly with the number of anchored groups', () => {
     checkHardFloor(parsedOf({ name: 'ls', argv: ['ls'] }), [], alice);
-    expect(growth(storeToken, 4000, 8)).toBeLessThan(24);
+    expect(growth(storeToken, 4000, 16)).toBeLessThan(64);
   });
   it('past the cap on anchored tails the token is treated as naming the store: the answer errs to the deny', () => {
     expect(storeToken(4000)()).toMatchObject({ blocked: true });
@@ -124,7 +138,7 @@ describe('the later tokens of an opaque argument runner are judged once each', (
   };
   it('grows at most about linearly with the number of later tokens', () => {
     checkHardFloor(parsedOf({ name: 'ls', argv: ['ls'] }), [], alice);
-    expect(growth(laterTokens, 2000, 8)).toBeLessThan(24);
+    expect(growth(laterTokens, 2000, 16)).toBeLessThan(64);
   });
   it('lets 2,000 harmless later tokens through', () => {
     expect(laterTokens(2000)()).toMatchObject({ blocked: false });
