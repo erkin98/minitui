@@ -8,8 +8,8 @@ import type { SandboxViolation } from './sandbox/violation.js';
 
 /** Thrown when the sandbox cannot run (unloadable runtime / unsupported OS / missing deps) and a gated action was attempted. Fail-closed. */
 export class SandboxUnavailableError extends MinituiError {
-  constructor(reason: string) {
-    super(reason);
+  constructor(reason: string, options?: ErrorOptions) {
+    super(reason, options);
     this.name = 'SandboxUnavailableError';
   }
 }

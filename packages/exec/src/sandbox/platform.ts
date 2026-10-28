@@ -1,11 +1,26 @@
 // No top-level VALUE import of '@anthropic-ai/sandbox-runtime' — the dynamic import below IS the
 // fail-closed loading seam. A static import would crash the whole package when the runtime is
-// absent, which is the opposite of failing closed. The type-only import is erased at emit and
+// absent, which is the opposite of failing closed. The module type below is erased at emit and
 // carries no runtime dependency.
-import type { SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import { applyAsrtVendorEnv } from './vendor-env.js';
 
 type SandboxRuntimeModule = typeof import('@anthropic-ai/sandbox-runtime');
+
+/**
+ * The part of the runtime's config that this package builds, owned here so that the published
+ * declarations import nothing from the runtime. Each list is a mutable `string[]`: a readonly list
+ * is not assignable to the runtime's config type, which the real module's members take.
+ */
+export interface ExecSandboxConfig {
+  filesystem: { denyRead: string[]; allowWrite: string[]; denyWrite: string[] };
+  network: {
+    allowedDomains: string[];
+    deniedDomains: string[];
+    strictAllowlist: boolean;
+    allowLocalBinding: boolean;
+  };
+  seccomp?: { applyPath: string };
+}
 
 /**
  * Minimal structural slice of the sandbox runtime module — ONLY the SandboxManager members this
@@ -21,20 +36,22 @@ export interface SandboxRuntimeLike {
       warnings: string[];
     };
     initialize(
-      config: SandboxRuntimeConfig,
+      config: ExecSandboxConfig,
       askCallback?: (c: { host: string; port: number | undefined }) => Promise<boolean>,
       enableLogMonitor?: boolean,
     ): Promise<void>;
+    // Ends the global session: kills the bridge processes, closes the proxies, clears the context.
+    reset(): Promise<void>;
     wrapWithSandbox(
       command: string,
       binShell?: string,
-      customConfig?: Partial<SandboxRuntimeConfig>,
+      customConfig?: Partial<ExecSandboxConfig>,
       abortSignal?: AbortSignal,
     ): Promise<string>;
     wrapWithSandboxArgv(
       command: string,
       binShell?: string,
-      customConfig?: Partial<SandboxRuntimeConfig>,
+      customConfig?: Partial<ExecSandboxConfig>,
       abortSignal?: AbortSignal,
     ): Promise<{ argv: string[]; env: NodeJS.ProcessEnv }>;
     getSandboxViolationStore(): {
@@ -62,8 +79,12 @@ export async function loadSandboxRuntime(): Promise<SandboxRuntimeModule> {
   return loaded;
 }
 
+/** The whole of `probe.errors` on win32, and the refusal both wraps throw there. */
+export const WIN32_GATED_REFUSAL =
+  'gated commands are not available on win32: commands are parsed as bash and the sandbox would run them under cmd.exe';
+
 export interface SandboxProbe {
-  /** module loadable AND isSupportedPlatform() AND no fatal dependency errors */
+  /** not win32 AND module loadable AND isSupportedPlatform() AND no fatal dependency errors */
   readonly supported: boolean;
   /** load failure / fatal dependency errors — the sandbox genuinely cannot run here */
   readonly errors: readonly string[];
@@ -89,21 +110,30 @@ function formatUnknown(err: unknown): string {
 /**
  * Adapts the runtime's checkDependencies() + isSupportedPlatform() into one probe. Does NOT
  * reimplement the OS/bubblewrap probe. Fail-closed: a failed module load or any throw →
- * supported:false; never throws itself. isSupportedPlatform() is true on macOS/Windows/Linux —
- * false only for WSL1/unknown. On Linux, ripgrep (rg) on PATH is a fatal runtime prerequisite
- * (alongside bwrap and socat): a missing rg surfaces here as a dependency error and folds to
- * supported:false — the fail-closed-correct direction for a binary or curl-piped install that did
- * not stage it. `loadRuntime` defaults to the memoized dynamic import; a unit test injects a REAL
- * fake loader (throwing / unsupported / fatal-deps) to drive the fail-closed branches through the
- * production seam instead of replacing the module.
+ * supported:false; never throws itself. On win32 it reports unsupported before the runtime is
+ * loaded: gated commands are parsed as bash, and the runtime would run them under cmd.exe. On macOS
+ * and Linux isSupportedPlatform() is false only for WSL1. On Linux, ripgrep (rg) on PATH is a fatal
+ * runtime prerequisite (alongside bwrap and socat): a missing rg surfaces here as a dependency error
+ * and folds to supported:false — the fail-closed-correct direction for a binary or curl-piped
+ * install that did not stage it. `loadRuntime` defaults to the memoized dynamic import; a unit test
+ * injects a REAL fake loader (throwing / unsupported / fatal-deps) to drive the fail-closed branches
+ * through the production seam instead of replacing the module. `platform` defaults to the host's.
  */
 export async function probeSandbox(
   loadRuntime: LoadSandboxRuntime = loadSandboxRuntime,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<SandboxProbe> {
-  const platform = process.platform;
-  // Honor a staged runtime vendor dir BEFORE the dynamic import, so the win32 dependency check sees
-  // SRT_WIN_PATH. No-op on posix (the runtime exposes no seccomp env hook — the Linux consumer is
-  // the seccomp.applyPath config field emitted at initialize).
+  if (platform === 'win32') {
+    return {
+      supported: false,
+      errors: Object.freeze([WIN32_GATED_REFUSAL]),
+      warnings: Object.freeze([]),
+      platform,
+    };
+  }
+  // Honor a staged runtime vendor dir BEFORE the dynamic import. Its only effect is a win32 one and
+  // win32 returned above, so it is a no-op here (the runtime exposes no seccomp env hook — the Linux
+  // consumer is the seccomp.applyPath config field emitted at initialize).
   applyAsrtVendorEnv(platform);
   let SandboxManager: SandboxRuntimeLike['SandboxManager'];
   try {

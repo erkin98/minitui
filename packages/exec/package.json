@@ -7,12 +7,12 @@
     "@minitui/renderer-core": "workspace:*",
     "@minitui/sanitizer": "workspace:*",
     "@minitui/types": "workspace:*",
+    "@types/node": "catalog:",
     "tree-sitter-bash": "catalog:",
     "web-tree-sitter": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-import": "catalog:",
     "tsup": "catalog:",
