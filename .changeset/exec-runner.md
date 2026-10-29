@@ -1,0 +1,7 @@
+---
+'@minitui/exec': minor
+---
+
+The package can now run an action. `createLocalRunner` spawns one resolved program inside the sandbox, in its own process group so an abort stops the whole tree, with the environment the sandbox hands back, and streams its output as events with terminal escapes removed. Progress lines that end in a carriage return (ffmpeg's interim lines) are split as lines, and a character cut between two reads is decoded whole. `buildFfmpegRun` plans a video merge: an absolute, hijack-safe `ffmpeg`, a concat list written only on request and created exclusively, the output file as the only write root, and no network. `createCapabilityProvider` lists the encoders, codecs and filters of the installed `ffmpeg`. `buildPermissionRequest` builds the consent request from the host-resolved slots only (absolute normalised paths, no control, bidirectional or zero-width characters, the engine's size budget, a shell-quoted command). `createActionRouter` is the one way to run an action: the sandbox guard first, then the permission engine, then the handler, with every failure returned as an outcome. A merge refuses an output file that already exists and never follows a link at its path. `sanitizeUntrusted`, `parseFfmpegProgress` and `makeFfmpegProgressParser` are exported too.
+
+Removed: the error classes `PermissionDeniedError` and `SandboxViolationError`, which nothing ever threw. The package surface is now thirty-one names.

@@ -21,25 +21,41 @@ function barrelExports(): string[] {
 }
 
 // The frozen public surface of the exec package, written inline rather than auto-snapshotted:
-// fifteen names, eight values and seven type-only. A name that appears and a name that vanishes both
+// thirty-one names, fifteen values and sixteen type-only. A name that appears and a name that vanishes both
 // red, so a change to what consumers can import is a reviewed contract change, never a side effect.
-// probeSandbox and hardenChildEnv are deliberately not here.
+// probeSandbox, hardenChildEnv and the per-kind handlers are deliberately not here.
 const PUBLIC_SURFACE = [
+  'ActionRouterDeps',
+  'CallbackDeps',
+  'CapabilityProvider',
+  'ExecLocalDeps',
+  'LocalRunner',
+  'MergeSpec',
   'PathRule',
   'PermissionEngine',
+  'RunSpec',
+  'RunnerDeps',
+  'RunnerEvent',
   'SandboxManagerHandle',
   'SandboxPolicy',
   'SandboxProbe',
   'SandboxUnavailableError',
   'SandboxViolation',
-  'SandboxViolationError',
   'WrappedArgv',
+  'buildFfmpegRun',
+  'buildPermissionRequest',
   'checkHardFloor',
   'checkPathRules',
+  'createActionRouter',
+  'createCapabilityProvider',
+  'createLocalRunner',
   'createPermissionEngine',
   'createSandboxManager',
   'ensureParserReady',
+  'makeFfmpegProgressParser',
+  'parseFfmpegProgress',
   'parseShellCommand',
+  'sanitizeUntrusted',
 ];
 
 describe('declaration surface golden', () => {

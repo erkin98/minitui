@@ -6,8 +6,7 @@ describe('@minitui/exec barrel — sandbox surface', () => {
     expect(typeof exec.createSandboxManager).toBe('function');
   });
 
-  it('re-exports the sandbox error classes (the integration gate imports them from the package)', () => {
+  it('re-exports the sandbox error class (the integration gate imports it from the package)', () => {
     expect(typeof exec.SandboxUnavailableError).toBe('function');
-    expect(typeof exec.SandboxViolationError).toBe('function');
   });
 });

@@ -1,5 +1,5 @@
 // @minitui/exec public barrel. Permission-engine exports live in permission/index.ts;
-// local-runner/sandbox/dispatch exports are appended as they land.
+// the runner, the capability probe, the request builder and the router are the public way to run an action.
 export {
   createPermissionEngine,
   parseShellCommand,
@@ -14,7 +14,7 @@ export type { PathRule, PermissionEngine } from './permission/index.js';
 
 // --- sandbox (appended) ---
 export { createSandboxManager } from './sandbox/index.js';
-export { SandboxUnavailableError, SandboxViolationError } from './errors.js';
+export { SandboxUnavailableError } from './errors.js';
 export type {
   SandboxManagerHandle,
   SandboxProbe,
@@ -22,3 +22,24 @@ export type {
   WrappedArgv,
   SandboxViolation,
 } from './sandbox/index.js';
+
+// --- runner, ffmpeg planner, capability probe ---
+export {
+  createLocalRunner,
+  createCapabilityProvider,
+  buildFfmpegRun,
+  parseFfmpegProgress,
+  makeFfmpegProgressParser,
+} from './exec/index.js';
+export type { RunnerEvent, RunSpec, MergeSpec, RunnerDeps, LocalRunner } from './exec/index.js';
+export type { CapabilityProvider } from './exec/capabilities.js';
+
+// --- sanitize: only the one-string alias is public; consumers import the rest from the sanitiser ---
+export { sanitizeUntrusted } from './sanitize/index.js';
+
+// --- the host-resolved request builder: the composition root injects it into the router's deps ---
+export { buildPermissionRequest } from './permission/resolve-request.js';
+
+// --- the router: the one public way to run an action; the per-kind handlers stay internal ---
+export { createActionRouter } from './dispatch/index.js';
+export type { ActionRouterDeps, ExecLocalDeps, CallbackDeps } from './dispatch/index.js';
