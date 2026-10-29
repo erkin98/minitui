@@ -146,48 +146,50 @@ try {
       files: ['probe.ts'],
     }),
   );
-  // The probe names every public export (eight values, seven types), so a dropped re-export reds
+  // The probe names every public export (fifteen values, sixteen types), so a dropped re-export reds
   // TS2305 on the SHIPPED artifact.
+  const PUBLIC_VALUES = [
+    'SandboxUnavailableError',
+    'buildFfmpegRun',
+    'buildPermissionRequest',
+    'checkHardFloor',
+    'checkPathRules',
+    'createActionRouter',
+    'createCapabilityProvider',
+    'createLocalRunner',
+    'createPermissionEngine',
+    'createSandboxManager',
+    'ensureParserReady',
+    'makeFfmpegProgressParser',
+    'parseFfmpegProgress',
+    'parseShellCommand',
+    'sanitizeUntrusted',
+  ];
+  const PUBLIC_TYPES = [
+    'ActionRouterDeps',
+    'CallbackDeps',
+    'CapabilityProvider',
+    'ExecLocalDeps',
+    'LocalRunner',
+    'MergeSpec',
+    'PathRule',
+    'PermissionEngine',
+    'RunSpec',
+    'RunnerDeps',
+    'RunnerEvent',
+    'SandboxManagerHandle',
+    'SandboxPolicy',
+    'SandboxProbe',
+    'SandboxViolation',
+    'WrappedArgv',
+  ];
+  const names = (list) => list.map((n) => `  ${n},\n`).join('');
   writeFileSync(
     join(tmp, 'probe.ts'),
-    'import {\n' +
-      '  SandboxUnavailableError,\n' +
-      '  SandboxViolationError,\n' +
-      '  checkHardFloor,\n' +
-      '  checkPathRules,\n' +
-      '  createPermissionEngine,\n' +
-      '  createSandboxManager,\n' +
-      '  ensureParserReady,\n' +
-      '  parseShellCommand,\n' +
-      "} from '@minitui/exec';\n" +
-      'import type {\n' +
-      '  PathRule,\n' +
-      '  PermissionEngine,\n' +
-      '  SandboxManagerHandle,\n' +
-      '  SandboxPolicy,\n' +
-      '  SandboxProbe,\n' +
-      '  SandboxViolation,\n' +
-      '  WrappedArgv,\n' +
-      "} from '@minitui/exec';\n" +
-      'export const _values = [\n' +
-      '  SandboxUnavailableError,\n' +
-      '  SandboxViolationError,\n' +
-      '  checkHardFloor,\n' +
-      '  checkPathRules,\n' +
-      '  createPermissionEngine,\n' +
-      '  createSandboxManager,\n' +
-      '  ensureParserReady,\n' +
-      '  parseShellCommand,\n' +
-      '] as const;\n' +
-      'export type _Types = [\n' +
-      '  PathRule,\n' +
-      '  PermissionEngine,\n' +
-      '  SandboxManagerHandle,\n' +
-      '  SandboxPolicy,\n' +
-      '  SandboxProbe,\n' +
-      '  SandboxViolation,\n' +
-      '  WrappedArgv,\n' +
-      '];\n',
+    `import {\n${names(PUBLIC_VALUES)}} from '@minitui/exec';\n` +
+      `import type {\n${names(PUBLIC_TYPES)}} from '@minitui/exec';\n` +
+      `export const _values = [\n${names(PUBLIC_VALUES)}] as const;\n` +
+      `export type _Types = [\n${names(PUBLIC_TYPES)}];\n`,
   );
   // The ESM probe loads the shipped module and its runtime asset: the grammar parses one command.
   writeFileSync(
