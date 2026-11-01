@@ -1,8 +1,8 @@
-import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
 import { sanitize } from '../sanitize/index.js';
 import { buildFfmpegRun, type FfmpegRun } from '../exec/ffmpeg.js';
 import { readMergeSlots } from '../permission/resolve-request.js';
+import { createOutputFile } from './output-file.js';
+import type { OutputFinish } from './output-file.js';
 import type { LocalRunner } from '../exec/local-runner.js';
 import type { SandboxManagerHandle } from '../sandbox/index.js';
 import type { MergeSpec, RunnerEvent } from '../types.js';
@@ -69,21 +69,13 @@ export interface ExecLocalDeps {
   readonly buildFfmpegRun?: typeof buildFfmpegRun | undefined;
   /**
    * Creates the output file after consent and before the wrap, so the sandbox write root (the file, not
-   * its directory) exists when the policy is checked. Default: exclusive create on the host.
+   * its directory) exists when the policy is checked. It may hand back a finisher: the handler calls it
+   * once, after the run has ended, with `keep` true only for a run that settled, so any other end lets the
+   * implementation remove the file it made. A refused create hands back none and none is called. Default:
+   * exclusive create on the host, whose finisher removes the file only if the path still names the file it
+   * made.
    */
-  readonly ensureOutputFile?: ((path: string) => Promise<void>) | undefined;
-}
-
-/**
- * Default output-file creation, on the host and outside the sandbox: create it EXCLUSIVELY (an existing
- * file, or a link at the path, is refused and never followed or truncated), then close. The merge then only
- * ever replaces the empty file made here. O_NOFOLLOW covers the last path component; the parent directory
- * is the sandbox's business.
- */
-async function createOutputFile(path: string): Promise<void> {
-  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
-  const handle = await open(path, flags, 0o600);
-  await handle.close();
+  readonly ensureOutputFile?: ((path: string) => Promise<void | OutputFinish>) | undefined;
 }
 
 /** The run reads the same slots the consent text was built from (one reader, no coercion). */
@@ -112,34 +104,52 @@ function failed(actionKey: string, exitCode: number, stderrExcerpt: string): Act
   return { status: 'failed', fault: { actionKey, exitCode, stderrExcerpt } };
 }
 
+interface Prepared {
+  /** The outcome that ends the action, or null to go on. */
+  readonly stop: ActionOutcome | null;
+  /** The finisher of the output file the host made, when the create handed one back. */
+  readonly finish?: OutputFinish | undefined;
+}
+
 /**
  * Everything that touches the disk before the run, in the order that keeps consent first: gate the
  * resolved list path, write the list only on an allow, then create the output. Returns the outcome that
- * ends the action, or null to go on. The abort is checked again after the gate, which may have waited on
- * a person: a cancelled action writes and creates nothing.
+ * ends the action, or none to go on, and the finisher of the output file when one was made. The abort is
+ * checked again after the gate, which may have waited on a person: a cancelled action writes and creates
+ * nothing.
  */
 async function prepareDisk(
   built: FfmpegRun,
   merge: MergeSpec,
   deps: ExecLocalDeps,
   cancelled: ActionOutcome,
-): Promise<ActionOutcome | null> {
+): Promise<Prepared> {
   if (built.listFile !== undefined) {
     // The lexical path gate is advisory defence in depth; the OS sandbox is the real containment. The
     // agent never names a raw write path: every path here is host-resolved.
     const verdict = await deps.checkPath(built.listFile);
-    if (verdict.kind === 'deny') return { status: 'denied', reason: verdict.reason };
+    if (verdict.kind === 'deny') return { stop: { status: 'denied', reason: verdict.reason } };
     // Fail-closed backstop: the composition root resolves consent inside checkPath, so a live 'ask'
     // should not arrive; if one does, nothing is written or run.
     if (verdict.kind === 'ask') {
-      return { status: 'denied', reason: 'write path approval did not resolve' };
+      return { stop: { status: 'denied', reason: 'write path approval did not resolve' } };
     }
-    if (deps.signal.aborted) return cancelled;
+    if (deps.signal.aborted) return { stop: cancelled };
     await built.writeList();
   }
-  if (deps.signal.aborted) return cancelled;
-  await (deps.ensureOutputFile ?? createOutputFile)(merge.output);
-  return null;
+  if (deps.signal.aborted) return { stop: cancelled };
+  const made = await (deps.ensureOutputFile ?? createOutputFile)(merge.output);
+  return { stop: null, finish: typeof made === 'function' ? made : undefined };
+}
+
+/** Ends the output file the host made. A failure here never changes the outcome or replaces an exception. */
+async function finishQuietly(finish: OutputFinish | undefined, keep: boolean): Promise<void> {
+  if (finish === undefined) return;
+  try {
+    await finish(keep);
+  } catch {
+    // a failed removal leaves the file; the outcome of the run stands, and a retry will see the file
+  }
 }
 
 /** Streams the run, forwards each mapped event to both sinks, and settles on the exit code. */
@@ -179,8 +189,9 @@ async function streamRun(
 
 /**
  * The exec-local execute step, after the router's sandbox guard and permission gate: plan the run (no disk
- * write), gate and write the list, create the output, then stream the run the runner wraps. Fail-closed:
- * a denied or unresolved path, or an abort at any point before the run, writes and runs nothing.
+ * write), gate and write the list, create the output, then stream the run the runner wraps, and finally end
+ * the output file and remove the list. Fail-closed: a denied or unresolved path, or an abort at any point
+ * before the run, writes and runs nothing.
  */
 export async function handleExecLocal(
   ctx: DispatchContext,
@@ -190,10 +201,17 @@ export async function handleExecLocal(
   if (deps.signal.aborted) return cancelled;
   const merge = readMergeSpec(ctx);
   const built = (deps.buildFfmpegRun ?? buildFfmpegRun)(merge, {});
+  let finish: OutputFinish | undefined;
+  let settled = false;
   try {
-    const stop = await prepareDisk(built, merge, deps, cancelled);
-    return stop ?? (await streamRun(ctx, built, merge, deps));
+    const prepared = await prepareDisk(built, merge, deps, cancelled);
+    finish = prepared.finish;
+    const outcome = prepared.stop ?? (await streamRun(ctx, built, merge, deps));
+    settled = outcome.status === 'settled';
+    return outcome;
   } finally {
+    // An exception leaves `settled` false, so the file the host made is removed on every unsettled end.
+    await finishQuietly(finish, settled);
     await built.cleanup();
   }
 }

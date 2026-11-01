@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SandboxUnavailableError } from '../../src/errors.js';
 import { createActionRouter } from '../../src/dispatch/index.js';
 import { buildPermissionRequest } from '../../src/permission/resolve-request.js';
 import type { Decision, ExecEvent } from '@minitui/types';
+import type { LocalRunner } from '../../src/exec/local-runner.js';
 import type { RunnerEvent } from '../../src/types.js';
 import {
   execLocalDeps,
@@ -322,5 +326,43 @@ describe('createActionRouter with the real request builder', () => {
     expect(out.status).toBe('settled');
     expect(engine.calls).toHaveLength(1);
     expect(engine.calls[0]?.resolvedPaths).toEqual(['/abs/a.mp4', '/abs/b.mp4', '/abs/o.mp4']);
+  });
+});
+
+describe('createActionRouter: an unsettled run and its output file', () => {
+  it('an abort in the middle of a run removes the output the host made', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'minitui-router-'));
+    try {
+      const output = join(dir, 'out.mp4');
+      const ctl = new AbortController();
+      // A runner that honours the router's own signal: it checks the signal before it waits for an abort.
+      const runner: LocalRunner = {
+        async *run(_spec, signal) {
+          writeFileSync(output, 'partial encode');
+          yield { kind: 'stderr', text: 'frame=1' };
+          if (!signal.aborted) {
+            await new Promise<void>((resolve) => {
+              signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+          }
+          yield { kind: 'exit', code: null, signal: 'SIGTERM' };
+        },
+      };
+      const out = await createActionRouter(
+        routerDeps(allowEngine, {
+          signal: ctl.signal,
+          execLocal: execLocalDeps({
+            runner,
+            ensureOutputFile: undefined,
+            // the cancel arrives while the run is under way
+            onEvent: () => ctl.abort(),
+          }),
+        }),
+      ).dispatch('merge', mergeCtx({ resolvedParams: { inputs: ['/abs/a.mp4'], output } }));
+      expect(out.status).toBe('failed');
+      expect(existsSync(output)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

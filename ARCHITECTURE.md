@@ -57,6 +57,7 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 |Running an action|`packages/exec/src/dispatch/router.ts`|The only public way to run an action: the sandbox guard, then the permission engine, then the handler. The per-kind handlers stay internal. Enforced for the public names: `packages/exec/test/surface.test.ts`.|
 |Reading the merge slots|`readMergeSlots` in `packages/exec/src/permission/resolve-request.ts`|One reader of the merge parameters, used for the consent text and for the run, so the two cannot describe different commands. Convention, with tests.|
 |Text of a fault|`boundFaultText` in `packages/exec/src/dispatch/exec-local-handler.ts`|Every fault text exec builds is stripped of escapes and windowed here. Convention, with tests.|
+|The output file of a merge|`packages/exec/src/dispatch/output-file.ts`|The host makes the empty output exclusively and holds it open for the run; one finisher closes it and, for a run that did not settle, removes it only if the path still names the same file. Convention, with tests.|
 
 ## Rules
 
