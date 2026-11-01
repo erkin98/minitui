@@ -17,10 +17,12 @@ export const sharedVitestConfig = defineConfig({
   },
   test: {
     environment: 'node',
-    // surface.test.ts builds a real TypeScript program per test, ~1.5s uninstrumented
-    // but 4-6.4s once V8 coverage instrumentation is attached. The 5000ms vitest
-    // default straddles that range, so coverage runs fail intermittently on slower
-    // machines/CI. 20s gives ~3x headroom over the slowest observed coverage run.
+    // surface.test.ts builds a real TypeScript program per test: 0.8-1.0s plain and 3.5-4.8s with V8
+    // coverage on an idle machine. Under the pre-push hook's load (nine of them at once) it took up to
+    // 6.3s in the plain test step and up to 20.1s in the coverage step, which is why test:coverage leaves
+    // the surface tests out. The slowest default-limit row left in the coverage step took 7.7s
+    // (floor-operands). The 5000ms vitest default is too tight for the plain run under load; the 20s
+    // limit applies to both steps.
     testTimeout: 20_000,
     setupFiles: [fromRoot('./vitest.determinism.setup.ts')],
     coverage: {

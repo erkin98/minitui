@@ -74,6 +74,12 @@ pre-push:
       run: pnpm run test:all
     coverage:
       priority: 9
+      # The nine package surface tests (test/surface.test.ts) are left out of this step on purpose: each
+      # builds a TypeScript program, adds no coverage (none imports from src at run time), and costs 4 to 5
+      # times more under instrumentation, so nine at once on a busy machine ran past the test timeout. They
+      # still run in the test step above and in CI. Exclude globs are matched against each project's root,
+      # so keep the glob relative to it. A surface test that starts to import from src at run time must be
+      # taken off this exclusion.
       run: pnpm run test:coverage
     build:
       priority: 4

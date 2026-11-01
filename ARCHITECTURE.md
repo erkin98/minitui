@@ -86,7 +86,8 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 12. **Tests are deterministic.** The clock, timezone, locale and terminal-size variables are frozen for every test.
     Enforced: `vitest.determinism.setup.ts`.
 13. **Coverage floor:** 85% statements and lines, 80% branches and functions, in aggregate. Enforced:
-    `vitest.shared.ts`.
+    `vitest.shared.ts`. The coverage step leaves out each package's `test/surface.test.ts`: those tests build
+    a TypeScript program and import nothing from `src` at run time. Convention.
 14. **Adopt, do not rebuild.** Use the adopted libraries for what they do; build only the permission and sandbox core.
     Convention.
 15. **Handle errors at boundaries** (user input, the model API, process execution, MCP, I/O), not around calls between

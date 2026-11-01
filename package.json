@@ -41,7 +41,7 @@
     "syncpack": "syncpack lint",
     "test": "turbo run test && pnpm exec vitest run --project root",
     "test:all": "vitest run",
-    "test:coverage": "vitest run --coverage --coverage.reporter=text",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --exclude 'test/surface.test.ts'",
     "typecheck": "turbo run typecheck",
     "typecheck:tsc": "tsc -b"
   },
