@@ -82,9 +82,9 @@ The command is the host's own resolved, shell-quoted text. Characters that could
 | The model cannot introduce code, only catalog elements and actions. | `catalog` allowlist, plus the structural and semantic checks in `spec`. |
 | The host, not the model, parses every shell command. Anything the parser does not model is denied. | `exec`: tree-sitter-bash with a positive allowlist of syntax node kinds. |
 | Decisions are deny-first, and a hard floor cannot be overridden, even in the most permissive approval mode: network-fetch tools, `rm` of `$HOME` or `/`, and reads of secret files. | `exec` permission engine. |
-| The consent box shows host-resolved values, never agent-written text, and a request that cannot be shown whole or holds invisible characters is denied. Tying the approved text to the argv that is spawned is the command runner's job (planned). | `exec` canonical-request check, `renderer-ink` overlay. |
+| The consent box shows host-resolved values, never agent-written text, and a request that cannot be shown whole or holds invisible characters is denied. The text shown and the command spawned are read from the same resolved slots. | `exec` canonical-request check, `renderer-ink` overlay. |
 | Terminal output cannot drive your terminal. Escape and control sequences are stripped at a single chokepoint. | `sanitizer`, a zero-dependency leaf package. |
-| The sandbox is designed to fail closed. The probe reports "unsupported" when the runtime is missing or fails to load; refusing every gated command on that signal belongs to the sandbox surface (planned). | `exec` sandbox probe, built on sandbox-runtime. |
+| The sandbox fails closed. The probe reports "unsupported" when the runtime is missing, fails to load, or the OS is Windows, and the handle then refuses to wrap a command and refuses every gated action kind. The action router asks the handle before each action. | `exec` sandbox handle, built on sandbox-runtime. |
 | Local actions in a mini-app can only change app state. They cannot log, exit, or run commands. | A state-only allowlist in the renderer boundary. |
 | Layering cannot silently erode. | Import-boundary lint at error level plus composite `tsc -b`, both in CI. |
 
@@ -92,12 +92,12 @@ The command is the host's own resolved, shell-quoted text. Characters that could
 
 - **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
 - **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
-- **Platforms.** Linux and macOS are the targets. Windows is not supported. The design is that gated execution refuses to run there; that refusal is part of the planned sandbox surface and is not in the built code yet. No macOS run has been recorded.
-- **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because the host that connects the pieces does not exist yet.
+- **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. A Linux session has been run by hand; no macOS run has been recorded.
+- **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because the host that connects the pieces does not exist yet. Below that, the runner and router have run a real merge of two clips with audio on Linux under the sandbox, with a stand-in that always allows in place of the consent prompt, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
 
 ## Architecture
 
-A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforces it.
+A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforces it. The full structure and the rules that keep it are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 <!-- prettier-ignore -->
 | Package | Role | State |
@@ -110,7 +110,7 @@ A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforce
 | `@minitui/catalog` | The frozen component and action allowlist, and the prompt derived from it. | built |
 | `@minitui/renderer-core` | The renderer port. No UI framework appears in its signature. | built |
 | `@minitui/renderer-ink` | The Ink implementation of that port, including the consent overlay. | built |
-| `@minitui/exec` | Shell parsing, permission engine, hard floor, grants store, sandbox probe and wrapper. The command runner and the rest of the sandbox surface are planned. | partly built |
+| `@minitui/exec` | Shell parsing, permission engine, hard floor, grants store, sandbox handle (probe, wrap, policy checks, disposal), the local runner, the ffmpeg merge planner and the action router. The MCP client is planned. | partly built |
 | `@minitui/runtime-host` | Wires a session together and owns its lifecycle. | planned |
 | `@minitui/library` | Saving and relaunching kept apps. | planned |
 | `@minitui/cli` | The `minitui` command. | planned |
@@ -142,7 +142,7 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 | Nine core packages | Implemented, with unit and boundary tests. Type checks, lint and tests pass locally. `exec` is partial, as above. |
 | Session host, kept-app library, CLI | Not built. You cannot run minitui yet. |
 | Live model traffic | Not exercised. The model loop is tested against an in-process provider. |
-| Real sandbox session on Linux, run on macOS | Not exercised end to end. |
+| Real sandbox session | A merge of two clips ran through the router and the sandbox on Linux, with a stand-in for the consent prompt. Not run on macOS. Not run with a model or the consent box. |
 | Releases | None. The workspace is private and unpublished. |
 
 Expect breaking changes until the first release.
