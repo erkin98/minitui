@@ -3,8 +3,11 @@ import { lstat, open, unlink } from 'node:fs/promises';
 
 /**
  * Ends the use of an output file the host made. It is called once, after the run that the file was made
- * for has ended. `keep` is true only for a run that settled: the file is left in place. For any other end
- * the file is removed, but only if the path still names the file that was made.
+ * for has ended or has been told to stop; a stopped child may still be exiting, and removing a path that
+ * a dying process holds open is safe on POSIX. `keep` is true only for a run that settled: the file is
+ * left in place. For any other end the file is removed if the path still names the file that was made.
+ * The check and the removal are two calls and Node cannot remove by descriptor, so a process that can
+ * write to the directory could swap the path between them.
  */
 export type OutputFinish = (keep: boolean) => Promise<void>;
 

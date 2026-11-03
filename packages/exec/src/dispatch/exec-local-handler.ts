@@ -70,10 +70,10 @@ export interface ExecLocalDeps {
   /**
    * Creates the output file after consent and before the wrap, so the sandbox write root (the file, not
    * its directory) exists when the policy is checked. It may hand back a finisher: the handler calls it
-   * once, after the run has ended, with `keep` true only for a run that settled, so any other end lets the
-   * implementation remove the file it made. A refused create hands back none and none is called. Default:
-   * exclusive create on the host, whose finisher removes the file only if the path still names the file it
-   * made.
+   * once, after the run has ended or been told to stop, with `keep` true only for a run that settled, so
+   * any other end lets the implementation remove the file it made. A refused create hands back none and
+   * none is called. Default: exclusive create on the host, whose finisher removes the file if the path
+   * still names the file it made.
    */
   readonly ensureOutputFile?: ((path: string) => Promise<void | OutputFinish>) | undefined;
 }
