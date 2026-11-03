@@ -335,16 +335,24 @@ describe('createActionRouter: an unsettled run and its output file', () => {
     try {
       const output = join(dir, 'out.mp4');
       const ctl = new AbortController();
-      // A runner that honours the router's own signal: it checks the signal before it waits for an abort.
+      let presentAtStart = false;
+      let waited = false;
+      let presentAtExit = false;
+      // A runner that waits for the router's own signal, as the real one does, and ends only after it.
+      // It looks at the host's file before its own write and again when it ends: the host made the file
+      // before the run, and has not removed it by the time the run is over.
       const runner: LocalRunner = {
         async *run(_spec, signal) {
+          presentAtStart = existsSync(output);
           writeFileSync(output, 'partial encode');
           yield { kind: 'stderr', text: 'frame=1' };
           if (!signal.aborted) {
+            waited = true;
             await new Promise<void>((resolve) => {
               signal.addEventListener('abort', () => resolve(), { once: true });
             });
           }
+          presentAtExit = existsSync(output);
           yield { kind: 'exit', code: null, signal: 'SIGTERM' };
         },
       };
@@ -354,12 +362,17 @@ describe('createActionRouter: an unsettled run and its output file', () => {
           execLocal: execLocalDeps({
             runner,
             ensureOutputFile: undefined,
-            // the cancel arrives while the run is under way
-            onEvent: () => ctl.abort(),
+            // The cancel arrives one tick after the event, so the runner is already waiting for it.
+            onEvent: (ev) => {
+              if (ev.kind === 'stderr') setTimeout(() => ctl.abort(), 0);
+            },
           }),
         }),
       ).dispatch('merge', mergeCtx({ resolvedParams: { inputs: ['/abs/a.mp4'], output } }));
       expect(out.status).toBe('failed');
+      expect(presentAtStart).toBe(true);
+      expect(waited).toBe(true);
+      expect(presentAtExit).toBe(true);
       expect(existsSync(output)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
