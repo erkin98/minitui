@@ -157,3 +157,58 @@ describe('bindRelaunchParams against names that are members of Object.prototype'
     }
   });
 });
+
+describe('bindRelaunchParams secret tracking through derived values', () => {
+  const secretKey = p({ name: 'apiKey', classification: 'prompt', secret: true });
+  const run = (params: readonly ParamDescriptor[], answers: Record<string, string>) =>
+    bindRelaunchParams({ params, persisted: {}, answers });
+
+  it('a derived parameter flagged secret is reported', () => {
+    const r = run(
+      [p({ name: 'token', classification: 'derived', secret: true, default: 'fixed' })],
+      {},
+    );
+    expect(r.secretPointers).toEqual(['/token']);
+  });
+
+  it('a derived value built from a secret is reported although it is not flagged', () => {
+    const r = run(
+      [secretKey, p({ name: 'header', classification: 'derived', default: 'Bearer ${apiKey}' })],
+      { apiKey: 'sk-live-xyz' },
+    );
+    expect(r.data.header).toBe('Bearer sk-live-xyz');
+    expect(r.secretPointers).toEqual(['/apiKey', '/header']);
+  });
+
+  it('the secret follows a chain of derived values', () => {
+    const r = run(
+      [
+        secretKey,
+        p({ name: 'header', classification: 'derived', default: 'Bearer ${apiKey}' }),
+        p({ name: 'line', classification: 'derived', default: 'Authorization: ${header}' }),
+      ],
+      { apiKey: 'sk-live-xyz' },
+    );
+    expect(r.secretPointers).toEqual(['/apiKey', '/header', '/line']);
+  });
+
+  it('a derived value that refers only to plain parameters is not reported', () => {
+    const r = run(
+      [
+        secretKey,
+        p({ name: 'name' }),
+        p({ name: 'outfile', classification: 'derived', default: '${name:clip}.mp4' }),
+      ],
+      { apiKey: 'sk-live-xyz', name: 'wedding' },
+    );
+    expect(r.secretPointers).toEqual(['/apiKey']);
+  });
+
+  it('escapes the pointer of a derived secret too', () => {
+    const r = run(
+      [secretKey, p({ name: 'a/b', classification: 'derived', default: '${apiKey}' })],
+      { apiKey: 'sk-live-xyz' },
+    );
+    expect(r.secretPointers).toEqual(['/apiKey', '/a~1b']);
+  });
+});

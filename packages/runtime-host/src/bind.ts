@@ -36,6 +36,10 @@ const ownValue = (record: Readonly<Record<string, string>>, name: string): strin
 const escapePointerSegment = (name: string): string =>
   name.replace(/~/g, '~0').replace(/\//g, '~1');
 
+/** The parameter names a template refers to, in order. */
+const referencedNames = (template: string): string[] =>
+  [...template.matchAll(PLACEHOLDER)].map((match) => match[1] ?? '');
+
 /** Resolves `${param}` and `${param:default}` against the values bound so far. */
 function resolveTemplate(template: string, bound: ReadonlyMap<string, string>): string {
   return template.replace(
@@ -44,14 +48,39 @@ function resolveTemplate(template: string, bound: ReadonlyMap<string, string>): 
   );
 }
 
+/** The value of a persisted or prompt parameter, or a BindError when there is none. */
+function concreteValue(param: ParamDescriptor, input: BindInput): string {
+  const answer = ownValue(input.answers, param.name);
+  if (param.classification === 'prompt') {
+    // A prompt parameter is asked at every relaunch; a stored value does not stand in for the answer.
+    if (answer === undefined)
+      throw new BindError('a relaunch parameter needs an answer', param.name);
+    return answer;
+  }
+  const value = answer ?? ownValue(input.persisted, param.name) ?? param.default;
+  if (value === undefined) {
+    throw new BindError('a relaunch parameter has no value and no default', param.name);
+  }
+  return value;
+}
+
 /**
  * Relaunch re-bind: builds a fresh seed model from a kept app's typed parameters, the stored values and
  * the person's answers. Two passes, because a derived value may refer to a concrete one: the persisted
  * and prompt parameters first, then the derived ones. Nothing here writes to disk.
+ *
+ * A secret stays a secret through derivation: a derived value is reported in `secretPointers` when it is
+ * flagged secret itself or when its template refers to any secret value, so the gate that keeps secrets
+ * out of what is written to disk cannot miss a copy of one.
  */
 export function bindRelaunchParams(input: BindInput): BindResult {
   const bound = new Map<string, string>();
   const secretPointers: string[] = [];
+  const secretNames = new Set<string>();
+  const markSecret = (name: string): void => {
+    secretNames.add(name);
+    secretPointers.push(`/${escapePointerSegment(name)}`);
+  };
 
   for (const param of input.params) {
     if (RESERVED_JSON_KEYS.includes(param.name)) {
@@ -61,27 +90,17 @@ export function bindRelaunchParams(input: BindInput): BindResult {
 
   for (const param of input.params) {
     if (param.classification === 'derived') continue;
-    const answer = ownValue(input.answers, param.name);
-    let value: string | undefined;
-    if (param.classification === 'persisted') {
-      value = answer ?? ownValue(input.persisted, param.name) ?? param.default;
-    } else {
-      // A prompt parameter is asked at every relaunch; a stored value does not stand in for the answer.
-      if (answer === undefined) {
-        throw new BindError('a relaunch parameter needs an answer', param.name);
-      }
-      value = answer;
-    }
-    if (value === undefined) {
-      throw new BindError('a relaunch parameter has no value and no default', param.name);
-    }
-    bound.set(param.name, value);
-    if (param.secret) secretPointers.push(`/${escapePointerSegment(param.name)}`);
+    bound.set(param.name, concreteValue(param, input));
+    if (param.secret) markSecret(param.name);
   }
 
   for (const param of input.params) {
     if (param.classification !== 'derived') continue;
-    bound.set(param.name, resolveTemplate(param.default ?? '', bound));
+    const template = param.default ?? '';
+    bound.set(param.name, resolveTemplate(template, bound));
+    if (param.secret || referencedNames(template).some((name) => secretNames.has(name))) {
+      markSecret(param.name);
+    }
   }
 
   return { data: Object.fromEntries(bound), secretPointers };
