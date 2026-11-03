@@ -20,11 +20,13 @@ const WALL_IDS = new Set(
 const isWallRule = (id) => WALL_IDS.has(id) || id.startsWith('minitui/');
 
 const PKGS =
-  'agent-core catalog exec renderer-core renderer-ink sanitizer spec transport types'.split(' ');
+  'agent-core catalog exec renderer-core renderer-ink runtime-host sanitizer spec transport types'.split(
+    ' ',
+  );
 // Each package is barred from one internal package by its DAG zone.
 const EDGE = Object.fromEntries(
   `types>sanitizer sanitizer>types transport>spec renderer-core>sanitizer catalog>spec
-   spec>sanitizer agent-core>exec renderer-ink>spec exec>transport`
+   spec>sanitizer agent-core>exec renderer-ink>spec exec>transport runtime-host>exec`
     .split(/\s+/)
     .map((pair) => pair.split('>')),
 );

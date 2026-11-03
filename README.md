@@ -9,7 +9,7 @@
 
 You say what you want: _merge these two videos_, _rename every file by its EXIF date_. minitui does not paste a wall of shell at you, and it does not run code a model wrote. It assembles a small interactive form from a fixed, trusted catalog of components, draws it in your terminal, and runs the commands behind it only after the host has parsed them, checked them against a deny-first permission engine, and wrapped them in a sandbox.
 
-> **Pre-release.** The core packages are implemented and tested, but the pieces that tie them into a runnable program (the session host, the kept-app library and the CLI) are not built yet. There is nothing to install today. See [Status](#status).
+> **Pre-release.** The core packages are implemented and tested, but the pieces that tie them into a runnable program (the kept-app library and the CLI; the session host is built but nothing runs it yet) are not built yet. There is nothing to install today. See [Status](#status).
 
 ## Why
 
@@ -93,7 +93,7 @@ The command is the host's own resolved, shell-quoted text. Characters that could
 - **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
 - **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
 - **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. A Linux session has been run by hand; no macOS run has been recorded.
-- **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because the host that connects the pieces does not exist yet. Below that, the runner and router have run a real merge of two clips with audio on Linux under the sandbox, with a stand-in that always allows in place of the consent prompt, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
+- **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because no program wires the pieces and the session host together yet. Below that, the runner and router have run a real merge of two clips with audio on Linux under the sandbox, with a stand-in that always allows in place of the consent prompt, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
 
 ## Architecture
 
@@ -111,7 +111,7 @@ A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforce
 | `@minitui/renderer-core` | The renderer port. No UI framework appears in its signature. | built |
 | `@minitui/renderer-ink` | The Ink implementation of that port, including the consent overlay. | built |
 | `@minitui/exec` | Shell parsing, permission engine, hard floor, grants store, sandbox handle (probe, wrap, policy checks, disposal), the local runner, the ffmpeg merge planner and the action router. The MCP client is planned. | partly built |
-| `@minitui/runtime-host` | Wires a session together and owns its lifecycle. | planned |
+| `@minitui/runtime-host` | Mounts a validated spec over the shared store, routes the actions a renderer raises (the consent values are read from live state), and owns the session's lifetime. | built |
 | `@minitui/library` | Saving and relaunching kept apps. | planned |
 | `@minitui/cli` | The `minitui` command. | planned |
 | `@minitui/test-kit`, `@minitui/integration-tests` | Shared harnesses, and end-to-end suites across all packages. | planned |
@@ -130,7 +130,7 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 
 - **No test mocks.** A test double is a real implementation of the port, injected through the same seam production uses. A lint gate rejects module mocks, spies, `@ts-ignore`, and casts that hide a type gap.
 - **Every gate has a case that proves it can fail.** Boundary lint ships with planted violations. The security suites carry controls that must go red when the protection is removed.
-- **Packed tarballs are installed and imported** from a clean consumer (`pnpm pack:check`). Two packages, `agent-core` and `exec`, are not covered yet.
+- **Packed tarballs are installed and imported** from a clean consumer (`pnpm pack:check`). Two packages, `agent-core` and `exec`, are not covered yet; `runtime-host` is.
 - **Supply chain.** Exact versions only, a seven-day quarantine on freshly published releases, no unvetted install scripts, no lockfile downgrades.
 - **Deterministic snapshots.** Terminal golden tests run with a frozen clock and a fixed 80x24 screen.
 
@@ -139,8 +139,8 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 <!-- prettier-ignore -->
 | Area | State |
 |-|-|
-| Nine core packages | Implemented, with unit and boundary tests. Type checks, lint and tests pass locally. `exec` is partial, as above. |
-| Session host, kept-app library, CLI | Not built. You cannot run minitui yet. |
+| Ten core packages | Implemented, with unit and boundary tests. Type checks, lint and tests pass locally. `exec` is partial, as above. |
+| Kept-app library, CLI | Not built. The session host is built and tested against a stand-in renderer and the real exec router, but no command runs it. You cannot run minitui yet. |
 | Live model traffic | Not exercised. The model loop is tested against an in-process provider. |
 | Real sandbox session | A merge of two clips ran through the router and the sandbox on Linux, with a stand-in for the consent prompt. Not run on macOS. Not run with a model or the consent box. |
 | Releases | None. The workspace is private and unpublished. |

@@ -13,6 +13,7 @@
     { "path": "./packages/spec" },
     { "path": "./packages/agent-core" },
     { "path": "./packages/renderer-ink" },
-    { "path": "./packages/exec" }
+    { "path": "./packages/exec" },
+    { "path": "./packages/runtime-host" }
   ]
 }

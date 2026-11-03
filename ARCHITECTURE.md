@@ -10,7 +10,7 @@ convention that gets broken twice is a candidate for a gate.
 
 ## Packages
 
-Thirteen `@minitui/*` packages and one private app. Nine exist today.
+Thirteen `@minitui/*` packages and one private app. Ten exist today.
 
 <!-- prettier-ignore -->
 |Package|Job|May import|
@@ -24,10 +24,11 @@ Thirteen `@minitui/*` packages and one private app. Nine exist today.
 |`agent-core`|The model loop; the only package that talks to the model SDK|types, transport, spec, sanitizer|
 |`exec`|Shell parsing, the permission engine, the OS sandbox, the local runner and the action router|types, renderer-core, sanitizer|
 |`renderer-ink`|The Ink implementation of the renderer port|types, renderer-core, catalog, sanitizer|
+|`runtime-host`|Mounts a validated spec over the one shared store, routes the actions a renderer raises, relaunch re-bind of typed parameters|types, transport, spec, renderer-core|
 
-Not built yet: `runtime-host` (types, transport, spec, renderer-core), `library` (types, spec), `test-kit` (types, spec,
-renderer-core, renderer-ink), `integration-tests` (may import everything), and `apps/cli`, the composition root (may
-import every runtime package, not test-kit or integration-tests).
+Not built yet: `library` (types, spec), `test-kit` (types, spec, renderer-core, renderer-ink), `integration-tests` (may
+import everything), and `apps/cli`, the composition root (may import every runtime package, not test-kit or
+integration-tests).
 
 The table follows `config/eslint-boundaries.js`. If they disagree, the config wins and this table is wrong.
 
@@ -59,6 +60,8 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 |Text of a fault|`boundFaultText` in `packages/exec/src/dispatch/exec-local-handler.ts`|Every fault text exec builds is stripped of escapes and windowed here. Convention, with tests.|
 |The output file of a merge|`packages/exec/src/dispatch/output-file.ts`|The host makes the empty output exclusively and holds it open for the run; one finisher closes it and, for a run that did not settle, removes it if the path still names the same file when the finisher checks. Convention, with tests.|
 |The real path of the merge output|`packages/exec/src/dispatch/resolve-output.ts`|The router takes the real path of the output's directory before the permission gate, after the spelling it was given has passed the path rules and the hard floor, so the consent text, the engine's floor, the host-side create and the command name one path, and a refusal of the typed spelling stands. A directory that cannot be resolved is refused before the prompt. Operator rules and saved exact grants are matched against the real path, and an argument-shape ask is judged on the path ffmpeg receives. Convention, with tests.|
+|The consent values of a gated action|`packages/runtime-host/src/dispatcher.ts`|The host router takes the kind and the permission descriptor of an action from the catalog, not from the renderer's context, refuses a context that disagrees, and reads the value of every root named by either template of the descriptor from the live state, so the consent box shows host values. A root with no live value is refused. Convention, with tests; the one key of a local merge that no template names (`mode`) is left as the renderer sent it.|
+|The render-local actions|`packages/runtime-host/src/dispatcher.ts`; the renderer-ink binder holds its own list|`setState`, `pushState` and `removeState` only, with json-render's parameter shapes. The host cannot import renderer-ink, so the two lists are kept equal by a test in the integration package once it exists. Convention.|
 
 ## Rules
 

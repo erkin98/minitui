@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist-types",
+    "tsBuildInfoFile": "dist-types/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../types" },
+    { "path": "../transport" },
+    { "path": "../spec" },
+    { "path": "../renderer-core" }
+  ]
+}
