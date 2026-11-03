@@ -1,37 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  readFileSync,
-  existsSync,
-  statSync,
-  symlinkSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, statSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { handleExecLocal, isLikelySandboxDenied } from '../../src/dispatch/exec-local-handler.js';
 import type { Decision, ExecEvent } from '@minitui/types';
-import type { ExecLocalDeps } from '../../src/dispatch/exec-local-handler.js';
 import type { RunnerEvent } from '../../src/types.js';
-import { allowPath, execLocalDeps, fakePlanner, makeRunner, mergeCtx } from './doubles.js';
-
-function withDeps(
-  deps: Omit<ExecLocalDeps, 'signal'>,
-  signal: AbortSignal = new AbortController().signal,
-): ExecLocalDeps {
-  return { ...deps, signal };
-}
-
-// A real temporary directory per row, removed at the end of the row.
-async function inTempDir(row: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'minitui-handler-'));
-  try {
-    await row(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+import {
+  allowPath,
+  execLocalDeps,
+  fakePlanner,
+  inTempDir,
+  makeRunner,
+  mergeCtx,
+  withDeps,
+} from './doubles.js';
 
 const exitZero = async function* (): AsyncGenerator<RunnerEvent> {
   yield { kind: 'exit', code: 0, signal: null };

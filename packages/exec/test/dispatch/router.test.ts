@@ -1,18 +1,23 @@
-import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { beforeAll, describe, it, expect } from 'vitest';
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SandboxUnavailableError } from '../../src/errors.js';
 import { createActionRouter } from '../../src/dispatch/index.js';
+import { createEngine } from '../../src/permission/engine.js';
 import { buildPermissionRequest } from '../../src/permission/resolve-request.js';
+import { storeDir } from '../../src/permission/secret-paths.js';
+import { ensureParserReady } from '../../src/permission/shell/parser.js';
+import type { Host } from '../../src/permission/shell/host.js';
 import type { Decision, ExecEvent } from '@minitui/types';
 import type { LocalRunner } from '../../src/exec/local-runner.js';
 import type { RunnerEvent } from '../../src/types.js';
 import {
+  DEFAULT_OUTPUT,
   execLocalDeps,
   fakePlanner,
   fakeSandbox,
   fullRequest,
+  inTempDir,
   makeEngine,
   makeRunner,
   mergeCtx,
@@ -223,6 +228,10 @@ describe('createActionRouter: the sandbox guard, then the gate, then execute', (
     const answered = new Promise<Decision>((resolve) => {
       answer = resolve;
     });
+    let reachGate: () => void = () => {};
+    const gateReached = new Promise<void>((resolve) => {
+      reachGate = resolve;
+    });
     const pending = createActionRouter(
       routerDeps(allowEngine, {
         execLocal: execLocalDeps({
@@ -230,6 +239,7 @@ describe('createActionRouter: the sandbox guard, then the gate, then execute', (
           buildFfmpegRun: planner.build,
           checkPath: async (): Promise<Decision> => {
             order.push('gate');
+            reachGate();
             return answered;
           },
           ensureOutputFile: async (path) => {
@@ -238,11 +248,11 @@ describe('createActionRouter: the sandbox guard, then the gate, then execute', (
         }),
       }),
     ).dispatch('merge', mergeCtx());
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(planner.writes).toHaveLength(0); // the gate has not answered: nothing is written
+    await gateReached; // the gate is waiting for its answer
+    expect(planner.writes).toHaveLength(0); // it has not answered: nothing is written
     answer({ kind: 'allow' });
-    expect(await pending).toEqual({ status: 'settled', result: { output: '/abs/out.mp4' } });
-    expect(order).toEqual(['gate', 'create /abs/out.mp4 after 1 write', 'run']);
+    expect(await pending).toEqual({ status: 'settled', result: { output: DEFAULT_OUTPUT } });
+    expect(order).toEqual(['gate', `create ${DEFAULT_OUTPUT} after 1 write`, 'run']);
   });
 
   it('sanitises and windows the message of a thrown error before it becomes fault text', async () => {
@@ -321,18 +331,19 @@ describe('createActionRouter with the real request builder', () => {
       }),
     ).dispatch(
       'merge',
-      mergeCtx({ resolvedParams: { inputs: ['/abs/a.mp4', '/abs/b.mp4'], output: '/abs/o.mp4' } }),
+      mergeCtx({
+        resolvedParams: { inputs: ['/abs/a.mp4', '/abs/b.mp4'], output: DEFAULT_OUTPUT },
+      }),
     );
     expect(out.status).toBe('settled');
     expect(engine.calls).toHaveLength(1);
-    expect(engine.calls[0]?.resolvedPaths).toEqual(['/abs/a.mp4', '/abs/b.mp4', '/abs/o.mp4']);
+    expect(engine.calls[0]?.resolvedPaths).toEqual(['/abs/a.mp4', '/abs/b.mp4', DEFAULT_OUTPUT]);
   });
 });
 
 describe('createActionRouter: an unsettled run and its output file', () => {
   it('an abort in the middle of a run removes the output the host made', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'minitui-router-'));
-    try {
+    await inTempDir(async (dir) => {
       const output = join(dir, 'out.mp4');
       const ctl = new AbortController();
       let presentAtStart = false;
@@ -374,8 +385,213 @@ describe('createActionRouter: an unsettled run and its output file', () => {
       expect(waited).toBe(true);
       expect(presentAtExit).toBe(true);
       expect(existsSync(output)).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    });
+  });
+});
+
+describe("createActionRouter: the output's directory is resolved before consent", () => {
+  const UNRESOLVED = 'the output directory cannot be resolved';
+
+  beforeAll(async () => {
+    await ensureParserReady();
+  });
+
+  // A real engine in yolo mode: it lets through whatever the hard floor and the deny rules do not stop.
+  const yoloEngine = (host?: Host) =>
+    createEngine({ initialRules: { rules: [] }, mode: 'yolo', host });
+  const exitZero = async function* (): AsyncGenerator<RunnerEvent> {
+    yield { kind: 'exit', code: 0, signal: null };
+  };
+
+  it('shows, plans and runs the real path when the output sits under a link', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'real'));
+      symlinkSync('real', join(dir, 'link'));
+      const typedInput = join(dir, 'link', 'a.mp4'); // inputs are not resolved
+      const typedOutput = join(dir, 'link', 'out.mp4');
+      const realOutput = join(dir, 'real', 'out.mp4');
+      const engine = makeEngine();
+      const runner = makeRunner(exitZero);
+      const planner = fakePlanner();
+      const out = await createActionRouter(
+        routerDeps(engine, {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner, buildFfmpegRun: planner.build }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({ resolvedParams: { inputs: [typedInput], output: typedOutput } }),
+      );
+      expect(out).toEqual({ status: 'settled', result: { output: realOutput } });
+      expect(engine.calls[0]?.resolvedPaths).toEqual([typedInput, realOutput]);
+      expect(engine.calls[0]?.resolvedCommand).toContain(`'${realOutput}'`);
+      expect(engine.calls[0]?.resolvedCommand).not.toContain(typedOutput);
+      expect(planner.builds[0]?.output).toBe(realOutput);
+      expect(runner.calls[0]?.args.at(-1)).toBe(realOutput);
+      expect(runner.calls[0]?.sandboxPolicy.allowWrite).toEqual([realOutput]);
+    });
+  });
+
+  it('refuses a missing output directory before the engine, the planner and the runner', async () => {
+    await inTempDir(async (dir) => {
+      const engine = makeEngine();
+      const runner = makeRunner();
+      const planner = fakePlanner();
+      const out = await createActionRouter(
+        routerDeps(engine, {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner, buildFfmpegRun: planner.build }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'nope', 'out.mp4') },
+        }),
+      );
+      expect(out).toEqual({ status: 'denied', reason: UNRESOLVED });
+      expect(engine.calls).toHaveLength(0);
+      expect(planner.builds).toHaveLength(0);
+      expect(runner.calls).toHaveLength(0);
+      expect(readdirSync(dir)).toEqual([]);
+    });
+  });
+
+  it('refuses, through the builder, a real directory whose name cannot be shown for approval', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'a;b'));
+      symlinkSync('a;b', join(dir, 'ok'));
+      const engine = makeEngine();
+      const out = await createActionRouter(routerDeps(engine, { buildPermissionRequest })).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'ok', 'out.mp4') },
+        }),
+      );
+      expect(out).toMatchObject({
+        status: 'denied',
+        reason: expect.stringMatching(/cannot be shown for approval/),
+      });
+      expect(engine.calls).toHaveLength(0);
+    });
+  });
+
+  it('still refuses a linked secret directory by its typed spelling, in yolo mode', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'creds'));
+      symlinkSync('creds', join(dir, '.aws'));
+      const runner = makeRunner();
+      const out = await createActionRouter(
+        routerDeps(yoloEngine(), {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, '.aws', 'out.mp4') },
+        }),
+      );
+      expect(out).toMatchObject({
+        status: 'denied',
+        reason: expect.stringMatching(/protected secret/),
+      });
+      expect(runner.calls).toHaveLength(0);
+    });
+  });
+
+  it('denies an output that only resolves onto the home directory', async () => {
+    await inTempDir(async (dir) => {
+      const home = join(dir, 'homes', 'alice');
+      mkdirSync(home, { recursive: true });
+      symlinkSync('homes', join(dir, 'up'));
+      const host: Host = { home, platform: process.platform, store: storeDir({}, home) };
+      const runner = makeRunner();
+      const out = await createActionRouter(
+        routerDeps(yoloEngine(host), {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'up', 'alice') },
+        }),
+      );
+      expect(out).toMatchObject({ status: 'denied', reason: expect.stringMatching(/home root/) });
+      expect(runner.calls).toHaveLength(0);
+    });
+  });
+
+  it('still refuses a device-path spelling that only the typed output carries', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'd2', 'tcp', 'h'), { recursive: true });
+      symlinkSync('d2', join(dir, 'dev'));
+      const runner = makeRunner();
+      const out = await createActionRouter(
+        routerDeps(yoloEngine(), {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: {
+            inputs: ['/abs/a.mp4'],
+            output: join(dir, 'dev', 'tcp', 'h', 'out.mp4'),
+          },
+        }),
+      );
+      expect(out).toMatchObject({ status: 'denied', reason: expect.stringMatching(/device path/) });
+      expect(runner.calls).toHaveLength(0);
+    });
+  });
+
+  it('reports EEXIST, never a denial, when the output itself is a dangling link', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'real'));
+      symlinkSync('real', join(dir, 'link'));
+      symlinkSync('missing-target', join(dir, 'real', 'out.mp4'));
+      const out = await createActionRouter(
+        routerDeps(allowEngine, {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({
+            runner: makeRunner(exitZero).runner,
+            ensureOutputFile: undefined,
+          }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'link', 'out.mp4') },
+        }),
+      );
+      expect(out).toMatchObject({
+        status: 'failed',
+        fault: { stderrExcerpt: expect.stringContaining('EEXIST') },
+      });
+    });
+  });
+
+  it('leaves an agent callback alone: the emitted params keep the typed value', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, 'real'));
+      symlinkSync('real', join(dir, 'link'));
+      const typed = join(dir, 'link', 'out.mp4');
+      const emitted: Record<string, unknown>[] = [];
+      const out = await createActionRouter(
+        routerDeps(allowEngine, {
+          callback: { allowlist: new Set(['regenerate']), emit: (e) => emitted.push(e.params) },
+        }),
+      ).dispatch(
+        'regenerate',
+        mergeCtx({
+          actionName: 'regenerate',
+          actionKind: 'agent-callback',
+          resolvedParams: { output: typed },
+        }),
+      );
+      expect(out.status).toBe('settled');
+      expect(emitted).toEqual([{ output: typed }]);
+    });
   });
 });

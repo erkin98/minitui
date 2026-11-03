@@ -1,29 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   existsSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
-  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOutputFile } from '../../src/dispatch/output-file.js';
-
-// A real temporary directory per row, removed at the end of the row. The real path is used so that a
-// descriptor's link target on Linux can be compared with the output path.
-async function inTempDir(row: (dir: string) => Promise<void>): Promise<void> {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'minitui-output-file-')));
-  try {
-    await row(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+import { inTempDir } from './doubles.js';
 
 /** The link targets of this process's open descriptors (Linux). */
 function fdTargets(): Map<string, string> {

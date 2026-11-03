@@ -1,5 +1,6 @@
 import { boundFaultText, handleExecLocal, type ExecLocalDeps } from './exec-local-handler.js';
 import { handleCallback, type CallbackDeps } from './callback-handler.js';
+import { resolveOutputParent } from './resolve-output.js';
 import type { Decision, PermissionRequest } from '@minitui/types';
 import type { ActionDispatcher, DispatchContext, ActionOutcome } from '@minitui/renderer-core';
 
@@ -23,7 +24,8 @@ function denied(err: unknown): ActionOutcome {
 
 /**
  * The permission gate, by kind. exec-mcp skips this generic gate: it is shaped for local commands and
- * callbacks, and the MCP handler owns its own gate. The sandbox guard already ran for every kind.
+ * callbacks, and the MCP handler owns its own gate. The sandbox guard already ran for every kind, and a
+ * merge output's directory is already resolved to its real path.
  * Returns the outcome that ends the dispatch, or null to go on.
  */
 async function gate(ctx: DispatchContext, deps: ActionRouterDeps): Promise<ActionOutcome | null> {
@@ -71,7 +73,8 @@ async function route(
 }
 
 /**
- * The exec-side dispatcher: sandbox guard, then the permission gate, then execute, then map failures.
+ * The exec-side dispatcher: sandbox guard, then the real path of a merge output's directory, then the
+ * permission gate, then execute, then map failures.
  * render-local is state-only and handled in the renderer, so it is refused here by design.
  */
 export function createActionRouter(deps: ActionRouterDeps): ActionDispatcher {
@@ -90,8 +93,14 @@ export function createActionRouter(deps: ActionRouterDeps): ActionDispatcher {
       } catch (err) {
         return denied(err);
       }
-      const refusal = await gate(ctx, deps);
-      return refusal ?? (await route(actionName, ctx, deps));
+      let routed: DispatchContext;
+      try {
+        routed = await resolveOutputParent(ctx, deps);
+      } catch (err) {
+        return denied(err);
+      }
+      const refusal = await gate(routed, deps);
+      return refusal ?? (await route(actionName, routed, deps));
     },
   };
 }

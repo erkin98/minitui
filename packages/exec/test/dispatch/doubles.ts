@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Decision, PermissionDescriptor, PermissionRequest } from '@minitui/types';
 import type { DispatchContext } from '@minitui/renderer-core';
 import type { SandboxManagerHandle } from '../../src/sandbox/index.js';
@@ -12,13 +15,38 @@ export const DEFAULT_DESCRIPTOR: PermissionDescriptor = {
   summaryTemplate: 'Merge',
 };
 
+/**
+ * The default merge output: a name in the real system temporary directory that is NEVER created. Its
+ * parent exists and is real, so the output's directory resolves. A row that uses the real create must
+ * supply its own directory (`inTempDir`) and never this path.
+ */
+export const DEFAULT_OUTPUT = join(realpathSync(tmpdir()), 'minitui-default-out.mp4');
+
+/** A real temporary directory per row (its real path), removed at the end of the row. */
+export async function inTempDir(row: (dir: string) => Promise<void>): Promise<void> {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'minitui-exec-')));
+  try {
+    await row(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The handler's deps with a signal (a fresh one, never aborted, unless given). */
+export function withDeps(
+  deps: Omit<ExecLocalDeps, 'signal'>,
+  signal: AbortSignal = new AbortController().signal,
+): ExecLocalDeps {
+  return { ...deps, signal };
+}
+
 /** A merge action context with host-resolved params; `over` replaces any field. */
 export function mergeCtx(over: Partial<DispatchContext> = {}): DispatchContext {
   return {
     actionName: 'merge',
     actionKind: 'exec-local',
     permission: DEFAULT_DESCRIPTOR,
-    resolvedParams: { inputs: ['/abs/a.mp4'], output: '/abs/out.mp4' },
+    resolvedParams: { inputs: ['/abs/a.mp4'], output: DEFAULT_OUTPUT },
     stateSnapshot: {},
     elementKey: 'btn-merge',
     ...over,

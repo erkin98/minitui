@@ -17,8 +17,9 @@ const CREATE_FLAGS =
 /**
  * Default output-file creation, on the host and outside the sandbox: create it EXCLUSIVELY (an existing
  * file, or a link at the path, is refused and never followed or truncated), at mode 0600. The merge then
- * only ever replaces the empty file made here. O_NOFOLLOW covers the last path component; the parent
- * directory is the sandbox's business.
+ * only ever replaces the empty file made here. O_NOFOLLOW covers the last path component; the router has
+ * already replaced the parent directory by its real path (resolve-output.ts), and a swap after that is
+ * the sandbox's business.
  *
  * The file stays open until the finisher runs. While the handle is open, no other file on the same file
  * system can be given this file's inode number, so the number identifies the file; once a file is gone

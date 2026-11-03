@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   existsSync,
   lstatSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -10,31 +9,20 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleExecLocal } from '../../src/dispatch/exec-local-handler.js';
 import { HardFloorError, SandboxUnavailableError } from '../../src/errors.js';
 import type { Decision } from '@minitui/types';
 import type { ExecLocalDeps } from '../../src/dispatch/exec-local-handler.js';
 import type { RunnerEvent } from '../../src/types.js';
-import { execLocalDeps, fakePlanner, makeRunner, mergeCtx } from './doubles.js';
-
-function withDeps(
-  deps: Omit<ExecLocalDeps, 'signal'>,
-  signal: AbortSignal = new AbortController().signal,
-): ExecLocalDeps {
-  return { ...deps, signal };
-}
-
-// A real temporary directory per row, removed at the end of the row.
-async function inTempDir(row: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'minitui-finish-'));
-  try {
-    await row(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+import {
+  execLocalDeps,
+  fakePlanner,
+  inTempDir,
+  makeRunner,
+  mergeCtx,
+  withDeps,
+} from './doubles.js';
 
 const ctxFor = (output: string, over: Parameters<typeof mergeCtx>[0] = {}) =>
   mergeCtx({ resolvedParams: { inputs: ['/abs/a.mp4'], output }, ...over });
