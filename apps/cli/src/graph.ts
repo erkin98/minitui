@@ -19,8 +19,12 @@ import { mountGenerationStatus } from './status-frame.js';
 import { bindExecEventToStore, createRendererStoreIo } from './store-bridge.js';
 import { makeToolDispatch } from './tool-dispatch.js';
 
-/** The longest reply the model may give: room for a whole spec and for the text of a repair. */
-export const MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * The longest reply the model may give: room for its thinking, which counts against this cap, and
+ * then a whole spec or the text of a repair. A reply cut by the cap ends the run, so it is generous;
+ * it is a ceiling, not what a reply costs.
+ */
+export const MAX_OUTPUT_TOKENS = 64_000;
 
 // The last user message of the run input is the intent the local session replays.
 function textOf(input: { messages?: ReadonlyArray<{ content?: unknown }> }): string {

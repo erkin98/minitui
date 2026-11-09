@@ -97,6 +97,12 @@ describe('buildAppGraph: the session', () => {
     expect(w?.diagnostics).toBe(log.diagnostics);
   });
 
+  it('leaves the model room to think before it writes the spec', async () => {
+    // The thinking of the default model counts against this cap, and a reply cut by it ends the run.
+    const { wiring } = await build();
+    expect(wiring()?.config?.maxOutputTokens).toBe(64_000);
+  });
+
   it('hands the session the redaction policy it was given', async () => {
     const policy = { extraSecretPatterns: [/TOPSECRET\d+/] };
     const { wiring } = await build({ redactionPolicy: policy });
