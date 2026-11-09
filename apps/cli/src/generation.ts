@@ -78,6 +78,19 @@ export function emptyTextStream(): AsyncIterable<string> {
 }
 
 /**
+ * The system prompt: the catalog's rules plus the one fact only the host knows, the directory the person
+ * runs from. The host accepts absolute paths only and never resolves a relative one, so the model has to
+ * write them; the directory is quoted, so no character in its name can start a line of its own.
+ */
+export function composeSystemPrompt(catalogPrompt: string, workingDirectory: string): string {
+  return (
+    `${catalogPrompt}\n\nThe person runs this app from the directory ${JSON.stringify(workingDirectory)}. ` +
+    'Every file path in the params of an action must be an absolute path: resolve a file name the ' +
+    'person gives against that directory.'
+  );
+}
+
+/**
  * Every regeneration prompt is composed here from the user's intent, the previous reply (capped) and the
  * loop's own reprompt: a turn is stateless, so without them the model would have neither the request nor
  * the reply it was told to fix.

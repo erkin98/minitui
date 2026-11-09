@@ -259,6 +259,15 @@ describe('cliMain: the model', () => {
     expect(modelOf(flag)).toBe('from-flag');
   });
 
+  it('hands the graph the working directory, the process one unless a test passes another', async () => {
+    const given = harness();
+    await cliMain(['merge'], { ...given.deps, cwd: '/home/u/clips' });
+    expect(given.built[0]?.workingDirectory).toBe('/home/u/clips');
+    const plain = harness();
+    await cliMain(['merge'], plain.deps);
+    expect(plain.built[0]?.workingDirectory).toBe(process.cwd());
+  });
+
   it('defaults to the current Sonnet, so a fresh run never names a retiring model', async () => {
     const plain = harness();
     await cliMain(['merge'], plain.deps);

@@ -12,11 +12,11 @@ import { noopDiagnostics } from '@minitui/types';
 import { hostCatalogDeps } from './catalog-deps.js';
 import { makeConsentController } from './consent.js';
 import { buildExecStack } from './exec-stack.js';
-import { MAX_GEN_ATTEMPTS, createGenerationContext } from './generation.js';
+import { MAX_GEN_ATTEMPTS, composeSystemPrompt, createGenerationContext } from './generation.js';
 import type { AppGraph, AppGraphDeps, SessionLike } from './graph-types.js';
 import { createRepairBridge } from './repair.js';
 import { mountGenerationStatus } from './status-frame.js';
-import { bindExecEventToStore, createRendererStoreIo } from './store-bridge.js';
+import { bindDenialToStore, bindExecEventToStore, createRendererStoreIo } from './store-bridge.js';
 import { makeToolDispatch } from './tool-dispatch.js';
 
 /**
@@ -53,7 +53,10 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     createSandbox: deps.createSandbox,
     capabilities: deps.capabilities,
   });
-  const catalogPrompt = buildCatalogPrompt(videoMergeCatalog);
+  const systemPrompt = composeSystemPrompt(
+    buildCatalogPrompt(videoMergeCatalog),
+    deps.workingDirectory,
+  );
   const generation = createGenerationContext();
 
   // The session is built after the host (its tool port enters through the host), and the repair needs the
@@ -72,11 +75,13 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     redactionPolicy: deps.redactionPolicy,
     isCancelled: () => cancelRequested,
   });
+  const showDenial = bindDenialToStore(dataStore);
   const observeDenied: AppGraph['observeDenied'] = (denial) => {
     diagnostics.warn('gated action refused', {
       actionKey: denial.actionKey,
       reason: denial.reason,
     });
+    showDenial(denial);
   };
 
   const host = createAppHost({
@@ -108,7 +113,7 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     tools: [],
     model: deps.model,
     config: {
-      system: catalogPrompt,
+      system: systemPrompt,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       ...(deps.redactionPolicy !== undefined ? { redactionPolicy: deps.redactionPolicy } : {}),
     },
@@ -132,7 +137,7 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     host,
     agentPort,
     session: built,
-    catalogPrompt,
+    systemPrompt,
     capabilities: stack.capabilities,
     binding: deps.binding,
     dispatcher: stack.dispatcher,

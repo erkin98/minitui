@@ -82,6 +82,8 @@ export interface CliDeps {
   readonly out?: ((line: string) => void) | undefined;
   readonly err?: ((line: string) => void) | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
+  /** The directory the person runs from; left out, the process's. */
+  readonly cwd?: string | undefined;
   readonly boot?: CliBootApi | undefined;
   readonly buildAppGraph?: ((deps: AppGraphDeps) => Promise<CliGraph>) | undefined;
   readonly runApp?: ((args: CliArgs, graph: RunAppGraph) => Promise<number>) | undefined;
@@ -138,6 +140,7 @@ async function runInteractive(
   bootEnv: BootEnv,
   deps: {
     err: Out;
+    cwd: string;
     build: NonNullable<CliDeps['buildAppGraph']>;
     run: NonNullable<CliDeps['runApp']>;
   },
@@ -166,6 +169,7 @@ async function runInteractive(
       binding: createInkBinding(videoMergeCatalog),
       provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
       model: createAnthropicModel(modelId, { apiKey }),
+      workingDirectory: deps.cwd,
       makeSession: (wiring) => new AgentSession(wiring),
       diagnostics,
       redactionPolicy,
@@ -230,6 +234,7 @@ export async function cliMain(argv: readonly string[], deps: CliDeps = {}): Prom
   }
   return runInteractive(args, apiKey, env, boot, bootEnv, {
     err,
+    cwd: deps.cwd ?? process.cwd(),
     build: deps.buildAppGraph ?? buildAppGraph,
     run: deps.runApp ?? runApp,
   });

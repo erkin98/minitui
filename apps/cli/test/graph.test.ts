@@ -70,6 +70,7 @@ async function build(
     binding: createInkBinding(videoMergeCatalog),
     provider: createMockProvider({ script: [] }),
     model: 'test-model',
+    workingDirectory: '/work/dir',
     makeSession: (w) => {
       wiring = w;
       return session;
@@ -92,9 +93,14 @@ describe('buildAppGraph: the session', () => {
     expect(typeof w?.specSink.emit).toBe('function');
     expect(w?.tools).toEqual([]);
     expect(w?.model).toBe('test-model');
-    expect(w?.config?.system).toBe(graph.catalogPrompt);
+    expect(w?.config?.system).toBe(graph.systemPrompt);
     expect(w?.config?.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
     expect(w?.diagnostics).toBe(log.diagnostics);
+  });
+
+  it('tells the model the working directory, so it can write the absolute paths the host requires', async () => {
+    const { wiring } = await build();
+    expect(wiring()?.config?.system).toContain('"/work/dir"');
   });
 
   it('leaves the model room to think before it writes the spec', async () => {
@@ -369,9 +375,20 @@ describe('buildAppGraph: what the host lets through from a renderer', () => {
     const built = await build({ renderer: rec.renderer });
     const checked = await built.graph.validate(streamOf(VALID_SPEC_LINES), () => streamOf(''));
     if (!checked.ok) throw new Error('the fixture spec did not validate');
-    await built.graph.host.mount(checked.spec);
-    return { ...built, dispatcher: rec.dispatcher() };
+    const app = await built.graph.host.mount(checked.spec);
+    return { ...built, app, dispatcher: rec.dispatcher() };
   }
+
+  it('shows a refusal in the app status line, not only in the log', async () => {
+    const { dispatcher, app, sandbox } = await mounted();
+    // The host lays the live state over the renderer's params, so the relative name goes into the state,
+    // as the real model's spec put it there.
+    app.state.setState('/inputs', ['a.mp4', '/abs/b.mp4']);
+    const outcome = await dispatcher.dispatch('merge', ctxFor('merge'));
+    expect(outcome).toEqual({ status: 'denied', reason: 'resolved path must be absolute' });
+    expect(app.state.getIn('/merge/status')).toBe('refused: resolved path must be absolute');
+    expect(sandbox.wraps()).toBe(0);
+  });
 
   it('refuses a key the action does not declare, before exec, and logs the refusal', async () => {
     const { dispatcher, sandbox, log } = await mounted();

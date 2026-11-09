@@ -41,6 +41,8 @@ export interface AppGraphDeps {
   /** The entry builds the real provider; a test passes a scripted one. */
   readonly provider: SessionDeps['provider'];
   readonly model: SessionDeps['model'];
+  /** The directory the person runs from, told to the model so it can write absolute paths. */
+  readonly workingDirectory: string;
   /** In production `(wiring) => new AgentSession(wiring)`. */
   readonly makeSession: (wiring: SessionDeps) => SessionLike;
   /** Where warnings go. Left out, they go nowhere. */
@@ -63,7 +65,7 @@ export interface AppGraph {
   readonly host: AppHost;
   readonly agentPort: AgentPort;
   readonly session: SessionLike;
-  readonly catalogPrompt: string;
+  readonly systemPrompt: string;
   readonly capabilities: CapabilityProvider;
   readonly binding: WidgetCatalogBinding;
   readonly dispatcher: ActionDispatcher;
