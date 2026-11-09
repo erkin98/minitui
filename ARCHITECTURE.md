@@ -10,7 +10,7 @@ convention that gets broken twice is a candidate for a gate.
 
 ## Packages
 
-Thirteen `@minitui/*` packages and one private app. Ten exist today.
+Thirteen `@minitui/*` packages and one private app. Ten packages and the app exist today.
 
 <!-- prettier-ignore -->
 |Package|Job|May import|
@@ -25,10 +25,10 @@ Thirteen `@minitui/*` packages and one private app. Ten exist today.
 |`exec`|Shell parsing, the permission engine, the OS sandbox, the local runner and the action router|types, renderer-core, sanitizer|
 |`renderer-ink`|The Ink implementation of the renderer port|types, renderer-core, catalog, sanitizer|
 |`runtime-host`|Mounts a validated spec over the one shared store, routes the actions a renderer raises, relaunch re-bind of typed parameters|types, transport, spec, renderer-core|
+|`apps/cli` (private app)|The `minitui` bin and the composition root: the one place that names concrete implementations and wires them into a host; boot detection, terminal restore and the log file|every runtime package, not test-kit or integration-tests|
 
-Not built yet: `library` (types, spec), `test-kit` (types, spec, renderer-core, renderer-ink), `integration-tests` (may
-import everything), and `apps/cli`, the composition root (may import every runtime package, not test-kit or
-integration-tests).
+Not built yet: `library` (types, spec), `test-kit` (types, spec, renderer-core, renderer-ink) and `integration-tests`
+(may import everything).
 
 The table follows `config/eslint-boundaries.js`. If they disagree, the config wins and this table is wrong.
 
@@ -62,6 +62,7 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 |The real path of the merge output|`packages/exec/src/dispatch/resolve-output.ts`|The router takes the real path of the output's directory before the permission gate, after the spelling it was given has passed the path rules and the hard floor, so the consent text, the engine's floor, the host-side create and the command name one path, and a refusal of the typed spelling stands. A directory that cannot be resolved is refused before the prompt. Operator rules and saved exact grants are matched against the real path, and an argument-shape ask is judged on the path ffmpeg receives. Convention, with tests.|
 |The consent values of a gated action|`packages/runtime-host/src/dispatcher.ts`|The host router takes the kind and the permission descriptor of an action from the catalog, not from the renderer's context, refuses a context that disagrees, and reads the value of every root named by either template of the descriptor from the live state, so the consent box shows host values. A root with no live value is refused. Convention, with tests; the one key of a local merge that no template names (`mode`) is left as the renderer sent it.|
 |The render-local actions|`packages/runtime-host/src/dispatcher.ts`; the renderer-ink binder holds its own list|`setState`, `pushState` and `removeState` only, with json-render's parameter shapes. The host cannot import renderer-ink, so the two lists are kept equal by a test in the integration package once it exists. Convention.|
+|Restoring the terminal and the log file|`apps/cli/src/boot.ts`|One registration restores the cursor and the alternate screen on the exit event, on a terminating signal (re-raised afterwards) and on a crash, exactly once; the text of a crash reaches stderr only through an injected sanitising formatter. The log file is created with 0600 permissions, any filesystem error gives a writer that does nothing, and the diagnostics sink scrubs every finished line. Convention, with tests.|
 
 ## Rules
 
@@ -92,7 +93,8 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
     Enforced: `vitest.determinism.setup.ts`.
 13. **Coverage floor:** 85% statements and lines, 80% branches and functions, in aggregate. Enforced:
     `vitest.shared.ts`. The coverage step leaves out each package's `test/surface.test.ts`: those tests build
-    a TypeScript program and import nothing from `src` at run time. Convention.
+    a TypeScript program and import nothing from `src` at run time. `apps/cli` is outside the coverage `include` (packages
+    only); its tests run in the test and coverage steps. Convention.
 14. **Adopt, do not rebuild.** Use the adopted libraries for what they do; build only the permission and sandbox core.
     Convention.
 15. **Handle errors at boundaries** (user input, the model API, process execution, MCP, I/O), not around calls between

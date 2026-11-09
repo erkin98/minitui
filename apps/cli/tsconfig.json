@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist-types",
+    "tsBuildInfoFile": "dist-types/.tsbuildinfo",
+    "jsx": "react-jsx"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "references": [
+    { "path": "../../packages/types" },
+    { "path": "../../packages/sanitizer" },
+    { "path": "../../packages/transport" },
+    { "path": "../../packages/renderer-core" },
+    { "path": "../../packages/catalog" },
+    { "path": "../../packages/spec" },
+    { "path": "../../packages/agent-core" },
+    { "path": "../../packages/exec" },
+    { "path": "../../packages/runtime-host" },
+    { "path": "../../packages/renderer-ink" }
+  ]
+}
