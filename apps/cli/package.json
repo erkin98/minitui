@@ -2,6 +2,9 @@
   "name": "@minitui/cli",
   "version": "0.0.0",
   "private": true,
+  "bin": {
+    "minitui": "./bin/minitui.mjs"
+  },
   "dependencies": {
     "@minitui/agent-core": "workspace:*",
     "@minitui/catalog": "workspace:*",
@@ -29,8 +32,12 @@
   "engines": {
     "node": ">=22.13"
   },
+  "exports": {
+    ".": "./dist/cli.js"
+  },
   "license": "Apache-2.0",
   "scripts": {
+    "build": "tsup",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json"

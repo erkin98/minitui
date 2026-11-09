@@ -65,6 +65,7 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 |Restoring the terminal and the log file|`apps/cli/src/boot.ts`|One registration restores the cursor and the alternate screen on the exit event, on a terminating signal (re-raised afterwards) and on a crash, exactly once; the text of a crash reaches stderr only through an injected sanitising formatter. The log file is created with 0600 permissions, any filesystem error gives a writer that does nothing, and the diagnostics sink scrubs every finished line. Convention, with tests.|
 |The consent answer|`apps/cli/src/consent.ts`|The overlay shows one request at a time, the oldest the engine surfaced, and every reply names that request's id, so an answer can never approve a later request; the rejection feedback is written by the host, never by the agent. Convention, with tests.|
 |Configuration layers|`apps/cli/src/config.ts`|Layers merge by a fixed precedence. The keys that redirect credentials, execution or telemetry are stripped from any layer that is not trusted, whatever their spelling or the layer's rank. Convention, with tests.|
+|Secrets in what the program writes|`apps/cli/src/index.ts`|The API key reaches only the provider. Every finished log line, every crash line and every message to the person goes through one cleaner that removes the key and the terminal control characters, and the redaction policy handed to the session and the provider carries a pattern for the key, so it is removed from text on its way to the model too. Convention, with tests.|
 
 ## Rules
 

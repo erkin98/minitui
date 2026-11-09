@@ -97,6 +97,13 @@ export const BOUNDARY_ZONES = [
   pkgZone('renderer-ink', 'types', 'renderer-core', 'catalog', 'sanitizer'),
   pkgZone('library', 'types', 'spec'),
   pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink'),
+  // The app's source may not import the test packages. The arm for the integration tests under ./test is
+  // live now; the arm for test-kit is inert until that package exists, then active with no change here.
+  {
+    target: './apps/cli/src/**/*',
+    from: ['./packages/test-kit', './test'],
+    message: 'cli source may not import the dev-only test-kit or the integration tests.',
+  },
   // Package source may not import from a wall-exempt scripts directory: those directories (and the
   // repo-level scripts/) lift the capability walls, so reaching one from shipped source would
   // launder a walled import through it. Tests are held to the named list in the zone below.

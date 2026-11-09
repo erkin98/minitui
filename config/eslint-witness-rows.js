@@ -33,6 +33,7 @@ const EDGE = Object.fromEntries(
 const src = (pkg) => `packages/${pkg}/src/index.ts`;
 const tst = (pkg) => `packages/${pkg}/test/__witness__.test.ts`;
 const CLI_TEST = 'apps/cli/test/__witness__.test.tsx';
+const CLI_SRC = 'apps/cli/src/index.ts';
 const EXEC_PERMISSION = 'packages/exec/src/permission/index.ts';
 const EXEC_SANDBOX = 'packages/exec/src/sandbox/platform.ts';
 const EXEC_TEST = 'packages/exec/test/__witness__.test.ts';
@@ -136,6 +137,14 @@ const OWNER_ROWS = [
   ]),
   ['renderer-ink: static react permitted', src('renderer-ink'), REACT],
   ['renderer-ink: static react-dom/client permitted', src('renderer-ink'), RDOM],
+  [
+    'apps/cli: DAG -> the integration tests under ./test',
+    CLI_SRC,
+    `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
+    [DAG],
+  ],
+  ['apps/cli: static child_process walled', CLI_SRC, SPAWN, [IMP]],
+  ['apps/cli: static ai walled (src)', CLI_SRC, AI, [IMP]],
   ['apps/cli: static react permitted', CLI_TEST, REACT],
   ['apps/cli: static ai walled', CLI_TEST, AI, [IMP]],
   ['apps/cli: dynamic ai walled', CLI_TEST, dynamic('ai'), [CAP]],
