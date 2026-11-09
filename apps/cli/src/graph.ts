@@ -16,7 +16,7 @@ import { MAX_GEN_ATTEMPTS, composeSystemPrompt, createGenerationContext } from '
 import type { AppGraph, AppGraphDeps, SessionLike } from './graph-types.js';
 import { createRepairBridge } from './repair.js';
 import { mountGenerationStatus } from './status-frame.js';
-import { bindDenialToStore, bindExecEventToStore, createRendererStoreIo } from './store-bridge.js';
+import { bindExecEventToStore, createRendererStoreIo } from './store-bridge.js';
 import { makeToolDispatch } from './tool-dispatch.js';
 
 /**
@@ -75,13 +75,11 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     redactionPolicy: deps.redactionPolicy,
     isCancelled: () => cancelRequested,
   });
-  const showDenial = bindDenialToStore(dataStore);
   const observeDenied: AppGraph['observeDenied'] = (denial) => {
     diagnostics.warn('gated action refused', {
       actionKey: denial.actionKey,
       reason: denial.reason,
     });
-    showDenial(denial);
   };
 
   const host = createAppHost({

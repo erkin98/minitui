@@ -39,22 +39,6 @@ export function bindExecEventToStore(
 }
 
 /**
- * A refused gated action shows in its own status line, so the person sees why nothing happened. Only an
- * action the catalog gives a status pointer is written; the reason is the host's or exec's fixed phrase,
- * and it is bounded like a stderr line.
- */
-export function bindDenialToStore(
-  store: Pick<DataStore, 'applyDelta'>,
-): (denial: { readonly actionKey: string; readonly reason: string }) => void {
-  return (denial) => {
-    const pointer = videoMergeCatalog.actionDefs.get(denial.actionKey)?.statusPointers?.status;
-    if (pointer === undefined) return;
-    const value = `refused: ${denial.reason}`.slice(0, STATUS_CAP);
-    store.applyDelta([{ op: 'replace', path: pointer, value }]);
-  };
-}
-
-/**
  * The renderer's view of the one shared store: the raw getSnapshot / setSnapshot / subscribe it wraps
  * itself. Both directions go through the object schema, so the renderer's object-rooted state model needs
  * no cast; the cached snapshot advances only after a source has validated, so an invalid source never

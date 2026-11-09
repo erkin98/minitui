@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDataStore } from '@minitui/transport';
-import {
-  bindDenialToStore,
-  bindExecEventToStore,
-  createRendererStoreIo,
-  STATUS_CAP,
-} from '../src/store-bridge.js';
+import { bindExecEventToStore, createRendererStoreIo, STATUS_CAP } from '../src/store-bridge.js';
 
 const seeded = () => createDataStore({ initial: { merge: { progress: 0, status: '' } } });
 const mergeOf = (store: ReturnType<typeof seeded>): unknown => {
@@ -46,32 +41,6 @@ describe('bindExecEventToStore', () => {
     const before = store.getState();
     bindExecEventToStore(store)({ kind: 'stdout', chunk: 'ignored' });
     expect(store.getState()).toBe(before);
-  });
-});
-
-describe('bindDenialToStore', () => {
-  it('writes a refused merge and its reason to the status pointer', () => {
-    const store = seeded();
-    bindDenialToStore(store)({ actionKey: 'merge', reason: 'resolved path must be absolute' });
-    expect(mergeOf(store)).toEqual({
-      progress: 0,
-      status: 'refused: resolved path must be absolute',
-    });
-  });
-
-  it('writes nothing for an action without a status pointer', () => {
-    const store = seeded();
-    const before = store.getState();
-    bindDenialToStore(store)({ actionKey: 'setState', reason: 'no' });
-    bindDenialToStore(store)({ actionKey: 'no-such-action', reason: 'no' });
-    expect(store.getState()).toBe(before);
-  });
-
-  it('bounds a long reason', () => {
-    const store = seeded();
-    bindDenialToStore(store)({ actionKey: 'merge', reason: 'x'.repeat(STATUS_CAP * 2) });
-    const status = Reflect.get(Object(mergeOf(store)), 'status');
-    expect(typeof status === 'string' ? status.length : -1).toBe(STATUS_CAP);
   });
 });
 

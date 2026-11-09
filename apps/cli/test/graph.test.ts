@@ -379,14 +379,20 @@ describe('buildAppGraph: what the host lets through from a renderer', () => {
     return { ...built, app, dispatcher: rec.dispatcher() };
   }
 
-  it('shows a refusal in the app status line, not only in the log', async () => {
-    const { dispatcher, app, sandbox } = await mounted();
+  it('a refused merge is logged and changes no app state: the renderer draws the refusal row', async () => {
+    const { dispatcher, app, sandbox, log } = await mounted();
     // The host lays the live state over the renderer's params, so the relative name goes into the state,
     // as the real model's spec put it there.
     app.state.setState('/inputs', ['a.mp4', '/abs/b.mp4']);
+    const before = app.state.getIn('/merge/status');
     const outcome = await dispatcher.dispatch('merge', ctxFor('merge'));
     expect(outcome).toEqual({ status: 'denied', reason: 'resolved path must be absolute' });
-    expect(app.state.getIn('/merge/status')).toBe('refused: resolved path must be absolute');
+    expect(app.state.getIn('/merge/status')).toBe(before);
+    expect(log.records).toContainEqual({
+      level: 'warn',
+      msg: 'gated action refused',
+      meta: { actionKey: 'merge', reason: 'resolved path must be absolute' },
+    });
     expect(sandbox.wraps()).toBe(0);
   });
 
