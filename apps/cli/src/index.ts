@@ -39,7 +39,7 @@ function readVersion(): string {
 export const VERSION: string = readVersion();
 
 /** The model when neither `MINITUI_MODEL` nor `--model` names one. */
-export const DEFAULT_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_MODEL = 'claude-sonnet-5-5';
 
 const HELP = `minitui — terminal-first agent that generates declarative mini apps.
 

@@ -258,6 +258,12 @@ describe('cliMain: the model', () => {
     await cliMain(['--model', 'from-flag', 'merge'], flag.deps);
     expect(modelOf(flag)).toBe('from-flag');
   });
+
+  it('defaults to the current Sonnet, so a fresh run never names a retiring model', async () => {
+    const plain = harness();
+    await cliMain(['merge'], plain.deps);
+    expect(modelOf(plain)).toBe('claude-sonnet-5-5');
+  });
 });
 
 describe('cliMain: the API key stays out of everything it writes', () => {
