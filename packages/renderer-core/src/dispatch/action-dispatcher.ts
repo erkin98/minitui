@@ -10,7 +10,7 @@ export type { ActionKind } from '@minitui/types';
 
 /**
  * The moat seam. Every UI action routes through one `dispatch`. The implementation
- * (wired in apps/cli/src/main.tsx over @minitui/exec) gates everything whose
+ * (wired in apps/cli/src/exec-stack.ts over @minitui/exec) gates everything whose
  * `actionKind` is not 'render-local' through the permission engine BEFORE any side
  * effect. The renderer only ever calls this — it never sees an executor port.
  */

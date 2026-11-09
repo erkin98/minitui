@@ -19,7 +19,8 @@ export type RendererRefusalCode =
 /**
  * THE swap boundary. No React or Ink appears in any signature — renderer-ink is
  * the only package that knows the concrete on the other side. Migrating to OpenTUI
- * is adding one package and editing one line of apps/cli/src/main.tsx.
+ * is adding one package and changing the renderer that the cli's composition root
+ * names (apps/cli/src/graph.ts and apps/cli/src/index.ts).
  */
 export interface RendererPort {
   mount(args: {

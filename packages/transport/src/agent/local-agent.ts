@@ -32,7 +32,7 @@ function done(): IteratorReturnResult<undefined> {
  * stream, no HTTP/SSE. The in-process path does not cross the AG-UI adapter boundary: the
  * explicit minitui→AG-UI adapter (`toAgUiEvent`, ./to-ag-ui.ts) is reserved for a genuinely-
  * remote BFF producing real AG-UI wire events and is never invoked here. The in-process default;
- * wired in cli/main.tsx so transport never imports agent-core.
+ * wired in apps/cli/src/graph.ts so transport never imports agent-core.
  */
 export function createLocalAgentPort(
   genFactory: (input: RunAgentInput, signal: AbortSignal) => AsyncGenerator<AgentEvent>,
