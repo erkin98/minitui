@@ -5,13 +5,48 @@
 ![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-339933)
 ![typescript strict](https://img.shields.io/badge/typescript-strict-3178c6)
 
-**A terminal agent that builds small, single-purpose apps on demand, and runs them behind a permission gate and an OS sandbox.**
+A terminal agent that builds small apps on demand and runs them behind a permission gate and an OS sandbox.
 
 You say what you want: _merge these two videos_, _rename every file by its EXIF date_. minitui does not paste a wall of shell at you, and it does not run code a model wrote. It assembles a small interactive form from a fixed, trusted catalog of components, draws it in your terminal, and runs the commands behind it only after the host has parsed them, checked them against a deny-first permission engine, and wrapped them in a sandbox.
 
-> **Pre-release.** The core packages are implemented and tested, but the pieces that tie them into a runnable program (the kept-app library and the CLI; the session host is built but nothing runs it yet) are not built yet. There is nothing to install today. See [Status](#status).
+> **Pre-release.** The packages and the `minitui` command are built and tested, and a full session has been run by hand on Linux. Intent routing and the kept-app library are not built. Nothing is published, so the only way to run it is from source. See [Status](#status).
 
-## Why
+## Table of Contents
+
+- [Security](#security)
+- [Background](#background)
+- [Install](#install)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Built with](#built-with)
+- [Engineering practices](#engineering-practices)
+- [Status](#status)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Security
+
+<!-- prettier-ignore -->
+| Guarantee | Where it is enforced |
+|-|-|
+| The model cannot introduce code, only catalog elements and actions. | `catalog` allowlist, plus the structural and semantic checks in `spec`. |
+| The host, not the model, parses every shell command. Anything the parser does not model is denied. | `exec`: tree-sitter-bash with a positive allowlist of syntax node kinds. |
+| Decisions are deny-first, and a hard floor cannot be overridden, even in the most permissive approval mode: network-fetch tools, `rm` of `$HOME` or `/`, and reads of secret files. | `exec` permission engine. |
+| The consent box shows host-resolved values, never agent-written text, and a request that cannot be shown whole or holds invisible characters is denied. The text shown and the command spawned are read from the same resolved slots. | `exec` canonical-request check, `renderer-ink` overlay. |
+| Terminal output cannot drive your terminal. Escape and control sequences are stripped at a single chokepoint. | `sanitizer`, a zero-dependency leaf package. |
+| The sandbox fails closed. The probe reports "unsupported" when the runtime is missing, fails to load, or the OS is Windows, and the handle then refuses to wrap a command and refuses every gated action kind. The action router asks the handle before each action. | `exec` sandbox handle, built on sandbox-runtime. |
+| Local actions in a mini-app can only change app state. They cannot log, exit, or run commands. | A state-only allowlist in the renderer boundary. |
+| Layering cannot silently erode. | Import-boundary lint at error level plus composite `tsc -b`, both in CI. |
+
+### What it does not claim
+
+- **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
+- **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
+- **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. Linux sessions have been run by hand; no macOS run has been recorded.
+- **End to end.** Each guarantee above is tested at its own boundary, and the integration suites run the packages together with stand-ins for the model, the process spawn and the output file. A full session with a real model, the consent box and a merge under a live sandbox has been run by hand on Linux through the built `minitui` command. It has not been run on macOS, and no automated test calls a real model. Below that, the runner and router have merged two clips with audio under the sandbox on Linux, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
+
+## Background
 
 Two ways of letting a model touch your machine, and both are bad:
 
@@ -20,32 +55,30 @@ Two ways of letting a model touch your machine, and both are bad:
 
 minitui takes a third route. The model never emits code. It emits a _declarative spec_ that can only name components and actions from a frozen catalog. The model proposes, and the host decides: the host parses the real command, shows you the resolved text (never the model's description of it), and enforces the policy.
 
-## What a run looks like
+### What a run looks like
 
 ```mermaid
-flowchart LR
-    U([You]) -->|intent| R[Route]
-    R -->|mini-app| G[Generate spec]
-    G --> V{Validate}
-    V -->|errors| G
-    V -->|ok| M[Mount in terminal]
-    M -->|action fires| P[Host parses command]
-    P --> D{Permission gate}
-    D -->|hard floor| X([Refused])
-    D -->|ask| C[Consent box]
-    D -->|allowed| S[OS sandbox]
-    C -->|yes| S
-    C -->|no| X
-    S --> O[Sanitize output]
-    O --> M
+flowchart TD
+    U([You]) -->|intent| G["Generate spec<br/>(model output, untrusted)"]
+    G --> V
 
-    classDef untrusted fill:#fde8e8,stroke:#c53030,color:#000
-    classDef host fill:#e6f4ea,stroke:#2f855a,color:#000
-    class G untrusted
-    class V,P,D,C,S,O host
+    subgraph host["Host code"]
+        V[Validate] -->|ok| M[Mount in terminal]
+        M -->|action fires| P[Parse the command]
+        P --> D[Permission gate]
+        D -->|ask| C[Consent box]
+        D -->|allowed| S[Run in OS sandbox]
+        C -->|yes| S
+        S --> O[Sanitize output]
+        O --> M
+    end
+
+    V -->|errors| G
+    D -->|hard floor| X([Refused])
+    C -->|no| X
 ```
 
-The red node is the only place the model's output enters. Everything after it is host code. This is the design; steps 3 to 5 exist as packages today, while routing, running and keeping are planned (see [Status](#status)).
+The spec is the only thing the model produces, and it enters the host only through validation. Everything in the host box is minitui's own code. Steps 2 to 5 run today in the `minitui` command; routing and keeping are planned and not drawn (see [Status](#status)).
 
 1. **Route** (planned). Your intent is classified as a quick answer, a one-shot command, or a generated mini-app.
 2. **Generate.** For an app, the model streams a spec. Every element and action in it must exist in the catalog allowlist.
@@ -74,26 +107,56 @@ When the engine cannot decide on its own, the host draws this over the app and h
 
 The command is the host's own resolved, shell-quoted text. Characters that could disguise it (control characters, invisible and bidirectional formatting) are replaced with U+FFFD rather than drawn. If the request does not fit on the screen, it cannot be allowed, only denied. `always` is a narrow, session-only grant.
 
-## Security model
+## Install
 
-<!-- prettier-ignore -->
-| Guarantee | Where it is enforced |
-|-|-|
-| The model cannot introduce code, only catalog elements and actions. | `catalog` allowlist, plus the structural and semantic checks in `spec`. |
-| The host, not the model, parses every shell command. Anything the parser does not model is denied. | `exec`: tree-sitter-bash with a positive allowlist of syntax node kinds. |
-| Decisions are deny-first, and a hard floor cannot be overridden, even in the most permissive approval mode: network-fetch tools, `rm` of `$HOME` or `/`, and reads of secret files. | `exec` permission engine. |
-| The consent box shows host-resolved values, never agent-written text, and a request that cannot be shown whole or holds invisible characters is denied. The text shown and the command spawned are read from the same resolved slots. | `exec` canonical-request check, `renderer-ink` overlay. |
-| Terminal output cannot drive your terminal. Escape and control sequences are stripped at a single chokepoint. | `sanitizer`, a zero-dependency leaf package. |
-| The sandbox fails closed. The probe reports "unsupported" when the runtime is missing, fails to load, or the OS is Windows, and the handle then refuses to wrap a command and refuses every gated action kind. The action router asks the handle before each action. | `exec` sandbox handle, built on sandbox-runtime. |
-| Local actions in a mini-app can only change app state. They cannot log, exit, or run commands. | A state-only allowlist in the renderer boundary. |
-| Layering cannot silently erode. | Import-boundary lint at error level plus composite `tsc -b`, both in CI. |
+Nothing is published yet, so minitui runs from a clone. It has been run on Linux only.
 
-### What it does not claim
+```bash
+git clone https://github.com/erkin98/minitui.git
+cd minitui
+pnpm install
+pnpm build
+```
 
-- **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
-- **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
-- **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. A Linux session has been run by hand; no macOS run has been recorded.
-- **End to end.** Each guarantee above is tested at its own boundary. A full session that generates a spec, asks, wraps and runs a command in a live sandbox on real hardware has not been exercised yet, because no program wires the pieces and the session host together yet. Below that, the runner and router have run a real merge of two clips with audio on Linux under the sandbox, with a stand-in that always allows in place of the consent prompt, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
+### Dependencies
+
+- Node 22.13 or newer, and pnpm 11 (the exact version is pinned in `package.json`).
+- `ffmpeg`, for the video merge app.
+- On Linux, the OS sandbox needs `bubblewrap`, `socat` and `ripgrep`. On Debian or Ubuntu:
+
+  ```bash
+  sudo apt-get install ffmpeg bubblewrap socat ripgrep
+  ```
+
+  On Ubuntu 24.04 and later, bubblewrap also needs the AppArmor restriction on unprivileged user namespaces lifted, or an AppArmor profile for it; the [sandbox-runtime README](https://github.com/anthropic-experimental/sandbox-runtime) gives both. If the sandbox cannot start, minitui refuses the gated action instead of running it unsandboxed.
+
+- An Anthropic API key, read from `ANTHROPIC_API_KEY`.
+
+Windows is refused by design. macOS is a target but has not been run.
+
+## Usage
+
+```bash
+read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # paste the key; nothing is echoed
+node apps/cli/bin/minitui.mjs merge intro.mp4 and clip2.mp4 into merged.mp4
+```
+
+minitui generates the app, draws it in your terminal, and asks before it runs anything. In the app, Tab moves the focus and Enter presses; `q` quits with exit code 0 and Esc cancels with 130. Each run calls the model and is billed to your key.
+
+### CLI
+
+```text
+usage: minitui [options] <intent>
+
+options:
+  --yolo          approve allow/ask automatically (the hard floor still blocks)
+  --accessible    render in screen-reader-friendly mode
+  --model <id>    model id (default claude-sonnet-5-5; env MINITUI_MODEL)
+  --version       print version and exit
+  --help          print this help and exit
+```
+
+A word that starts with a dash inside the intent goes after `--`, for example `minitui -- convert --fast.mp4`.
 
 ## Architecture
 
@@ -149,12 +212,11 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 
 Expect breaking changes until the first release.
 
-## Working in the repo
+## Development
 
-You need Node 22.13 or newer and pnpm 11 (the exact version is pinned in `package.json`).
+After [Install](#install):
 
 ```bash
-pnpm install
 pnpm build          # turbo build, all packages
 pnpm test           # per-package tests plus the root project
 pnpm lint           # eslint, import boundaries, test policy, outbound-text scan
@@ -164,6 +226,12 @@ pnpm typecheck:tsc  # tsc -b, the composite build
 
 `pnpm test:all` runs the whole suite in one pass. `pnpm pack:check` builds every package, packs it, and imports the tarball from a clean consumer. Git hooks are installed by `pnpm install` and run the main checks before a commit or a push.
 
+## Contributing
+
+minitui is pre-release and its design is still moving. Questions, bug reports and proposals go to [GitHub issues](https://github.com/erkin98/minitui/issues). Pull requests are accepted once an issue has agreed the change.
+
+A pull request must pass `pnpm lint`, `pnpm typecheck`, `pnpm typecheck:tsc` and `pnpm test` (the pre-push hook installed by `pnpm install` runs all of them), use a conventional commit subject (`feat:`, `fix:`, `docs:` and so on), and keep to the rules in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+[Apache-2.0](LICENSE) © 2026 erkin98

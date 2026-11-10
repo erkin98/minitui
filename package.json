@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@11.8.0",
+  "description": "A terminal agent that builds small apps on demand and runs them behind a permission gate and an OS sandbox.",
   "devDependencies": {
     "@changesets/cli": "2.27.9",
     "@eslint/js": "catalog:",
