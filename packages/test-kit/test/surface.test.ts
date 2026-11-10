@@ -22,7 +22,18 @@ function barrelExports(): string[] {
 
 // Frozen, inline public surface rather than an auto-written snapshot: every name a commit adds to the
 // barrel is added here in the same commit. Growth and shrinkage both red.
-const PUBLIC_SURFACE: string[] = [];
+const PUBLIC_SURFACE = [
+  'FROZEN_SIZE',
+  'GoldenResult',
+  'InkHarness',
+  'KEYS',
+  'KeyName',
+  'SPINNER_FRAMES',
+  'keyBytes',
+  'matchGolden',
+  'mountHarness',
+  'stripAnsiNondeterminism',
+];
 
 describe('declaration surface golden', () => {
   it('the barrel exports exactly the frozen public surface', () => {
