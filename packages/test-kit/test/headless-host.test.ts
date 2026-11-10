@@ -189,15 +189,17 @@ describe('mountHeadless', () => {
       tools: createMockToolRegistry({ merge: throwing }),
       diagnostics,
     });
+    // Move the focus to the Merge button one Tab at a time, waiting for each move to render before the
+    // next key: a key written before the focus has moved is applied to the wrong widget.
+    const onMerge = (): boolean =>
+      host.frame().split('\n')[focusedLine(host.frame())]?.includes('Merge') === true;
     await host.waitFor(() => focusedLine(host.frame()) >= 0, 'a focused widget');
-    for (
-      let i = 0;
-      i < 4 && !host.frame().split('\n')[focusedLine(host.frame())]?.includes('Merge');
-      i++
-    ) {
+    for (let i = 0; i < 6 && !onMerge(); i++) {
+      const before = focusedLine(host.frame());
       await host.press('tab');
-      await host.settle();
+      await host.waitFor(() => focusedLine(host.frame()) !== before, 'the focus to move');
     }
+    await host.waitFor(onMerge, 'focus on the Merge button');
     await host.press('enter');
     await host.waitFor(() => warned.length > 0, 'a reported failure');
     expect(warned.length).toBeGreaterThan(0);
