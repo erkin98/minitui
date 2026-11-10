@@ -13,6 +13,7 @@ import {
 } from '@minitui/test-kit';
 import { createDataStore, type DataStore } from '@minitui/transport';
 import { JsonObjectSchema } from '@minitui/types';
+import { focusMerge, type Drivable } from './focus.js';
 
 type RendererStore = Parameters<typeof createInkRenderer>[0]['store'];
 
@@ -43,11 +44,8 @@ const NO_CONSENT: ConsentController = {
   resolve: () => undefined,
 };
 
-export interface InkUnderHost {
+export interface InkUnderHost extends Drivable {
   readonly session: HostSession;
-  readonly store: DataStore;
-  frame(): string;
-  press(key: string): Promise<void>;
   /** Moves the focus to the Merge button one Tab at a time, waiting for each move to render. */
   focusMerge(): Promise<void>;
 }
@@ -90,24 +88,5 @@ export async function inkUnderHost(args: {
     stdin.write(keyBytes(key));
     await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
   };
-  const focusedLine = (): number =>
-    frame()
-      .split('\n')
-      .findIndex((line) => line.includes('> '));
-  const onMerge = (): boolean => frame().split('\n')[focusedLine()]?.includes('Merge') === true;
-  return {
-    session,
-    store,
-    frame,
-    press,
-    async focusMerge() {
-      await waitFor(() => focusedLine() >= 0, 'a focused widget');
-      for (let i = 0; i < 6 && !onMerge(); i++) {
-        const before = focusedLine();
-        await press('tab');
-        await waitFor(() => focusedLine() !== before, 'the focus to move');
-      }
-      await waitFor(onMerge, 'focus on the Merge button');
-    },
-  };
+  return { session, frame, press, focusMerge: () => focusMerge({ frame, press }) };
 }

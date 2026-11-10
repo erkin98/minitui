@@ -23,17 +23,20 @@ describe('the hard floor through the host, the router and the engine', () => {
         mode: 'yolo',
         sandbox: passThroughSandbox(),
       });
-      const outcome = await app.pressMerge({
-        inputs: [join(dir, 'a.mp4'), join(dir, 'b.mp4')],
-        codec: 'copy',
-        output,
-      });
-      expect(outcome).toMatchObject({
-        status: 'denied',
-        reason: expect.stringMatching(/protected secret/),
-      });
-      expect(app.runs).toHaveLength(0);
-      app.session.dispose();
+      try {
+        const outcome = await app.pressMerge({
+          inputs: [join(dir, 'a.mp4'), join(dir, 'b.mp4')],
+          codec: 'copy',
+          output,
+        });
+        expect(outcome).toMatchObject({
+          status: 'denied',
+          reason: expect.stringMatching(/protected secret/),
+        });
+        expect(app.runs).toHaveLength(0);
+      } finally {
+        app.dispose();
+      }
     });
   });
 
@@ -48,13 +51,16 @@ describe('the hard floor through the host, the router and the engine', () => {
         mode: 'yolo',
         sandbox: passThroughSandbox(),
       });
-      const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
-      expect(outcome).toMatchObject({
-        status: 'failed',
-        fault: { stderrExcerpt: 'the merge was planned' },
-      });
-      expect(app.runs).toHaveLength(0);
-      app.session.dispose();
+      try {
+        const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
+        expect(outcome).toMatchObject({
+          status: 'failed',
+          fault: { stderrExcerpt: 'the merge was planned' },
+        });
+        expect(app.runs).toHaveLength(0);
+      } finally {
+        app.dispose();
+      }
     });
   });
 });

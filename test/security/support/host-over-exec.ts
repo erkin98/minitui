@@ -74,7 +74,7 @@ export async function inTempDir(row: (dir: string) => Promise<void>): Promise<vo
   }
 }
 
-/** The canonical merge app with its state replaced. */
+/** The canonical merge app with these values merged over its state. */
 export function mergeAppWithState(state: Record<string, unknown>): MiniAppSpec {
   return { ...MERGE_SPEC, state: { ...MERGE_SPEC.state, ...state } };
 }
@@ -86,6 +86,8 @@ export interface HostOverExec {
   readonly runs: readonly RunSpec[];
   /** Raises the merge as the button would, with the parameters a renderer resolved itself. */
   pressMerge(rendererParams: Record<string, unknown>): Promise<ActionOutcome>;
+  /** Ends the session and the engine; a row calls it in `finally`. */
+  dispose(): void;
 }
 
 /**
@@ -144,5 +146,9 @@ export async function hostOverExec(args: {
         stateSnapshot: session.state.getState(),
         elementKey: 'merge',
       }),
+    dispose: () => {
+      session.dispose();
+      engine.disposeAll('the row ended');
+    },
   };
 }

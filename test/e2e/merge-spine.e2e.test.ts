@@ -9,12 +9,7 @@ import {
 import { CATALOG_REPAIR_WORDING, videoMergeCatalog } from '@minitui/catalog';
 import type { ActionDispatcher } from '@minitui/renderer-core';
 import { createInkBinding } from '@minitui/renderer-ink';
-import {
-  composeValidation,
-  toRuntimeRepair,
-  type CapabilityProvider,
-  type MiniAppSpec,
-} from '@minitui/spec';
+import { toRuntimeRepair } from '@minitui/spec';
 import {
   MERGE_RUN,
   MERGE_SPEC,
@@ -28,28 +23,14 @@ import {
 } from '@minitui/test-kit';
 import type { RuntimeFault } from '@minitui/types';
 import { describe, expect, it } from 'vitest';
+import { validated } from '../security/support/validation.js';
+import { focusMerge } from './support/focus.js';
 import { inkUnderHost } from './support/ink-under-host.js';
 
 // The merge spine end to end, headless: the scripted model reply leaves a real agent session as text, the
 // real validation loop turns it into the app, the real Ink renderer mounts it, a key press reaches the
 // consent box, and the merge runs to done. A failed merge goes back to the same session as a repair turn.
 const GOLDEN_DIR = new URL('./__golden__/', import.meta.url);
-
-const capabilities: CapabilityProvider = {
-  listCodecs: () => Promise.resolve(['h264']),
-  listEncoders: () => Promise.resolve(['libx264']),
-  listFilters: () => Promise.resolve(['concat']),
-  statFile: () => Promise.resolve({ exists: true, readable: true, isFile: true }),
-};
-
-async function* once(text: string): AsyncGenerator<string> {
-  yield text;
-}
-
-async function* neverAsked(): AsyncGenerator<string> {
-  yield* [];
-  throw new Error('the loop asked for a regeneration');
-}
 
 function scriptedSession(provider: MockLlmProvider): AgentSession {
   return new AgentSession({
@@ -76,17 +57,6 @@ async function textOf(
   return { text, types };
 }
 
-async function validated(text: string): Promise<MiniAppSpec> {
-  const result = await composeValidation({
-    stream: once(text),
-    catalog: videoMergeCatalog,
-    capabilities,
-    regenerate: () => neverAsked(),
-  });
-  if (!result.ok) throw new Error('the validation loop refused the reply');
-  return result.spec;
-}
-
 describe('the merge spine', () => {
   it('the reply becomes the app, a press asks for consent, and the merge runs to done', async () => {
     const provider = MERGE_RUN.provider();
@@ -103,20 +73,7 @@ describe('the merge spine', () => {
       tools: createMockToolRegistry({ merge: MERGE_TOOL_OK }),
     });
     try {
-      const focusedLine = (): number =>
-        host
-          .frame()
-          .split('\n')
-          .findIndex((line) => line.includes('> '));
-      const onMerge = (): boolean =>
-        host.frame().split('\n')[focusedLine()]?.includes('Merge') === true;
-      await host.waitFor(() => focusedLine() >= 0, 'a focused widget');
-      for (let i = 0; i < 6 && !onMerge(); i++) {
-        const before = focusedLine();
-        await host.press('tab');
-        await host.waitFor(() => focusedLine() !== before, 'the focus to move');
-      }
-      await host.waitFor(onMerge, 'focus on the Merge button');
+      await focusMerge(host);
       await host.press('enter');
       await host.waitFor(
         () => host.frame().includes('Allow? [a]lways / [y]es / [n]o'),
@@ -172,15 +129,21 @@ const noExec: ActionDispatcher = {
 describe('the exit keys through the host and the real renderer', () => {
   it('q settles the session as completed with exit 0', async () => {
     const app = await inkUnderHost({ spec: MERGE_SPEC, dispatcher: noExec });
-    await app.press('q');
-    expect(await app.session.done).toEqual({ status: 'completed', exitCode: 0 });
-    app.session.dispose();
+    try {
+      await app.press('q');
+      expect(await app.session.done).toEqual({ status: 'completed', exitCode: 0 });
+    } finally {
+      app.session.dispose();
+    }
   });
 
   it('Esc settles the session as cancelled with exit 130', async () => {
     const app = await inkUnderHost({ spec: MERGE_SPEC, dispatcher: noExec });
-    await app.press('escape');
-    expect(await app.session.done).toEqual({ status: 'cancelled', exitCode: 130 });
-    app.session.dispose();
+    try {
+      await app.press('escape');
+      expect(await app.session.done).toEqual({ status: 'cancelled', exitCode: 130 });
+    } finally {
+      app.session.dispose();
+    }
   });
 });

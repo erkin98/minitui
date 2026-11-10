@@ -29,15 +29,18 @@ describe('an inactive sandbox under the host', () => {
           mode: 'yolo',
           sandbox,
         });
-        const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
-        expect(outcome).toMatchObject({
-          status: 'denied',
-          reason: expect.stringMatching(
-            /^sandbox unavailable \(.+\): refusing action kind 'exec-local'$/,
-          ),
-        });
-        expect(app.runs).toHaveLength(0);
-        app.session.dispose();
+        try {
+          const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
+          expect(outcome).toMatchObject({
+            status: 'denied',
+            reason: expect.stringMatching(
+              /^sandbox unavailable \(.+\): refusing action kind 'exec-local'$/,
+            ),
+          });
+          expect(app.runs).toHaveLength(0);
+        } finally {
+          app.dispose();
+        }
       });
     } finally {
       await sandbox.dispose();
@@ -55,13 +58,16 @@ describe('an inactive sandbox under the host', () => {
         mode: 'yolo',
         sandbox: passThroughSandbox(),
       });
-      const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
-      expect(outcome).toMatchObject({
-        status: 'failed',
-        fault: { stderrExcerpt: 'the merge was planned' },
-      });
-      expect(app.runs).toHaveLength(0);
-      app.session.dispose();
+      try {
+        const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
+        expect(outcome).toMatchObject({
+          status: 'failed',
+          fault: { stderrExcerpt: 'the merge was planned' },
+        });
+        expect(app.runs).toHaveLength(0);
+      } finally {
+        app.dispose();
+      }
     });
   });
 });

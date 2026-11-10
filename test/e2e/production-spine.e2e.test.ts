@@ -15,7 +15,6 @@ import {
   type LocalRunner,
   type RunSpec,
 } from '@minitui/exec';
-import { composeValidation, type CapabilityProvider } from '@minitui/spec';
 import { createTestConsentController, specPatchText, waitFor } from '@minitui/test-kit';
 import { buildRunAgentInput, createLocalAgentPort } from '@minitui/transport';
 import { describe, expect, it } from 'vitest';
@@ -24,24 +23,16 @@ import {
   mergeAppWithState,
   passThroughSandbox,
 } from '../security/support/host-over-exec.js';
+import { validated } from '../security/support/validation.js';
 import { inkUnderHost } from './support/ink-under-host.js';
 
 // One row through the pieces production composes, each from its own package: the model loop of the
 // SDK, transport's local agent port, the validation loop, the runtime host over the real Ink renderer,
 // the exec router with the real blocking engine, and the consent box. The model call, the process spawn
 // and the output file are doubles behind their own seams. The cli's own wiring of these pieces is proven
-// by the cli's tests; this row proves the pieces fit.
-const capabilities: CapabilityProvider = {
-  listCodecs: () => Promise.resolve(['h264']),
-  listEncoders: () => Promise.resolve(['libx264']),
-  listFilters: () => Promise.resolve(['concat']),
-  statFile: () => Promise.resolve({ exists: true, readable: true, isFile: true }),
-};
-
-async function* neverAsked(): AsyncGenerator<string> {
-  yield* [];
-  throw new Error('the loop asked for a regeneration');
-}
+// by the cli's tests; this row proves the pieces fit. The row ends when the runner is called, so the leg
+// from a finished run to the done frame is tested in two halves elsewhere: the cli maps exec events into
+// the store (apps/cli/test/store-bridge.test.ts), and the merge spine draws the done frame.
 
 describe('the production composition', () => {
   it('a reply from the SDK loop is mounted, asks with host values, and runs once on yes', async () => {
@@ -83,15 +74,7 @@ describe('the production composition', () => {
       let text = '';
       for await (const event of run.events) if (event.kind === 'text-delta') text += event.delta;
 
-      const result = await composeValidation({
-        stream: (async function* () {
-          yield text;
-        })(),
-        catalog: videoMergeCatalog,
-        capabilities,
-        regenerate: () => neverAsked(),
-      });
-      if (!result.ok) throw new Error('the validation loop refused the reply');
+      const spec = await validated(text);
 
       const engine = await createPermissionEngine({ mode: 'default' });
       const runs: RunSpec[] = [];
@@ -127,7 +110,7 @@ describe('the production composition', () => {
         signal: new AbortController().signal,
       });
       const ui = await inkUnderHost({
-        spec: result.spec,
+        spec,
         dispatcher: router,
         consent: createTestConsentController(engine),
       });

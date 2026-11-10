@@ -79,10 +79,13 @@ describe('the render-local lists of the renderer and the host', () => {
       const entry = CASES[name];
       if (entry === undefined) throw new Error(`no case for the renderer's local action ${name}`);
       const { session, dispatch } = await mountHost((action) => videoMergeCatalog.kindOf(action));
-      expect(videoMergeCatalog.kindOf(name)).toBe('render-local');
-      expect(await dispatch(name, entry.params)).toEqual({ status: 'settled' });
-      expect(session.state.getState()).toMatchObject(entry.expected);
-      session.dispose();
+      try {
+        expect(videoMergeCatalog.kindOf(name)).toBe('render-local');
+        expect(await dispatch(name, entry.params)).toEqual({ status: 'settled' });
+        expect(session.state.getState()).toMatchObject(entry.expected);
+      } finally {
+        session.dispose();
+      }
     },
   );
 
@@ -92,12 +95,15 @@ describe('the render-local lists of the renderer and the host', () => {
       const { session, dispatch } = await mountHost((action) =>
         action === name ? 'render-local' : videoMergeCatalog.kindOf(action),
       );
-      const before = session.state.getState();
-      const outcome = await dispatch(name, { statePath: '/note', value: 'x' });
-      expect(outcome.status).toBe('denied');
-      expect(outcome.status === 'denied' ? outcome.reason : '').toMatch(/state allowlist/);
-      expect(session.state.getState()).toEqual(before);
-      session.dispose();
+      try {
+        const before = session.state.getState();
+        const outcome = await dispatch(name, { statePath: '/note', value: 'x' });
+        expect(outcome.status).toBe('denied');
+        expect(outcome.status === 'denied' ? outcome.reason : '').toMatch(/state allowlist/);
+        expect(session.state.getState()).toEqual(before);
+      } finally {
+        session.dispose();
+      }
     },
   );
 });

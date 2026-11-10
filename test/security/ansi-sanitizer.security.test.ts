@@ -1,8 +1,9 @@
 import { videoMergeCatalog } from '@minitui/catalog';
 import { createInkBinding } from '@minitui/renderer-ink';
-import { composeValidation, type CapabilityProvider, type MiniAppSpec } from '@minitui/spec';
+import type { MiniAppSpec } from '@minitui/spec';
 import { MERGE_SPEC, mountHeadless, specPatchText } from '@minitui/test-kit';
 import { describe, expect, it } from 'vitest';
+import { validated } from './support/validation.js';
 
 // Terminal control sequences in the model's text never reach the terminal: the spec goes from the model's
 // patch text through the real validation loop, then mounts through the real Ink renderer, and the frame
@@ -16,22 +17,6 @@ const CLIPBOARD_WRITE = `${ESC}]52;c;aGk=${BEL}`;
 const CLEAR_SCREEN = `${ESC}[2J`;
 const PASTE_START = `${ESC}[200~`;
 const BLINK = `${ESC}[5m`;
-
-const capabilities: CapabilityProvider = {
-  listCodecs: () => Promise.resolve(['h264']),
-  listEncoders: () => Promise.resolve(['libx264']),
-  listFilters: () => Promise.resolve(['concat']),
-  statFile: () => Promise.resolve({ exists: true, readable: true, isFile: true }),
-};
-
-async function* once(text: string): AsyncGenerator<string> {
-  yield text;
-}
-
-async function* neverAsked(): AsyncGenerator<string> {
-  yield* [];
-  throw new Error('the loop asked for a regeneration');
-}
 
 const mergeButton = MERGE_SPEC.elements.merge;
 if (mergeButton === undefined) throw new Error('the merge fixture has no merge button');
@@ -57,15 +42,8 @@ const injected: MiniAppSpec = {
 
 describe('escape sequences from the model never reach the frame', () => {
   it('the validated app mounts with the visible text and none of the injected sequences', async () => {
-    const result = await composeValidation({
-      stream: once(specPatchText(injected)),
-      catalog: videoMergeCatalog,
-      capabilities,
-      regenerate: () => neverAsked(),
-    });
-    if (!result.ok) throw new Error('the loop refused the app');
     const host = await mountHeadless({
-      spec: result.spec,
+      spec: await validated(specPatchText(injected)),
       catalog: videoMergeCatalog,
       binding: createInkBinding(videoMergeCatalog),
     });
