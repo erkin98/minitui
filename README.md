@@ -113,7 +113,7 @@ A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforce
 | `@minitui/exec` | Shell parsing, permission engine, hard floor, grants store, sandbox handle (probe, wrap, policy checks, disposal), the local runner, the ffmpeg merge planner and the action router. The MCP client is planned. | partly built |
 | `@minitui/runtime-host` | Mounts a validated spec over the shared store, routes the actions a renderer raises (the consent values are read from live state), and owns the session's lifetime. | built |
 | `@minitui/library` | Saving and relaunching kept apps. | planned |
-| `@minitui/cli` | The `minitui` command. | planned |
+| `@minitui/cli` | The `minitui` command. The MCP wiring is planned. | partly built |
 | `@minitui/test-kit` | Shared test harnesses: real port doubles, a headless host, golden helpers and the merge fixtures. Private. | built |
 | `@minitui/integration-tests` | End-to-end suites across all packages. | planned |
 
@@ -133,7 +133,7 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 - **Every gate has a case that proves it can fail.** Boundary lint ships with planted violations. The security suites carry controls that must go red when the protection is removed.
 - **Packed tarballs are installed and imported** from a clean consumer (`pnpm pack:check`). Two packages, `agent-core` and `exec`, are not covered yet; `runtime-host` is.
 - **Supply chain.** Exact versions only, a seven-day quarantine on freshly published releases, no unvetted install scripts, no lockfile downgrades.
-- **Deterministic snapshots.** Terminal golden tests run with a frozen clock and a fixed 80x24 screen.
+- **Deterministic snapshots.** Terminal golden tests run with a frozen clock. Ink frames render at a fixed width of 100 columns with no row limit; tests that read the terminal size from the environment see 80x24.
 
 ## Status
 
@@ -141,9 +141,10 @@ TypeScript (strict, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 | Area | State |
 |-|-|
 | Ten core packages | Implemented, with unit and boundary tests. Type checks, lint and tests pass locally. `exec` is partial, as above. |
-| Kept-app library, CLI | Not built. The session host is built and tested against a stand-in renderer and the real exec router, but no command runs it. You cannot run minitui yet. |
-| Live model traffic | Not exercised. The model loop is tested against an in-process provider. |
-| Real sandbox session | A merge of two clips ran through the router and the sandbox on Linux, with a stand-in for the consent prompt. Not run on macOS. Not run with a model or the consent box. |
+| Kept-app library | Not built. |
+| CLI | Built, except the MCP wiring. Manual runs of the built `minitui` bin on Linux went end to end against the real model: the prompt, the generated app, the consent box with host values, the merge and a clean exit. Not run on macOS or Windows. |
+| Live model traffic | Exercised by hand on Linux through the built bin. The automated tests use an in-process provider. |
+| Real sandbox session | A merge of two clips ran through the router and the sandbox on Linux, first with a stand-in for the consent prompt, then from the built bin with a real model and the consent box (the router refuses the merge when the sandbox cannot start). Not run on macOS. |
 | Releases | None. The workspace is private and unpublished. |
 
 Expect breaking changes until the first release.

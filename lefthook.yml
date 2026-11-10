@@ -37,7 +37,8 @@ pre-push:
       priority: 5
       # Repo-wide, not just staged: pre-commit's eslint sees {staged_files} only, so a
       # rule change or a file touched outside the hook can leave the tree reding with
-      # every commit green. No CI backstop exists yet (no .github/workflows).
+      # every commit green. CI (.github/workflows/ci.yml) runs lint again only for pull
+      # requests and pushes to master, so a push of a feature branch has no other check.
       run: pnpm run lint
     format:
       priority: 2
