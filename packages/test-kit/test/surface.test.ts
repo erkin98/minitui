@@ -25,6 +25,8 @@ function barrelExports(): string[] {
 const PUBLIC_SURFACE = [
   'ConsentSource',
   'FROZEN_SIZE',
+  'FakeStdin',
+  'FakeStdout',
   'GoldenResult',
   'HeadlessHost',
   'InkHarness',
@@ -50,6 +52,8 @@ const PUBLIC_SURFACE = [
   'ToolLifecycleEvent',
   'ToolOutcome',
   'UNRECOGNISED_REPLY',
+  'asReadStream',
+  'asWriteStream',
   'createMockDispatcher',
   'createMockPermissionEngine',
   'createMockToolRegistry',
@@ -61,6 +65,7 @@ const PUBLIC_SURFACE = [
   'scriptedRun',
   'specPatchText',
   'stripAnsiNondeterminism',
+  'waitFor',
 ];
 
 describe('declaration surface golden', () => {

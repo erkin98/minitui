@@ -35,3 +35,6 @@ export {
   specPatchText,
 } from './fixtures/merge-task.fixtures.js';
 export { createMockDispatcher, mountHeadless, type HeadlessHost } from './render/headless-host.js';
+// The fake terminal and the frame wait, for tests that mount the real ink renderer themselves.
+export { FakeStdin, FakeStdout, asReadStream, asWriteStream } from './render/fake-streams.js';
+export { waitFor } from './render/wait.js';
