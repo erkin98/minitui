@@ -116,6 +116,13 @@ export const BOUNDARY_ZONES = [
     message:
       'apps/cli may not import the dev-only test-kit or the integration tests, from any file.',
   },
+  // A package's own files, tests included, may not import the integration suites or their support code:
+  // that code pulls in exec, catalog and renderer-ink, past any package's row of the DAG.
+  {
+    target: './packages',
+    from: ['./test/e2e', './test/security', './test/conformance'],
+    message: 'a package may not import the integration tests or their support code, from any file.',
+  },
   // Package source may not import from a wall-exempt scripts directory: those directories (and the
   // repo-level scripts/) lift the capability walls, so reaching one from shipped source would
   // launder a walled import through it. Tests are held to the named list in the zone below.

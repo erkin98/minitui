@@ -152,6 +152,12 @@ const OWNER_ROWS = [
     `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
     [DAG],
   ],
+  [
+    'runtime-host test: DAG -> the integration suites support code',
+    tst('runtime-host'),
+    `import * as w from '../../../test/security/support/host-over-exec';\nexport { w };\n`,
+    [DAG],
+  ],
   // The integration package's suites sit under the root test/ tree, inside the same walls.
   ['test/security: static child_process walled', ROOT_TEST, SPAWN, [IMP]],
   ['test/security: static ai walled', ROOT_TEST, AI, [IMP]],

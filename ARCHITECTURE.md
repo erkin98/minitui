@@ -27,7 +27,7 @@ Thirteen `@minitui/*` packages and one private app. Twelve packages and the app 
 |`runtime-host`|Mounts a validated spec over the one shared store, routes the actions a renderer raises, relaunch re-bind of typed parameters|types, transport, spec, renderer-core|
 |`test-kit` (private)|The shared test toolkit: a scripted model provider, a permission engine double, a tool registry, a headless host over the real Ink mount, golden helpers and the canonical merge fixtures. Never in a product bundle|types, spec, renderer-core, renderer-ink; its own tests also the catalog, `react` and `ink`|
 |`apps/cli` (private app)|The `minitui` bin and the composition root: the one place that names concrete implementations and wires them into a host; boot detection, terminal restore and the log file|every runtime package, not test-kit or integration-tests|
-|`integration-tests` (private, root `test/`)|The suites only a package that imports everything can run: the merge spine and the production composition end to end, the five cross-package security files, the render-local parity of the host and the renderer, and the pre-push gate list. Every suite runs in every test run; only the live sandbox row needs `RUN_E2E`|every package; no DAG zone|
+|`integration-tests` (private, root `test/`)|The suites only a package that imports everything can run: the merge spine and the production composition end to end, the five cross-package security files, the render-local parity of the host and the renderer, and the pre-push gate list. Every suite runs in every test run; only the live sandbox row needs `RUN_E2E`|every package; no DAG zone. No package and not the app may import its suites or their support code|
 
 Not built yet: `library` (types, spec).
 
