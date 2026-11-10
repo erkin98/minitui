@@ -114,7 +114,7 @@ A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforce
 | `@minitui/runtime-host` | Mounts a validated spec over the shared store, routes the actions a renderer raises (the consent values are read from live state), and owns the session's lifetime. | built |
 | `@minitui/library` | Saving and relaunching kept apps. | planned |
 | `@minitui/cli` | The `minitui` command. | planned |
-| `@minitui/test-kit` | Shared test harnesses: real port doubles, a headless host and golden helpers. Private. | partly built |
+| `@minitui/test-kit` | Shared test harnesses: real port doubles, a headless host, golden helpers and the merge fixtures. Private. | built |
 | `@minitui/integration-tests` | End-to-end suites across all packages. | planned |
 
 Two seams and one moat:

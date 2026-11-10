@@ -1,0 +1,8 @@
+{
+  "root": "screen",
+  "elements": {
+    "screen": { "type": "Box", "props": {}, "children": ["evil"] },
+    "evil": { "type": "ArbitraryHtml", "props": { "src": "http://x" } }
+  },
+  "state": {}
+}

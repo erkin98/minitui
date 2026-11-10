@@ -1,0 +1,11 @@
+{
+  "root": "screen",
+  "elements": {
+    "screen": { "type": "Box", "props": {}, "children": ["pick"] },
+    "pick": {
+      "type": "FilePicker",
+      "props": { "label": "File", "value": { "$state": "/does/not/exist" } }
+    }
+  },
+  "state": { "other": 1 }
+}

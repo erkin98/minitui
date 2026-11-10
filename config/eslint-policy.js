@@ -652,6 +652,8 @@ export const CAST_DIRECTIVE_ALLOWLIST = Object.freeze({
   'packages/types/test/catalog.test.ts': 6,
   // ink's stream options name the full Node stream types; the fakes implement the part ink reads
   'packages/renderer-ink/test/support/fake-streams.ts': 2,
+  // the same two rows in the test toolkit's own copy of those streams
+  'packages/test-kit/src/render/fake-streams.ts': 2,
 });
 
 export const policyPlugin = {

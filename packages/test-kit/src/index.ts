@@ -26,3 +26,12 @@ export {
   type ToolLifecycleEvent,
   type ToolOutcome,
 } from './tools/mock-tool-registry.js';
+export {
+  MERGE_RUN,
+  MERGE_SPEC,
+  MERGE_TOOL_FAIL,
+  MERGE_TOOL_OK,
+  SPEC_FILES,
+  specPatchText,
+} from './fixtures/merge-task.fixtures.js';
+export { createMockDispatcher, mountHeadless, type HeadlessHost } from './render/headless-host.js';
