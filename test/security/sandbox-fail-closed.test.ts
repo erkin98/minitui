@@ -100,23 +100,28 @@ describe.runIf(live)('the live sandbox', () => {
         const probe = '/usr/bin/touch';
         expect(existsSync(probe)).toBe(true);
         const runner = createLocalRunner({ sandbox, checkHardFloor });
-        const touch = async (target: string): Promise<number | null | undefined> => {
+        const touch = async (
+          target: string,
+        ): Promise<{ code: number | null | undefined; stderr: string }> => {
           let code: number | null | undefined;
+          let stderr = '';
           for await (const event of runner.run(
             { command: probe, args: [target], cwd: allowed, sandboxPolicy: policy },
             new AbortController().signal,
           )) {
             if (event.kind === 'exit') code = event.code;
+            if (event.kind === 'stderr') stderr += `${event.text}\n`;
           }
-          return code;
+          return { code, stderr };
         };
         // A sandbox that cannot start also exits non-zero and writes nothing, so the denial below proves
         // enforcement only once the same command has run inside the sandbox and written where it may.
         const inside = join(allowed, 'landed');
-        expect(await touch(inside)).toBe(0);
+        const allowedRun = await touch(inside);
+        expect(allowedRun.code, `the write inside failed: ${allowedRun.stderr}`).toBe(0);
         expect(existsSync(inside)).toBe(true);
         const target = join(outside, 'landed');
-        const code = await touch(target);
+        const { code } = await touch(target);
         expect(code).toBeDefined();
         expect(code).not.toBe(0);
         expect(existsSync(target)).toBe(false);
