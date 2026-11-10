@@ -15,7 +15,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   sandbox:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: on ubuntu-26.04 bubblewrap starts but the sandbox's inner stage gets a
+    # user namespace without capabilities even with the settings below, so the live rows cannot pass
+    # there. 24.04 with those settings is the image sandbox-runtime's own CI runs on.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       MINITUI_NODE_RUNTIME: node-22
@@ -41,12 +44,20 @@ jobs:
           if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
             sudo sysctl -w kernel.unprivileged_userns_clone=1
           fi
-      # Says in the log whether bubblewrap can create the namespaces the sandbox uses, before the suites
-      # run; the live rows fail on their own if it cannot.
+      # Says in the log whether both stages of the sandbox can start before the suites run: bubblewrap's
+      # namespaces, then the nested user namespace the inner stage creates inside it. The live rows fail
+      # on their own if either cannot; these lines say which one and under which AppArmor label.
       - run: |
           grep PRETTY_NAME /etc/os-release
           bwrap --version
+          ls /etc/apparmor.d | grep -i -E 'bwrap|userns' || echo 'no bwrap or userns profile'
           bwrap --ro-bind / / --unshare-net true && echo 'bwrap namespaces: ok' || echo 'bwrap namespaces: FAILED'
+          bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc cat /proc/self/attr/current || true
+          bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc unshare --user --map-root-user --mount true \
+            && echo 'nested user namespace: ok' || echo 'nested user namespace: FAILED'
       - run: pnpm install --frozen-lockfile
       - run: pnpm -w run build
       - run: pnpm exec vitest run --project integration-tests
+      # On a red run, the kernel's AppArmor lines name the profile that refused, if one did.
+      - if: failure()
+        run: sudo dmesg | grep -i apparmor | tail -n 20 || true

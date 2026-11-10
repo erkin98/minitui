@@ -128,7 +128,7 @@ pnpm build
   sudo apt-get install ffmpeg bubblewrap socat ripgrep
   ```
 
-  On Ubuntu 24.04 and later, bubblewrap also needs the AppArmor restriction on unprivileged user namespaces lifted, or an AppArmor profile for it; the [sandbox-runtime README](https://github.com/anthropic-experimental/sandbox-runtime) gives both. If the sandbox cannot start, minitui refuses the gated action instead of running it unsandboxed.
+  On Ubuntu 24.04, bubblewrap also needs the AppArmor restriction on unprivileged user namespaces lifted, or an AppArmor profile for it; the [sandbox-runtime README](https://github.com/anthropic-experimental/sandbox-runtime) gives both. On Ubuntu 26.04 lifting the restriction is not enough: bubblewrap starts, but the sandbox's inner stage gets a user namespace without capabilities, and no working setup is documented yet. If the sandbox cannot start, minitui refuses the gated action instead of running it unsandboxed.
 
 - An Anthropic API key, read from `ANTHROPIC_API_KEY`.
 
