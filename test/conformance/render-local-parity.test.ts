@@ -1,7 +1,7 @@
 import { hostCatalogDeps, videoMergeCatalog } from '@minitui/catalog';
 import type { ActionDispatcher, DispatchContext } from '@minitui/renderer-core';
 import { RENDER_LOCAL_ALLOWLIST, createInkBinding } from '@minitui/renderer-ink';
-import { createAppHost, type HostSession } from '@minitui/runtime-host';
+import { RENDER_LOCAL_ACTIONS, createAppHost, type HostSession } from '@minitui/runtime-host';
 import { MERGE_SPEC } from '@minitui/test-kit';
 import { createDataStore } from '@minitui/transport';
 import type { ActionKind, JsonValue } from '@minitui/types';
@@ -67,6 +67,10 @@ const CASES: Readonly<
 describe('the render-local lists of the renderer and the host', () => {
   it('the renderer runs exactly the state trio locally', () => {
     expect([...RENDER_LOCAL_ALLOWLIST].sort()).toEqual(['pushState', 'removeState', 'setState']);
+  });
+
+  it('the host holds exactly the renderer list, so a name added to either side alone fails', () => {
+    expect([...RENDER_LOCAL_ACTIONS].sort()).toEqual([...RENDER_LOCAL_ALLOWLIST].sort());
   });
 
   it.each([...RENDER_LOCAL_ALLOWLIST])(

@@ -9,5 +9,7 @@ export type { AppHost, AppHostDeps, HostSession, TaskOutcome } from './host.js';
 
 export type { HostState } from './state.js';
 
+export { RENDER_LOCAL_ACTIONS } from './dispatcher.js';
+
 export { bindRelaunchParams, BindError } from './bind.js';
 export type { BindInput, BindResult } from './bind.js';

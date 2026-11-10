@@ -20,10 +20,11 @@ function barrelExports(): string[] {
     .sort();
 }
 
-// Frozen, inline public surface rather than an auto-written snapshot. The host's own action router,
-// state view and render-local action list stay inside the package: the composition root builds one
-// host through createAppHost and never touches them, and the router's natural name belongs to exec.
-// Growth and shrinkage both red.
+// Frozen, inline public surface rather than an auto-written snapshot. The host's own action router and
+// state view stay inside the package: the composition root builds one host through createAppHost and
+// never touches them, and the router's natural name belongs to exec. The render-local action list is
+// exported so the integration package can check it equals renderer-ink's list. Growth and shrinkage
+// both red.
 const PUBLIC_SURFACE = [
   'AppHost',
   'AppHostDeps',
@@ -32,6 +33,7 @@ const PUBLIC_SURFACE = [
   'BindResult',
   'HostSession',
   'HostState',
+  'RENDER_LOCAL_ACTIONS',
   'TaskOutcome',
   'bindRelaunchParams',
   'createAppHost',

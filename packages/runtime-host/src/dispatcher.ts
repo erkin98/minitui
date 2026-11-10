@@ -52,14 +52,22 @@ const unescapeSegment = (segment: string): string =>
  * else is refused, and so is a parameter the store would silently drop: the store logs a write it
  * cannot take and returns, so the host looks first and refuses what it can see is invalid.
  */
+/**
+ * The actions a renderer may run locally: json-render's state trio, and nothing else. Exported so the
+ * integration package can check it equals renderer-ink's own list, which this package cannot import.
+ */
+export const RENDER_LOCAL_ACTIONS: ReadonlySet<string> = new Set([
+  'setState',
+  'pushState',
+  'removeState',
+]);
+
 function routeRenderLocal(
   actionName: string,
   params: Readonly<Record<string, unknown>>,
   state: HostState,
 ): ActionOutcome {
-  if (actionName !== 'setState' && actionName !== 'pushState' && actionName !== 'removeState') {
-    return denied(NOT_ALLOWED);
-  }
+  if (!RENDER_LOCAL_ACTIONS.has(actionName)) return denied(NOT_ALLOWED);
   const path = params.statePath;
   if (!isPointer(path)) return denied(NOT_A_POINTER);
   if (actionName === 'removeState') {
