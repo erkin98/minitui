@@ -3,13 +3,12 @@ import {
   createSpecSink,
   createVisibilityChannel,
 } from '@minitui/agent-core';
-import { buildCatalogPrompt, videoMergeCatalog } from '@minitui/catalog';
+import { buildCatalogPrompt, hostCatalogDeps, videoMergeCatalog } from '@minitui/catalog';
 import { createInkRenderer } from '@minitui/renderer-ink';
 import { createAppHost } from '@minitui/runtime-host';
 import { composeValidation } from '@minitui/spec';
 import { createDataStore, createLocalAgentPort, type AgentPort } from '@minitui/transport';
 import { noopDiagnostics } from '@minitui/types';
-import { hostCatalogDeps } from './catalog-deps.js';
 import { makeConsentController } from './consent.js';
 import { buildExecStack } from './exec-stack.js';
 import { MAX_GEN_ATTEMPTS, composeSystemPrompt, createGenerationContext } from './generation.js';

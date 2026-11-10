@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { MinituiCatalog } from '@minitui/catalog';
+import type { MinituiCatalog } from './define-catalog.js';
 
 /** What the parameter check needs of the catalog. */
 export interface ParamsCatalog {

@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { videoMergeCatalog } from '@minitui/catalog';
+import { hostCatalogDeps, videoMergeCatalog } from '@minitui/catalog';
 import {
   buildPermissionRequest,
   createActionRouter,
@@ -128,11 +128,7 @@ export async function hostOverExec(args: {
     binding: createInkBinding(videoMergeCatalog),
     dispatcher: exec,
     store: createDataStore(),
-    checkParams: (name, params) =>
-      videoMergeCatalog.actionDefs.get(name)?.params.safeParse(params).success === true,
-    callableFromOf: (name) => videoMergeCatalog.callableFromOf(name),
-    kindOf: (name) => videoMergeCatalog.kindOf(name),
-    permissionOf: (name) => videoMergeCatalog.permissionOf(name),
+    ...hostCatalogDeps(videoMergeCatalog),
   });
   const session = await host.mount(args.spec);
   return {

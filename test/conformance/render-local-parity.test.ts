@@ -1,4 +1,4 @@
-import { videoMergeCatalog } from '@minitui/catalog';
+import { hostCatalogDeps, videoMergeCatalog } from '@minitui/catalog';
 import type { ActionDispatcher, DispatchContext } from '@minitui/renderer-core';
 import { RENDER_LOCAL_ALLOWLIST, createInkBinding } from '@minitui/renderer-ink';
 import { createAppHost, type HostSession } from '@minitui/runtime-host';
@@ -30,10 +30,9 @@ async function mountHost(kindOf: (name: string) => ActionKind | undefined): Prom
     binding: createInkBinding(videoMergeCatalog),
     dispatcher: noExec,
     store: createDataStore(),
+    ...hostCatalogDeps(videoMergeCatalog),
     checkParams: () => false,
-    callableFromOf: (name) => videoMergeCatalog.callableFromOf(name),
     kindOf,
-    permissionOf: (name) => videoMergeCatalog.permissionOf(name),
   });
   const session = await host.mount(MERGE_SPEC);
   const dispatch = (name: string, params: Record<string, unknown>) => {

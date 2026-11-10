@@ -61,4 +61,44 @@ describe('consent values come from live state, through the host and exec', () =>
       app.session.dispose();
     });
   });
+
+  // The parameter check the host is given is the production one from catalog: a key the action's schema
+  // does not know is refused by the host before exec builds a request, even though a parse of the schema
+  // alone would drop the key and pass.
+  it('a key the action schema does not know is refused before consent and nothing runs', async () => {
+    await inTempDir(async (dir) => {
+      const live = {
+        inputs: [join(dir, 'first.mp4'), join(dir, 'second.mp4')],
+        codec: 'copy',
+        output: join(dir, 'joined.mp4'),
+      };
+      const app = await hostOverExec({
+        spec: mergeAppWithState(live),
+        mode: 'default',
+        sandbox: passThroughSandbox(),
+      });
+      const requests = app.engine.requests[Symbol.asyncIterator]();
+      const pending = app.pressMerge({ ...live, mode: 'concat' });
+      const first = await Promise.race([
+        requests.next().then((next) => ({ next })),
+        pending.then((outcome) => ({ outcome })),
+      ]);
+      if ('next' in first) {
+        if (first.next.done !== true) {
+          app.engine.reply({
+            kind: 'reject',
+            feedback: 'row over',
+            requestId: first.next.value.id,
+          });
+        }
+        throw new Error('the unknown key reached consent');
+      }
+      expect(first.outcome).toEqual({
+        status: 'denied',
+        reason: 'action parameters do not match the catalog after host resolution',
+      });
+      expect(app.runs).toHaveLength(0);
+      app.session.dispose();
+    });
+  });
 });

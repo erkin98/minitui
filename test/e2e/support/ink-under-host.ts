@@ -1,4 +1,4 @@
-import { videoMergeCatalog } from '@minitui/catalog';
+import { hostCatalogDeps, videoMergeCatalog } from '@minitui/catalog';
 import type { ActionDispatcher } from '@minitui/renderer-core';
 import { createInkBinding, createInkRenderer, type ConsentController } from '@minitui/renderer-ink';
 import { createAppHost, type HostSession } from '@minitui/runtime-host';
@@ -81,11 +81,7 @@ export async function inkUnderHost(args: {
     binding: createInkBinding(videoMergeCatalog),
     dispatcher: args.dispatcher,
     store,
-    checkParams: (name, params) =>
-      videoMergeCatalog.actionDefs.get(name)?.params.safeParse(params).success === true,
-    callableFromOf: (name) => videoMergeCatalog.callableFromOf(name),
-    kindOf: (name) => videoMergeCatalog.kindOf(name),
-    permissionOf: (name) => videoMergeCatalog.permissionOf(name),
+    ...hostCatalogDeps(videoMergeCatalog),
   });
   const session = await host.mount(args.spec);
   await waitFor(() => stdout.frames.length > 0, 'the first frame');

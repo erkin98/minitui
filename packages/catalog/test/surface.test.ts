@@ -30,12 +30,14 @@ const VALUES = [
   'STD_ACTION_NAMES',
   'applyResourceTemplate',
   'buildCatalogPrompt',
+  'checkActionParams',
   'checkElementTree',
   'checkSemantics',
   'defineAction',
   'defineComponent',
   'defineMinituiCatalog',
   'hasCanonicalKeys',
+  'hostCatalogDeps',
   'isWiderThan',
   'rejectOffCatalog',
   'requiresPermission',
@@ -59,6 +61,7 @@ const TYPES = [
   'MinituiActionDef',
   'MinituiCatalog',
   'MinituiComponentDef',
+  'ParamsCatalog',
   'PermissionDescriptor',
   'SemanticIssue',
   'SpecElement',
@@ -74,9 +77,9 @@ describe('catalog public surface', () => {
     expect(barrelExports()).toEqual(PUBLIC_SURFACE);
   });
 
-  it('lists 41 names: 24 values and 17 types', () => {
-    expect(VALUES).toHaveLength(24);
-    expect(TYPES).toHaveLength(17);
-    expect(PUBLIC_SURFACE).toHaveLength(41);
+  it('lists 44 names: 26 values and 18 types', () => {
+    expect(VALUES).toHaveLength(26);
+    expect(TYPES).toHaveLength(18);
+    expect(PUBLIC_SURFACE).toHaveLength(44);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { videoMergeCatalog } from '@minitui/catalog';
-import { checkActionParams, hostCatalogDeps } from '../src/catalog-deps.js';
+import { checkActionParams, hostCatalogDeps } from '../src/host-deps.js';
+import { videoMergeCatalog } from '../src/index.js';
 
 const catalog = {
   actionDefs: new Map<string, { readonly params: z.ZodType }>([
