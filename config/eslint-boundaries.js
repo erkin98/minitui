@@ -106,12 +106,15 @@ export const BOUNDARY_ZONES = [
     from: './packages/catalog',
     message: 'Only the test-kit tests may import @minitui/catalog; its source may not.',
   },
-  // The app's source may not import the test packages. The arm for the integration tests under ./test is
-  // live now; the arm for test-kit is inert until that package exists, then active with no change here.
+  // No file of the app may import the test packages: not its source, its tests, its bin or its
+  // package-root configs. The app builds React elements, and no package that may build one may
+  // import test-kit; the integration tests under ./test import the app, never the reverse. A plain
+  // directory target, not a glob, so a file added anywhere in the app is covered.
   {
-    target: './apps/cli/src/**/*',
+    target: './apps/cli',
     from: ['./packages/test-kit', './test'],
-    message: 'cli source may not import the dev-only test-kit or the integration tests.',
+    message:
+      'apps/cli may not import the dev-only test-kit or the integration tests, from any file.',
   },
   // Package source may not import from a wall-exempt scripts directory: those directories (and the
   // repo-level scripts/) lift the capability walls, so reaching one from shipped source would

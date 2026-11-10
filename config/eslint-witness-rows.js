@@ -145,6 +145,12 @@ const OWNER_ROWS = [
     `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
     [DAG],
   ],
+  [
+    'apps/cli test: DAG -> the integration tests under ./test',
+    CLI_TEST,
+    `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
+    [DAG],
+  ],
   ['apps/cli: static child_process walled', CLI_SRC, SPAWN, [IMP]],
   ['apps/cli: static ai walled (src)', CLI_SRC, AI, [IMP]],
   ['apps/cli: static react permitted', CLI_TEST, REACT],
@@ -204,6 +210,18 @@ const OWNER_ROWS = [
   [
     'apps/cli: DAG -> @minitui/test-kit',
     CLI_SRC,
+    `import * as w from '@minitui/test-kit';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'apps/cli test: DAG -> @minitui/test-kit',
+    CLI_TEST,
+    `import * as w from '@minitui/test-kit';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'apps/cli: DAG -> @minitui/test-kit (package-root config)',
+    'apps/cli/vitest.config.ts',
     `import * as w from '@minitui/test-kit';\nexport { w };\n`,
     [DAG],
   ],
