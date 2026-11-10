@@ -36,4 +36,25 @@ describe('the hard floor through the host, the router and the engine', () => {
       app.session.dispose();
     });
   });
+
+  // The control: the same press with clean inputs in live state passes the floor and stops at the planner
+  // double, so the refusal above comes from the secret path the host read and nothing else.
+  it('with clean inputs in live state the same press passes the floor', async () => {
+    await inTempDir(async (dir) => {
+      const output = join(dir, 'out.mp4');
+      const inputs = [join(dir, 'a.mp4'), join(dir, 'b.mp4')];
+      const app = await hostOverExec({
+        spec: mergeAppWithState({ inputs, output }),
+        mode: 'yolo',
+        sandbox: passThroughSandbox(),
+      });
+      const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
+      expect(outcome).toMatchObject({
+        status: 'failed',
+        fault: { stderrExcerpt: 'the merge was planned' },
+      });
+      expect(app.runs).toHaveLength(0);
+      app.session.dispose();
+    });
+  });
 });

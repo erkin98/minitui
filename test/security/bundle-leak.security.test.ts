@@ -75,11 +75,11 @@ describe('shipped bundle leak gate', () => {
 
   it('the scan sees the model SDK in agent-core', () => {
     const bundle = readDist('agent-core');
-    expect(MODEL_SDK.some((pattern) => pattern.test(bundle))).toBe(true);
+    expect(MODEL_SDK.every((pattern) => pattern.test(bundle))).toBe(true);
   });
 
   it('the scan sees React and Ink in renderer-ink', () => {
     const bundle = readDist('renderer-ink');
-    expect(INK_FAMILY.some((pattern) => pattern.test(bundle))).toBe(true);
+    expect(INK_FAMILY.every((pattern) => pattern.test(bundle))).toBe(true);
   });
 });

@@ -230,7 +230,7 @@ pnpm typecheck:tsc  # tsc -b, the composite build
 
 minitui is pre-release and its design is still moving. Questions, bug reports and proposals go to [GitHub issues](https://github.com/erkin98/minitui/issues). Pull requests are accepted once an issue has agreed the change.
 
-A pull request must pass `pnpm lint`, `pnpm typecheck`, `pnpm typecheck:tsc` and `pnpm test` (the pre-push hook installed by `pnpm install` runs all of them), use a conventional commit subject (`feat:`, `fix:`, `docs:` and so on), and keep to the rules in [ARCHITECTURE.md](ARCHITECTURE.md).
+A pull request must pass `pnpm lint`, `pnpm typecheck`, `pnpm typecheck:tsc` and `pnpm test:all` (the pre-push hook installed by `pnpm install` runs all of them), use a conventional commit subject (`feat:`, `fix:`, `docs:` and so on), and keep to the rules in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 

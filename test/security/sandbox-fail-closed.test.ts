@@ -7,7 +7,12 @@ import {
   type SandboxPolicy,
 } from '@minitui/exec';
 import { afterAll, describe, expect, it } from 'vitest';
-import { hostOverExec, inTempDir, mergeAppWithState } from './support/host-over-exec.js';
+import {
+  hostOverExec,
+  inTempDir,
+  mergeAppWithState,
+  passThroughSandbox,
+} from './support/host-over-exec.js';
 
 // The sandbox fails closed across the packages: with a handle that cannot be active, a merge raised
 // through the runtime host is refused by the exec router before any request is built or anything runs.
@@ -27,7 +32,9 @@ describe('an inactive sandbox under the host', () => {
         const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
         expect(outcome).toMatchObject({
           status: 'denied',
-          reason: expect.stringMatching(/sandbox/i),
+          reason: expect.stringMatching(
+            /^sandbox unavailable \(.+\): refusing action kind 'exec-local'$/,
+          ),
         });
         expect(app.runs).toHaveLength(0);
         app.session.dispose();
@@ -35,6 +42,27 @@ describe('an inactive sandbox under the host', () => {
     } finally {
       await sandbox.dispose();
     }
+  });
+
+  // The control: the same press with a handle that is active gets past the sandbox check and stops at the
+  // planner double, so the refusal above comes from the inactive handle and nothing else.
+  it('with an active handle the same press passes the sandbox check', async () => {
+    await inTempDir(async (dir) => {
+      const output = join(dir, 'out.mp4');
+      const inputs = [join(dir, 'a.mp4'), join(dir, 'b.mp4')];
+      const app = await hostOverExec({
+        spec: mergeAppWithState({ inputs, output }),
+        mode: 'yolo',
+        sandbox: passThroughSandbox(),
+      });
+      const outcome = await app.pressMerge({ inputs, codec: 'copy', output });
+      expect(outcome).toMatchObject({
+        status: 'failed',
+        fault: { stderrExcerpt: 'the merge was planned' },
+      });
+      expect(app.runs).toHaveLength(0);
+      app.session.dispose();
+    });
   });
 });
 
@@ -54,7 +82,7 @@ describe.runIf(live)('the live sandbox', () => {
     },
   );
 
-  it('denies a write outside the allowed directory', async (context) => {
+  it('allows a write inside the allowed directory and denies one outside it', async (context) => {
     if (liveSandbox === undefined || !liveSandbox.active) {
       context.skip();
       return;
@@ -62,18 +90,27 @@ describe.runIf(live)('the live sandbox', () => {
     const sandbox = liveSandbox;
     await inTempDir(async (allowed) => {
       await inTempDir(async (outside) => {
-        const target = join(outside, 'landed');
         const policy: SandboxPolicy = { allowWrite: [allowed], allowEgress: [] };
         const probe = '/usr/bin/touch';
         expect(existsSync(probe)).toBe(true);
         const runner = createLocalRunner({ sandbox, checkHardFloor });
-        let code: number | null | undefined;
-        for await (const event of runner.run(
-          { command: probe, args: [target], cwd: allowed, sandboxPolicy: policy },
-          new AbortController().signal,
-        )) {
-          if (event.kind === 'exit') code = event.code;
-        }
+        const touch = async (target: string): Promise<number | null | undefined> => {
+          let code: number | null | undefined;
+          for await (const event of runner.run(
+            { command: probe, args: [target], cwd: allowed, sandboxPolicy: policy },
+            new AbortController().signal,
+          )) {
+            if (event.kind === 'exit') code = event.code;
+          }
+          return code;
+        };
+        // A sandbox that cannot start also exits non-zero and writes nothing, so the denial below proves
+        // enforcement only once the same command has run inside the sandbox and written where it may.
+        const inside = join(allowed, 'landed');
+        expect(await touch(inside)).toBe(0);
+        expect(existsSync(inside)).toBe(true);
+        const target = join(outside, 'landed');
+        const code = await touch(target);
         expect(code).toBeDefined();
         expect(code).not.toBe(0);
         expect(existsSync(target)).toBe(false);

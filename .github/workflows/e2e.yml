@@ -16,6 +16,7 @@ concurrency:
 jobs:
   sandbox:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       MINITUI_NODE_RUNTIME: node-22
       RUN_E2E: '1'

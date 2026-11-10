@@ -8,11 +8,14 @@ import { describe, expect, it } from 'vitest';
 // patch text through the real validation loop, then mounts through the real Ink renderer, and the frame
 // carries none of the sequences. The frame does carry the renderer's own styling (the focused button is
 // drawn in inverse video), so the rows look for the injected sequences by name, never for any escape.
+// Ink drops cursor and screen sequences by itself but keeps OSC and colour or style sequences, so the
+// clipboard write and the blink are the payloads only minitui's own strip removes.
 const ESC = '\u001b';
 const BEL = '\u0007';
 const CLIPBOARD_WRITE = `${ESC}]52;c;aGk=${BEL}`;
 const CLEAR_SCREEN = `${ESC}[2J`;
 const PASTE_START = `${ESC}[200~`;
+const BLINK = `${ESC}[5m`;
 
 const capabilities: CapabilityProvider = {
   listCodecs: () => Promise.resolve(['h264']),
@@ -44,9 +47,11 @@ const injected: MiniAppSpec = {
     },
     note: {
       type: 'Text',
-      props: { text: `Ready${CLIPBOARD_WRITE} now${CLEAR_SCREEN} then${PASTE_START}pasted` },
+      props: {
+        text: `Ready${CLIPBOARD_WRITE} now${CLEAR_SCREEN} then${PASTE_START}pasted${BLINK}!`,
+      },
     },
-    merge: { ...mergeButton, props: { label: `Merge${CLEAR_SCREEN}` } },
+    merge: { ...mergeButton, props: { label: `Merge${CLEAR_SCREEN}${BLINK}` } },
   },
 };
 
@@ -70,10 +75,11 @@ describe('escape sequences from the model never reach the frame', () => {
       expect(frame).toContain('Ready');
       expect(frame).toContain('pasted');
       expect(frame).toContain('Merge');
-      for (const sequence of [CLIPBOARD_WRITE, ']52;', CLEAR_SCREEN, PASTE_START]) {
+      for (const sequence of [CLIPBOARD_WRITE, ']52;', CLEAR_SCREEN, PASTE_START, BLINK]) {
         expect(frame).not.toContain(sequence);
       }
       expect(host.frames().join('')).not.toContain(']52;');
+      expect(host.frames().join('')).not.toContain(BLINK);
     } finally {
       host.unmount();
     }
