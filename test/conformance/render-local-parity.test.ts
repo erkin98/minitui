@@ -1,44 +1,16 @@
 import { videoMergeCatalog } from '@minitui/catalog';
-import type {
-  ActionDispatcher,
-  DispatchContext,
-  RenderHandle,
-  RendererPort,
-} from '@minitui/renderer-core';
+import type { ActionDispatcher, DispatchContext } from '@minitui/renderer-core';
 import { RENDER_LOCAL_ALLOWLIST, createInkBinding } from '@minitui/renderer-ink';
 import { createAppHost, type HostSession } from '@minitui/runtime-host';
 import { MERGE_SPEC } from '@minitui/test-kit';
 import { createDataStore } from '@minitui/transport';
 import type { ActionKind, JsonValue } from '@minitui/types';
 import { describe, expect, it } from 'vitest';
+import { capturingRenderer } from '../security/support/host-over-exec.js';
 
 // The host cannot import renderer-ink, so it keeps its own list of the actions a renderer runs locally.
 // These rows keep the two lists equal: every name the renderer runs locally must write state through
 // the host, and a name outside the host's list is refused even when the catalog calls it local.
-
-// A renderer that draws nothing and keeps the dispatcher the host hands it, so a row can raise an
-// action exactly as a widget would.
-function capturingRenderer(): { renderer: RendererPort; dispatcher: () => ActionDispatcher } {
-  let captured: ActionDispatcher | undefined;
-  const handle: RenderHandle = {
-    update: () => undefined,
-    applyStatePatch: () => undefined,
-    onAction: () => () => undefined,
-    unmount: () => undefined,
-  };
-  return {
-    renderer: {
-      mount: (args) => {
-        captured = args.dispatcher;
-        return Promise.resolve(handle);
-      },
-    },
-    dispatcher: () => {
-      if (captured === undefined) throw new Error('the host never mounted the renderer');
-      return captured;
-    },
-  };
-}
 
 // The exec side is never reached by a local action; a call here fails the row.
 const noExec: ActionDispatcher = {
