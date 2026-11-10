@@ -10,7 +10,7 @@ convention that gets broken twice is a candidate for a gate.
 
 ## Packages
 
-Thirteen `@minitui/*` packages and one private app. Ten packages and the app exist today.
+Thirteen `@minitui/*` packages and one private app. Eleven packages and the app exist today.
 
 <!-- prettier-ignore -->
 |Package|Job|May import|
@@ -25,10 +25,10 @@ Thirteen `@minitui/*` packages and one private app. Ten packages and the app exi
 |`exec`|Shell parsing, the permission engine, the OS sandbox, the local runner and the action router|types, renderer-core, sanitizer|
 |`renderer-ink`|The Ink implementation of the renderer port|types, renderer-core, catalog, sanitizer|
 |`runtime-host`|Mounts a validated spec over the one shared store, routes the actions a renderer raises, relaunch re-bind of typed parameters|types, transport, spec, renderer-core|
+|`test-kit` (private)|The shared test toolkit: a scripted model provider, a permission engine double, a tool registry, a headless host over the real Ink mount, golden helpers and the canonical merge fixtures. Never in a product bundle|types, spec, renderer-core, renderer-ink; its own tests also the catalog, `react` and `ink`|
 |`apps/cli` (private app)|The `minitui` bin and the composition root: the one place that names concrete implementations and wires them into a host; boot detection, terminal restore and the log file|every runtime package, not test-kit or integration-tests|
 
-Not built yet: `library` (types, spec), `test-kit` (types, spec, renderer-core, renderer-ink) and `integration-tests`
-(may import everything).
+Not built yet: `library` (types, spec) and `integration-tests` (may import everything).
 
 The table follows `config/eslint-boundaries.js`. If they disagree, the config wins and this table is wrong.
 
@@ -36,7 +36,8 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 
 1. **Renderer swap boundary.** `renderer-core` is the port, `renderer-ink` the implementation. Only `renderer-ink` and
    `cli` may import `ink`, `react` or `@json-render/ink`, so the terminal UI can be replaced without touching the rest.
-   Enforced: `eslint.config.js` (restricted imports).
+   The one exception is test-kit's own tests, which may import `react` and `ink` by exact name to drive small Ink
+   fixtures; its source may not. Enforced: `eslint.config.js` (restricted imports).
 2. **No-code catalog seam.** The agent can only produce specs whose every element and action is in the catalog.
    Nothing it writes is executed as code. Enforced: spec and catalog validation and their tests.
 3. **Exec moat.** Every command passes the host's own parse, the deny-first permission engine and the sandbox. Only
@@ -80,7 +81,8 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
    Convention.
 6. **Tests use real implementations.** A test double is a real implementation of the port, injected through the
    production seam. No `vi.mock`, no `vi.spyOn`, no `@ts-ignore`, no `as never` and no cast through `unknown`. Enforced:
-   the test-file rules in `eslint.config.js` and `config/eslint-policy.js`, counted by `scripts/lint-test-policy.mjs`.
+   the test-file rules in `eslint.config.js` and `config/eslint-policy.js`, which also cover test-kit's source (the
+   doubles other packages' tests import), counted by `scripts/lint-test-policy.mjs`.
    Any other cast that hides a type gap is caught in review.
 7. **A gate must be able to fail.** Each lint rule that guards a boundary has a planted violation that must be
    reported. Enforced: `scripts/check-eslint-policy-fixtures.mjs`.

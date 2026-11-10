@@ -4,7 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { createVitest } from 'vitest/node';
-import { CAST_DIRECTIVE_ALLOWLIST, TEST_FILE_GLOBS } from '../config/eslint-policy.js';
+import {
+  CAST_DIRECTIVE_ALLOWLIST,
+  TEST_FILE_GLOBS,
+  TEST_KIT_SRC_GLOBS,
+} from '../config/eslint-policy.js';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -35,7 +39,12 @@ try {
 }
 if (!guardFired) throw new Error('lint:test-policy zero-file guard did not fire');
 
-const { results, files: lintedFiles } = await lintOrDie(TEST_FILE_GLOBS);
+const testFiles = await lintOrDie(TEST_FILE_GLOBS);
+// The test toolkit's source is linted in a call of its own, so its zero-match guard is its own: a glob
+// that stopped matching it cannot hide behind the test files the first call found.
+const testKitSource = await lintOrDie(TEST_KIT_SRC_GLOBS);
+const results = [...testFiles.results, ...testKitSource.results];
+const lintedFiles = new Set([...testFiles.files, ...testKitSource.files]);
 
 const formatter = await eslint.loadFormatter('stylish');
 const output = await formatter.format(results);

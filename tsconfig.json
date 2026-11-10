@@ -15,6 +15,7 @@
     { "path": "./packages/renderer-ink" },
     { "path": "./packages/exec" },
     { "path": "./packages/runtime-host" },
+    { "path": "./packages/test-kit" },
     { "path": "./apps/cli" }
   ]
 }

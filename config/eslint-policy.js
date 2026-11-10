@@ -639,6 +639,11 @@ export const TEST_FILE_GLOBS = [
   `**/__tests__/**/*.${SOURCE_EXT}`,
 ];
 
+// The test toolkit's source is test code shipped to other packages' tests: its doubles are held to the
+// same zero-mocks and cast rules as a test file. It keeps the typed lint lane, so it is not part of
+// TEST_FILE_GLOBS (that list also feeds the untyped lane).
+export const TEST_KIT_SRC_GLOBS = [`packages/test-kit/src/**/*.${SOURCE_EXT}`];
+
 // The test rows that may cast to never or through unknown, counted per file. Each row carries
 // `// eslint-disable-next-line no-restricted-syntax -- <reason>` on the line above it;
 // scripts/lint-test-policy.mjs fails when a file holds more or fewer such directives than listed.

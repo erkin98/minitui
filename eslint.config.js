@@ -3,7 +3,12 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
-import { policyPlugin, SOURCE_EXT, TEST_FILE_GLOBS } from './config/eslint-policy.js';
+import {
+  policyPlugin,
+  SOURCE_EXT,
+  TEST_FILE_GLOBS,
+  TEST_KIT_SRC_GLOBS,
+} from './config/eslint-policy.js';
 
 const noDynamicFunctionGlobal = [
   'error',
@@ -167,6 +172,29 @@ const rendererInkImportRule = {
     {
       paths: [...EXEC_MOAT_IMPORT_PATHS, ...AI_SDK_IMPORT_PATHS],
       patterns: [...EXEC_MOAT_IMPORT_PATTERNS, ...AI_SDK_IMPORT_PATTERNS],
+    },
+  ],
+};
+
+// The test toolkit's own tests render small React and Ink fixtures through ink-testing-library. Only
+// the two roots `react` and `ink` are re-permitted there: react-dom, every React and Ink subpath and the
+// Ink renderer binding stay walled, with the exec moat and the model SDK. The package's source gets no
+// re-permit at all.
+const TEST_KIT_REACT_INK_ROOTS = new Set(['react', 'ink']);
+const testKitTestImportRule = {
+  'no-restricted-imports': [
+    'error',
+    {
+      paths: [
+        ...EXEC_MOAT_IMPORT_PATHS,
+        ...AI_SDK_IMPORT_PATHS,
+        ...REACT_INK_IMPORT_PATHS.filter((entry) => !TEST_KIT_REACT_INK_ROOTS.has(entry.name)),
+      ],
+      patterns: [
+        ...EXEC_MOAT_IMPORT_PATTERNS,
+        ...AI_SDK_IMPORT_PATTERNS,
+        ...REACT_INK_IMPORT_PATTERNS,
+      ],
     },
   ],
 };
@@ -408,6 +436,15 @@ export default tseslint.config(
       'minitui/no-restricted-capability-load': ['error', { allowFamilies: ['react-ink'] }],
     },
   },
+  {
+    // The test toolkit's own tests: `react` and `ink` by exact name, never the whole react-ink family
+    // (it also holds react-dom and the Ink renderer binding).
+    files: [`packages/test-kit/test/**/*.${SOURCE_EXT}`],
+    rules: {
+      ...testKitTestImportRule,
+      'minitui/no-restricted-capability-load': ['error', { allow: ['react', 'ink'] }],
+    },
+  },
   // (a) @minitui/exec is the ONE package permitted the exec-moat capabilities (child_process / the
   // OS sandbox runtime / the MCP client). AFTER the wide capability block (so it wins), DROP only the
   // exec-moat import bans while KEEPING the model SDK and React/Ink banned — exec is neither the agent
@@ -535,11 +572,11 @@ export default tseslint.config(
     // only the vitest import arm applies, under its own rule id so the test block below keeps the full
     // rule and is not inheriting a narrower option set.
     files: [`**/*.${SOURCE_EXT}`],
-    ignores: TEST_FILE_GLOBS,
+    ignores: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
     rules: { 'minitui/no-vitest-replacement-import': 'error' },
   },
   {
-    files: TEST_FILE_GLOBS,
+    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
     rules: {
       'minitui/no-vitest-replacement-api': 'error',
       'no-eval': 'error',
@@ -603,11 +640,17 @@ export default tseslint.config(
     },
   },
   {
+    // A disable directive in the test toolkit's source is a counted, reasoned exception: a stale one is
+    // an error, as on the typed test lane.
+    files: TEST_KIT_SRC_GLOBS,
+    linterOptions: { reportUnusedDisableDirectives: 'error' },
+  },
+  {
     // A cast to never or through unknown hides a type gap. Allowed only at the rows counted in
     // CAST_DIRECTIVE_ALLOWLIST (config/eslint-policy.js), each with a reasoned disable directive.
     // The exec-wall fixtures and the exec source tree keep the selectors of the exec wall, which this
     // block would replace.
-    files: TEST_FILE_GLOBS,
+    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
     ignores: ['test/eslint-boundary-fixture/exec-walls/**', 'packages/exec/src/**'],
     rules: {
       'no-restricted-syntax': [
