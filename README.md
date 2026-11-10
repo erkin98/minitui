@@ -115,7 +115,7 @@ A pnpm and Turborepo monorepo. Dependencies point one way, and the build enforce
 | `@minitui/library` | Saving and relaunching kept apps. | planned |
 | `@minitui/cli` | The `minitui` command. The MCP wiring is planned. | partly built |
 | `@minitui/test-kit` | Shared test harnesses: real port doubles, a headless host, golden helpers and the merge fixtures. Private. | built |
-| `@minitui/integration-tests` | End-to-end suites across all packages. | planned |
+| `@minitui/integration-tests` | The suites that cross packages: the merge spine end to end, five security files, the render-local parity. Private. | built |
 
 Two seams and one moat:
 

@@ -34,6 +34,7 @@ const src = (pkg) => `packages/${pkg}/src/index.ts`;
 const tst = (pkg) => `packages/${pkg}/test/__witness__.test.ts`;
 const CLI_TEST = 'apps/cli/test/__witness__.test.tsx';
 const CLI_SRC = 'apps/cli/src/index.ts';
+const ROOT_TEST = 'test/security/__witness__.test.ts';
 const TEST_KIT_TEST = tst('test-kit');
 const EXEC_PERMISSION = 'packages/exec/src/permission/index.ts';
 const EXEC_SANDBOX = 'packages/exec/src/sandbox/platform.ts';
@@ -150,6 +151,16 @@ const OWNER_ROWS = [
     CLI_TEST,
     `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
     [DAG],
+  ],
+  // The integration package's suites sit under the root test/ tree, inside the same walls.
+  ['test/security: static child_process walled', ROOT_TEST, SPAWN, [IMP]],
+  ['test/security: static ai walled', ROOT_TEST, AI, [IMP]],
+  ['test/security: static react walled', ROOT_TEST, REACT, [IMP]],
+  [
+    'test/security: the vitest replacement API walled',
+    ROOT_TEST,
+    `import { vi } from 'vitest';\nvi.fn();\n`,
+    ['minitui/no-vitest-replacement-api'],
   ],
   ['apps/cli: static child_process walled', CLI_SRC, SPAWN, [IMP]],
   ['apps/cli: static ai walled (src)', CLI_SRC, AI, [IMP]],

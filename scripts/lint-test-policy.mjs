@@ -170,6 +170,15 @@ if (projects.length < floor) {
     `lint:test-policy resolved ${projects.length} vitest projects, at least ${floor} expected (one per packages/*/vitest.config.ts plus root and release-scripts): a project went missing`,
   );
 }
+// The integration package's suites run in every test run: once its config exists, its project must resolve.
+if (
+  existsSync(join(root, 'test', 'vitest.config.ts')) &&
+  !projects.some((project) => project.name === 'integration-tests')
+) {
+  throw new Error(
+    'lint:test-policy: test/vitest.config.ts exists but no vitest project named integration-tests resolved',
+  );
+}
 const offenders = projects.filter((project) => project.globals || project.includeSource > 0);
 if (offenders.length > 0) {
   const named = offenders

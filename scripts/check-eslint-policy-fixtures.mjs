@@ -417,6 +417,24 @@ function enumerationProblems(declaration, banned) {
   );
 }
 
+// The integration package's suites are on the typed lane: a type-aware rule is on for them and their own
+// tsconfig is in the parser's project list. A path is enough; the file need not exist.
+const integrationConfig = await eslint.calculateConfigForFile(
+  join(root, 'test/security/typed-lane.test.ts'),
+);
+const floatingRule = integrationConfig.rules?.['@typescript-eslint/no-floating-promises'];
+const floatingSeverity = Array.isArray(floatingRule) ? floatingRule[0] : floatingRule;
+const integrationProject = integrationConfig.languageOptions?.parserOptions?.project;
+if (
+  !(floatingSeverity === 2 || floatingSeverity === 'error') ||
+  !(Array.isArray(integrationProject) && integrationProject.includes('./test/tsconfig.json'))
+) {
+  console.error(
+    'test/security/ is not on the typed lint lane: no-floating-promises is off or ./test/tsconfig.json is not a parser project',
+  );
+  failed = true;
+}
+
 const sdkRequire = createRequire(join(root, 'packages/agent-core/package.json'));
 const sdkDeclaration = readFileSync(sdkRequire.resolve('ai').replace(/\.m?js$/, '.d.ts'), 'utf8');
 const agentCoreConfig = await eslint.calculateConfigForFile(

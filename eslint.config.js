@@ -380,11 +380,11 @@ export default tseslint.config(
     //                 each package's DAG zone are proven by the witness rows in
     //                 scripts/check-eslint-policy-fixtures.mjs, which lint code against a
     //                 real file of every package: removing one turns that registry red.
-    //   test/**     — currently redundant: real package tests match the packages/** arm, and
-    //                 the top-level test/ tree holds only the ignored boundary-fixture dir.
-    //                 Kept as the SOLE no-restricted-imports / no-restricted-capability-load
-    //                 cover for any future top-level test file — the later test-file block
-    //                 carries only eval / globals / vitest-replacement-api, not those two.
+    //   test/**     — the integration package's suites under the root test/ tree (the
+    //                 boundary-fixture dir stays ignored), proven by the test/security witness
+    //                 rows. The later test-file block carries only eval / globals /
+    //                 vitest-replacement-api, so this arm is their only no-restricted-imports /
+    //                 no-restricted-capability-load cover.
     files: [`packages/**/*.${SOURCE_EXT}`, `apps/**/*.${SOURCE_EXT}`, `test/**/*.${SOURCE_EXT}`],
     ignores: ['packages/*/scripts/**', 'scripts/**', 'test/eslint-boundary-fixture/**'],
     rules: execMoatCapabilityRules,
@@ -603,20 +603,32 @@ export default tseslint.config(
       '**/vitest.config.ts',
       ...TEST_FILE_GLOBS,
     ],
-    ignores: ['packages/*/test/**/*.{ts,tsx}', 'apps/*/test/**/*.{ts,tsx}'],
+    ignores: [
+      'packages/*/test/**/*.{ts,tsx}',
+      'apps/*/test/**/*.{ts,tsx}',
+      'test/{e2e,security,conformance}/**/*.{ts,tsx}',
+    ],
     ...tseslint.configs.disableTypeChecked,
   },
   // The virtual witness paths name no file: they stay on the syntactic lane wherever they sit.
   { files: ['**/__witness__.test.{ts,tsx}'], ...tseslint.configs.disableTypeChecked },
   {
     // Package and app tests are type-checked through their package's tsconfig.test.json (every package
-    // has one). Five rule families are off for tests by name: see the reason beside each.
-    files: ['packages/*/test/**/*.{ts,tsx}', 'apps/*/test/**/*.{ts,tsx}'],
+    // has one); the integration suites under the root test/ tree through test/tsconfig.json. Five rule families are off for tests by name: see the reason beside each.
+    files: [
+      'packages/*/test/**/*.{ts,tsx}',
+      'apps/*/test/**/*.{ts,tsx}',
+      'test/{e2e,security,conformance}/**/*.{ts,tsx}',
+    ],
     ignores: ['**/__witness__.test.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
         projectService: false,
-        project: ['./packages/*/tsconfig.test.json', './apps/*/tsconfig.test.json'],
+        project: [
+          './packages/*/tsconfig.test.json',
+          './apps/*/tsconfig.test.json',
+          './test/tsconfig.json',
+        ],
         tsconfigRootDir: import.meta.dirname,
       },
     },
