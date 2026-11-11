@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppSpecSchema } from './spec.js';
-import { JsonValueSchema } from './pointer.js';
+import { JsonObjectSchema } from './pointer.js';
 
 // Integer schema version with a one-step migration loader downstream.
 export const CURRENT_SCHEMA_VERSION = 1;
@@ -47,12 +47,13 @@ export const ManifestSchema = z
   .readonly();
 export type Manifest = z.infer<typeof ManifestSchema>;
 
-// The three on-disk files bundled: manifest.json + spec.json + state.json.
+// The three on-disk files bundled: manifest.json + spec.json + state.json. The state is a JSON object,
+// as every state document is.
 export const KeptAppSchema = z
   .object({
     manifest: ManifestSchema,
     spec: AppSpecSchema,
-    state: JsonValueSchema,
+    state: JsonObjectSchema,
   })
   .readonly();
 export type KeptApp = z.infer<typeof KeptAppSchema>;

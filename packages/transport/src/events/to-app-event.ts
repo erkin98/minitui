@@ -59,7 +59,8 @@ function toVisibility(
   return {
     kind: 'visibility',
     note: typeof payload === 'string' ? payload : safeStringify(payload),
-    visClass: isVisClass(cls) ? cls : 'modelVisible',
+    // An event that names no known class stays local: it is never shown to the model by default.
+    visClass: isVisClass(cls) ? cls : 'localOnly',
   };
 }
 

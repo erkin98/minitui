@@ -1,10 +1,14 @@
 /* global console, process */
 import { ESLint } from 'eslint';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createVitest } from 'vitest/node';
-import { TEST_FILE_GLOBS } from '../config/eslint-policy.js';
+import {
+  CAST_DIRECTIVE_ALLOWLIST,
+  TEST_FILE_GLOBS,
+  TEST_KIT_SRC_GLOBS,
+} from '../config/eslint-policy.js';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -35,13 +39,46 @@ try {
 }
 if (!guardFired) throw new Error('lint:test-policy zero-file guard did not fire');
 
-const { results, files: lintedFiles } = await lintOrDie(TEST_FILE_GLOBS);
+const testFiles = await lintOrDie(TEST_FILE_GLOBS);
+// The test toolkit's source is linted in a call of its own, so its zero-match guard is its own: a glob
+// that stopped matching it cannot hide behind the test files the first call found.
+const testKitSource = await lintOrDie(TEST_KIT_SRC_GLOBS);
+const results = [...testFiles.results, ...testKitSource.results];
+const lintedFiles = new Set([...testFiles.files, ...testKitSource.files]);
 
 const formatter = await eslint.loadFormatter('stylish');
 const output = await formatter.format(results);
 if (output.length > 0) console.error(output);
 
 let failed = results.reduce((total, result) => total + result.errorCount, 0) > 0;
+
+// The allowlisted cast rows: one reasoned directive per row, counted per file.
+const CAST_DIRECTIVE = /eslint-disable(?:-next-line|-line)?[^\n]*\bno-restricted-syntax\b/g;
+const countCastDirectives = (text) => text.match(CAST_DIRECTIVE)?.length ?? 0;
+// Positive control: a planted directive counts as one and a clean line as none.
+if (
+  countCastDirectives('// eslint-disable-next-line no-restricted-syntax -- x\nconst a = 1;\n') !==
+    1 ||
+  countCastDirectives('const a = 1;\n') !== 0
+) {
+  throw new Error('lint:test-policy cast-directive count is vacuous');
+}
+const castCounts = new Map();
+for (const file of lintedFiles) {
+  const count = countCastDirectives(readFileSync(file, 'utf8'));
+  if (count > 0) castCounts.set(relative(root, file).replaceAll('\\', '/'), count);
+}
+const castFiles = new Set([...castCounts.keys(), ...Object.keys(CAST_DIRECTIVE_ALLOWLIST)]);
+for (const file of castFiles) {
+  const want = CAST_DIRECTIVE_ALLOWLIST[file] ?? 0;
+  const got = castCounts.get(file) ?? 0;
+  if (want !== got) {
+    console.error(
+      `lint:test-policy: ${file} holds ${got} cast directives, the allowlist says ${want}`,
+    );
+    failed = true;
+  }
+}
 
 // A delegating global wrapper that restores in finally is instrumentation, not a
 // replacement double, so it is permitted.
@@ -131,6 +168,13 @@ const floor = packageConfigs + 2;
 if (projects.length < floor) {
   throw new Error(
     `lint:test-policy resolved ${projects.length} vitest projects, at least ${floor} expected (one per packages/*/vitest.config.ts plus root and release-scripts): a project went missing`,
+  );
+}
+// The integration package's suites run in every test run, so its project must always resolve: a deleted or
+// renamed test/vitest.config.ts would otherwise drop every cross-package suite without a sound.
+if (!projects.some((project) => project.name === 'integration-tests')) {
+  throw new Error(
+    'lint:test-policy: no vitest project named integration-tests resolved (test/vitest.config.ts missing or renamed?)',
   );
 }
 const offenders = projects.filter((project) => project.globals || project.includeSource > 0);

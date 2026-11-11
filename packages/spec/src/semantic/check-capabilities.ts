@@ -83,7 +83,9 @@ export async function checkCapabilities(
   ]);
   const live: Record<CapProp, ReadonlySet<string>> = {
     encoder: new Set(encoders),
-    codec: new Set(codecs),
+    // `copy` is ffmpeg's built-in stream copy: `-codecs` never lists it, and the merge runs
+    // `-c:v copy -c:a copy`. Only the codec slot gets it; an encoder or filter named `copy` is checked.
+    codec: new Set([...codecs, 'copy']),
     filter: new Set(filters),
   };
   const issues: SemanticIssue[] = [];

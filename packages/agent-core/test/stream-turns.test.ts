@@ -6,72 +6,32 @@ import { createConversation } from '../src/session/conversation.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import { fixedClock, type ToolDispatchPort, type ToolCallResult } from '../src/ports/index.js';
 import type { ModelProvider } from '../src/provider/provider-port.js';
+import { streamText, NoSuchToolError } from 'ai';
+import {
+  runTool,
+  toolCallsThenFinish,
+  partsStream,
+  type ModelStreamPart,
+  type StreamOptions,
+  type StreamTextFn,
+} from './helpers/fake-stream.js';
+import { scriptedModel, toolCallTurn } from './helpers/sdk-model.js';
 
-// Fake streamText that (1) calls a registered tool's execute, then (2) emits a real fullStream.
-// Mirrors the real result shape: fullStream is an async-iterable PROPERTY, not a method.
+// A stream function that (1) runs a registered tool the way the SDK does, then (2) yields the given parts.
 function fakeStreamText(opts: {
   callTool?: { name: string; input: unknown };
-  parts: Array<Record<string, unknown>>;
-}) {
-  return ((args: {
-    tools?: Record<
-      string,
-      { execute: (i: unknown, ctx: { toolCallId: string }) => Promise<unknown> }
-    >;
-  }) => {
-    const ran: Promise<unknown>[] = [];
-    if (opts.callTool && args.tools?.[opts.callTool.name]) {
-      // a failed execute THROWS by design; the real SDK catches it (tool-error) — mirror that here
-      ran.push(
-        args.tools[opts.callTool.name]!.execute(opts.callTool.input, { toolCallId: 't1' }).catch(
-          () => undefined,
-        ),
-      );
-    }
-    return {
-      fullStream: (async function* () {
-        await Promise.all(ran);
-        for (const p of opts.parts) yield p;
-      })(),
-    };
-  }) as unknown as typeof import('ai').streamText;
-}
-
-// A fake streamText that ACTUALLY consults the passed stopWhen conditions across simulated steps,
-// proving the doom-loop ceiling is wired into runTurns (not just unit-tested in isolation).
-// Synchronous return (like the real streamText); the simulated loop runs lazily inside fullStream.
-function loopingStreamText(opts: {
-  repeatCall: { name: string; input: unknown };
-  maxSimSteps: number;
-  onDone: (sim: { simulatedSteps: number; stopped: boolean }) => void;
-}) {
-  return ((args: {
-    tools?: Record<
-      string,
-      { execute: (i: unknown, ctx: { toolCallId: string }) => Promise<unknown> }
-    >;
-    stopWhen?: ReadonlyArray<(s: { steps: ReadonlyArray<unknown> }) => boolean | Promise<boolean>>;
-  }) => ({
+  parts: readonly ModelStreamPart[];
+}): StreamTextFn {
+  return (options) => ({
     fullStream: (async function* () {
-      const steps: Array<{ toolCalls: Array<{ toolName: string; input: unknown }> }> = [];
-      let stopped = false;
-      for (let i = 0; i < opts.maxSimSteps; i += 1) {
-        await args.tools?.[opts.repeatCall.name]?.execute(opts.repeatCall.input, {
-          toolCallId: `t${i}`,
-        });
-        steps.push({
-          toolCalls: [{ toolName: opts.repeatCall.name, input: opts.repeatCall.input }],
-        });
-        const results = await Promise.all((args.stopWhen ?? []).map((c) => c({ steps })));
-        if (results.some(Boolean)) {
-          stopped = true;
-          break;
-        }
+      const call = opts.callTool;
+      // a failed execute THROWS by design; runTool settles it the way the SDK does (a tool-error)
+      if (call !== undefined && options.tools?.[call.name] !== undefined) {
+        await runTool(options, call.name, call.input, 't1');
       }
-      opts.onDone({ simulatedSteps: steps.length, stopped });
-      yield { type: 'finish', finishReason: 'stop' };
+      for (const p of opts.parts) yield p;
     })(),
-  })) as unknown as typeof import('ai').streamText;
+  });
 }
 
 const dispatch: ToolDispatchPort = {
@@ -85,6 +45,22 @@ const dispatch: ToolDispatchPort = {
 };
 
 const tools = [{ name: 'ffmpeg', description: 'merge', inputSchema: z.object({ a: z.number() }) }];
+
+// What the SDK hands the repair function for a call to a tool it does not know.
+function repairArgs(toolCallId: string, toolName: string, input: string) {
+  return {
+    system: undefined,
+    messages: [],
+    tools: {},
+    inputSchema: () => ({}),
+    toolCall: { type: 'tool-call' as const, toolCallId, toolName, input },
+    error: new NoSuchToolError({
+      toolName,
+      availableTools: ['ffmpeg'],
+      message: `no such tool: ${toolName}`,
+    }),
+  };
+}
 
 describe('stream-turns', () => {
   it('maps fullStream parts to MinituiEvents in order, RUN_FINISHED carries the real threadId+runId', async () => {
@@ -174,36 +150,7 @@ describe('stream-turns', () => {
         isError: true,
       }),
     };
-    const sdkLike = ((args: {
-      tools?: Record<
-        string,
-        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-      >;
-    }) => ({
-      fullStream: (async function* () {
-        const parts: Array<Record<string, unknown>> = [];
-        try {
-          const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't1' });
-          parts.push({
-            type: 'tool-result',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            output,
-          });
-        } catch (error) {
-          parts.push({
-            type: 'tool-error',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            error,
-          });
-        }
-        parts.push({ type: 'finish', finishReason: 'stop' });
-        for (const p of parts) yield p;
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    const sdkLike = toolCallsThenFinish([{ name: 'ffmpeg', input: { a: 1 }, toolCallId: 't1' }]);
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -241,36 +188,7 @@ describe('stream-turns', () => {
         denied: true,
       }),
     };
-    const sdkLike = ((args: {
-      tools?: Record<
-        string,
-        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-      >;
-    }) => ({
-      fullStream: (async function* () {
-        const parts: Array<Record<string, unknown>> = [];
-        try {
-          const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't1' });
-          parts.push({
-            type: 'tool-result',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            output,
-          });
-        } catch (error) {
-          parts.push({
-            type: 'tool-error',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            error,
-          });
-        }
-        parts.push({ type: 'finish', finishReason: 'stop' });
-        for (const p of parts) yield p;
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    const sdkLike = toolCallsThenFinish([{ name: 'ffmpeg', input: { a: 1 }, toolCallId: 't1' }]);
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -320,37 +238,10 @@ describe('stream-turns', () => {
               isError: false,
             },
     };
-    const sdkLike = ((args: {
-      tools?: Record<
-        string,
-        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-      >;
-    }) => ({
-      fullStream: (async function* () {
-        const parts: Array<Record<string, unknown>> = [];
-        const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't-ok' });
-        parts.push({
-          type: 'tool-result',
-          toolCallId: 't-ok',
-          toolName: 'ffmpeg',
-          input: { a: 1 },
-          output,
-        });
-        try {
-          await args.tools?.ffmpeg?.execute({ fail: true }, { toolCallId: 't-err' });
-        } catch (error) {
-          parts.push({
-            type: 'tool-error',
-            toolCallId: 't-err',
-            toolName: 'ffmpeg',
-            input: { fail: true },
-            error,
-          });
-        }
-        parts.push({ type: 'finish', finishReason: 'stop' });
-        for (const p of parts) yield p;
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    const sdkLike = toolCallsThenFinish([
+      { name: 'ffmpeg', input: { a: 1 }, toolCallId: 't-ok' },
+      { name: 'ffmpeg', input: { fail: true }, toolCallId: 't-err' },
+    ]);
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -386,37 +277,12 @@ describe('stream-turns', () => {
     // The SDK fake captures the error execute rethrew (the model re-feed exit) AND surfaces it as a
     // tool-error part (the observation exit), mirroring the real SDK's tool-error path.
     const caught: unknown[] = [];
-    const sdkLike = ((args: {
-      tools?: Record<
-        string,
-        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-      >;
-    }) => ({
-      fullStream: (async function* () {
-        const parts: Array<Record<string, unknown>> = [];
-        try {
-          const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't1' });
-          parts.push({
-            type: 'tool-result',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            output,
-          });
-        } catch (error) {
-          caught.push(error);
-          parts.push({
-            type: 'tool-error',
-            toolCallId: 't1',
-            toolName: 'ffmpeg',
-            input: { a: 1 },
-            error,
-          });
-        }
-        parts.push({ type: 'finish', finishReason: 'stop' });
-        for (const p of parts) yield p;
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    const sdkLike = toolCallsThenFinish(
+      [{ name: 'ffmpeg', input: { a: 1 }, toolCallId: 't1' }],
+      (outcome) => {
+        if ('error' in outcome) caught.push(outcome.error);
+      },
+    );
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -464,19 +330,17 @@ describe('stream-turns', () => {
         isError: false,
       }),
     };
-    const sdkLike = (() => ({
-      fullStream: (async function* () {
-        // A tool-result straight from the provider — no execute call, so it never crossed the chokepoint.
-        yield {
-          type: 'tool-result',
-          toolCallId: 't1',
-          toolName: 'serverTool',
-          input: {},
-          output: `leaked ${secret}`,
-        };
-        yield { type: 'finish', finishReason: 'stop' };
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    // A tool-result straight from the provider — no execute call, so it never crossed the chokepoint.
+    const sdkLike = partsStream([
+      {
+        type: 'tool-result',
+        toolCallId: 't1',
+        toolName: 'serverTool',
+        input: {},
+        output: `leaked ${secret}`,
+      },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -512,24 +376,7 @@ describe('stream-turns', () => {
         isError: false,
       }),
     };
-    const sdkLike = ((args: {
-      tools?: Record<
-        string,
-        { execute: (i: unknown, c: { toolCallId: string }) => Promise<unknown> }
-      >;
-    }) => ({
-      fullStream: (async function* () {
-        const output = await args.tools?.ffmpeg?.execute({ a: 1 }, { toolCallId: 't-ok' });
-        yield {
-          type: 'tool-result',
-          toolCallId: 't-ok',
-          toolName: 'ffmpeg',
-          input: { a: 1 },
-          output,
-        };
-        yield { type: 'finish', finishReason: 'stop' };
-      })(),
-    })) as unknown as typeof import('ai').streamText;
+    const sdkLike = toolCallsThenFinish([{ name: 'ffmpeg', input: { a: 1 }, toolCallId: 't-ok' }]);
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -555,27 +402,23 @@ describe('stream-turns', () => {
   });
 
   it('halts the wired SDK loop when repeatedToolCallDetector fires (doom-loop exit)', async () => {
+    // The installed streamText runs the loop: the model asks for the same call twenty times, and the
+    // repeated-call detector (three in a row) must stop the loop before the step ceiling.
     const queue = createAsyncEventQueue<MinituiEvent>();
-    let captured: { simulatedSteps: number; stopped: boolean } | undefined;
-    const impl = loopingStreamText({
-      repeatCall: { name: 'ffmpeg', input: { a: 1 } },
-      maxSimSteps: 20,
-      onDone: (sim) => (captured = sim),
-    });
+    const scripted = scriptedModel(
+      Array.from({ length: 20 }, (_, i) => ({ chunks: toolCallTurn(`t${i}`, 'ffmpeg', { a: 1 }) })),
+    );
     const done = runTurns({
-      conversation: createConversation(),
+      conversation: createConversation([{ role: 'user', content: 'merge' }]),
       threadId: 'tid',
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: impl, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: streamText, toolDispatch: dispatch, tools, model: scripted.model },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    // repeatedToolCallDetector(default 3) must fire BEFORE the 20-step ceiling.
-    expect(captured?.stopped).toBe(true);
-    expect(captured?.simulatedSteps).toBeLessThan(20);
-    expect(captured?.simulatedSteps).toBe(3);
+    expect(scripted.calls).toHaveLength(3);
   });
 
   it('pushes RUN_ERROR (not throw) when the stream yields an error part', async () => {
@@ -601,13 +444,13 @@ describe('stream-turns', () => {
 
   it('idle-timeout: a stalled fullStream surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
-    const stalling = (() => ({
+    const stalling: StreamTextFn = () => ({
       fullStream: (async function* () {
         yield { type: 'text-delta', text: 'thinking' };
         await new Promise<void>(() => {}); // silent forever — the idle deadline must break this
         yield { type: 'finish', finishReason: 'stop' };
       })(),
-    })) as unknown as typeof import('ai').streamText;
+    });
     const done = runTurns({
       conversation: createConversation(),
       threadId: 'tid',
@@ -633,12 +476,12 @@ describe('stream-turns', () => {
 
   it('truncated stream (ends without a finish part) surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
-    const truncated = (() => ({
+    const truncated: StreamTextFn = () => ({
       fullStream: (async function* () {
         yield { type: 'text-delta', text: 'partial' };
         // ends WITHOUT a finish part — a truncated stream
       })(),
-    })) as unknown as typeof import('ai').streamText;
+    });
     const done = runTurns({
       conversation: createConversation(),
       threadId: 'tid',
@@ -662,7 +505,7 @@ describe('stream-turns', () => {
   it('re-runs a dropped stream that emitted nothing, then completes on the retry', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     let calls = 0;
-    const flaky = (() => {
+    const flaky: StreamTextFn = () => {
       calls += 1;
       const attempt = calls;
       return {
@@ -672,7 +515,7 @@ describe('stream-turns', () => {
           yield { type: 'finish', finishReason: 'stop' };
         })(),
       };
-    }) as unknown as typeof import('ai').streamText;
+    };
     const done = runTurns({
       conversation: createConversation(),
       threadId: 'tid',
@@ -699,7 +542,7 @@ describe('stream-turns', () => {
   it('does NOT re-run a stream that already emitted content — no dup / no tool re-exec', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     let calls = 0;
-    const dropsAfterContent = (() => {
+    const dropsAfterContent: StreamTextFn = () => {
       calls += 1;
       return {
         fullStream: (async function* () {
@@ -707,7 +550,7 @@ describe('stream-turns', () => {
           // drops (truncated) AFTER emitting content — must be surfaced, never retried
         })(),
       };
-    }) as unknown as typeof import('ai').streamText;
+    };
     const done = runTurns({
       conversation: createConversation(),
       threadId: 'tid',
@@ -769,6 +612,7 @@ describe('stream-turns', () => {
       threadId: 'thread-xyz',
       runId: 'run-1',
       model: 'test-model',
+      tools,
       toolDispatch: recording,
       queue,
       signal: new AbortController().signal,
@@ -827,6 +671,7 @@ describe('stream-turns', () => {
       threadId: 'tid',
       runId: 'run-1',
       model: 'test-model',
+      tools,
       toolDispatch: dispatch,
       queue,
       signal: new AbortController().signal,
@@ -849,25 +694,13 @@ describe('stream-turns', () => {
 
   it('repairs a wrong-CASE tool name in place — tier 1, and never lets the model call `invalid`', async () => {
     // Capture the repair fn + activeTools runTurns passes to streamText, then drive the repair directly.
-    let repair:
-      | ((o: {
-          toolCall: { toolCallId: string; toolName: string; input: string };
-          error: { message: string };
-        }) => Promise<{ toolName?: string } | null>)
-      | undefined;
-    let activeTools: string[] | undefined;
-    const capturing = ((args: {
-      experimental_repairToolCall?: typeof repair;
-      activeTools?: string[];
-    }) => {
-      repair = args.experimental_repairToolCall;
-      activeTools = args.activeTools;
-      return {
-        fullStream: (async function* () {
-          yield { type: 'finish', finishReason: 'stop' };
-        })(),
-      };
-    }) as unknown as typeof import('ai').streamText;
+    let repair: StreamOptions['experimental_repairToolCall'];
+    let activeTools: StreamOptions['activeTools'];
+    const capturing: StreamTextFn = (options) => {
+      repair = options.experimental_repairToolCall;
+      activeTools = options.activeTools;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -881,28 +714,16 @@ describe('stream-turns', () => {
     await done;
     // The synthetic `invalid` tool is registered but NOT model-callable — only the real catalog tools are.
     expect(activeTools).toEqual(['ffmpeg']);
-    const fixed = await repair!({
-      toolCall: { toolCallId: 't1', toolName: 'FFMPEG', input: '{"a":1}' },
-      error: { message: 'no such tool: FFMPEG' },
-    });
+    const fixed = await repair?.(repairArgs('t1', 'FFMPEG', '{"a":1}'));
     expect(fixed).toMatchObject({ toolName: 'ffmpeg', toolCallId: 't1' });
   });
 
   it('reroutes a still-unknown tool call to the synthetic `invalid` tool — tier 2', async () => {
-    let repair:
-      | ((o: {
-          toolCall: { toolCallId: string; toolName: string; input: string };
-          error: { message: string };
-        }) => Promise<{ toolName: string; input: string }>)
-      | undefined;
-    const capturing = ((args: { experimental_repairToolCall?: typeof repair }) => {
-      repair = args.experimental_repairToolCall;
-      return {
-        fullStream: (async function* () {
-          yield { type: 'finish', finishReason: 'stop' };
-        })(),
-      };
-    }) as unknown as typeof import('ai').streamText;
+    let repair: StreamOptions['experimental_repairToolCall'];
+    const capturing: StreamTextFn = (options) => {
+      repair = options.experimental_repairToolCall;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -914,13 +735,10 @@ describe('stream-turns', () => {
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    const rerouted = await repair!({
-      toolCall: { toolCallId: 't2', toolName: 'delete_everything', input: '{}' },
-      error: { message: 'no such tool: delete_everything' },
-    });
-    expect(rerouted.toolName).toBe('invalid');
+    const rerouted = await repair?.(repairArgs('t2', 'delete_everything', '{}'));
+    expect(rerouted?.toolName).toBe('invalid');
     // The invalid tool's input carries the model's bad name + the SDK error, so its result can tell the model.
-    expect(JSON.parse(rerouted.input)).toEqual({
+    expect(JSON.parse(rerouted?.input ?? 'null')).toEqual({
       tool: 'delete_everything',
       error: 'no such tool: delete_everything',
     });
@@ -945,6 +763,7 @@ describe('stream-turns', () => {
       threadId: 'tid',
       runId: 'run-1',
       model: 'test-model',
+      tools,
       toolDispatch: dispatch,
       queue,
       signal: new AbortController().signal,

@@ -20,17 +20,22 @@ const WALL_IDS = new Set(
 const isWallRule = (id) => WALL_IDS.has(id) || id.startsWith('minitui/');
 
 const PKGS =
-  'agent-core catalog exec renderer-core renderer-ink sanitizer spec transport types'.split(' ');
+  'agent-core catalog exec renderer-core renderer-ink runtime-host sanitizer spec test-kit transport types'.split(
+    ' ',
+  );
 // Each package is barred from one internal package by its DAG zone.
 const EDGE = Object.fromEntries(
   `types>sanitizer sanitizer>types transport>spec renderer-core>sanitizer catalog>spec
-   spec>sanitizer agent-core>exec renderer-ink>spec exec>transport`
+   spec>sanitizer agent-core>exec renderer-ink>spec exec>transport runtime-host>exec test-kit>exec`
     .split(/\s+/)
     .map((pair) => pair.split('>')),
 );
 const src = (pkg) => `packages/${pkg}/src/index.ts`;
 const tst = (pkg) => `packages/${pkg}/test/__witness__.test.ts`;
 const CLI_TEST = 'apps/cli/test/__witness__.test.tsx';
+const CLI_SRC = 'apps/cli/src/index.ts';
+const ROOT_TEST = 'test/security/__witness__.test.ts';
+const TEST_KIT_TEST = tst('test-kit');
 const EXEC_PERMISSION = 'packages/exec/src/permission/index.ts';
 const EXEC_SANDBOX = 'packages/exec/src/sandbox/platform.ts';
 const EXEC_TEST = 'packages/exec/test/__witness__.test.ts';
@@ -45,6 +50,7 @@ const SPAWN = named('spawn', 'node:child_process');
 const AI = named('streamText', 'ai');
 const REACT = named('createElement', 'react');
 const RDOM = `import 'react-dom/client';\n`;
+const CATALOG_EDGE = `import * as w from '@minitui/catalog';\nexport { w };\n`;
 const RUNTIME = '@anthropic-ai/sandbox-runtime';
 const MCP_CLIENT = '@modelcontextprotocol/client';
 
@@ -134,6 +140,36 @@ const OWNER_ROWS = [
   ]),
   ['renderer-ink: static react permitted', src('renderer-ink'), REACT],
   ['renderer-ink: static react-dom/client permitted', src('renderer-ink'), RDOM],
+  [
+    'apps/cli: DAG -> the integration tests under ./test',
+    CLI_SRC,
+    `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'apps/cli test: DAG -> the integration tests under ./test',
+    CLI_TEST,
+    `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'runtime-host test: DAG -> the integration suites support code',
+    tst('runtime-host'),
+    `import * as w from '../../../test/security/support/host-over-exec';\nexport { w };\n`,
+    [DAG],
+  ],
+  // The integration package's suites sit under the root test/ tree, inside the same walls.
+  ['test/security: static child_process walled', ROOT_TEST, SPAWN, [IMP]],
+  ['test/security: static ai walled', ROOT_TEST, AI, [IMP]],
+  ['test/security: static react walled', ROOT_TEST, REACT, [IMP]],
+  [
+    'test/security: the vitest replacement API walled',
+    ROOT_TEST,
+    `import { vi } from 'vitest';\nvi.fn();\n`,
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  ['apps/cli: static child_process walled', CLI_SRC, SPAWN, [IMP]],
+  ['apps/cli: static ai walled (src)', CLI_SRC, AI, [IMP]],
   ['apps/cli: static react permitted', CLI_TEST, REACT],
   ['apps/cli: static ai walled', CLI_TEST, AI, [IMP]],
   ['apps/cli: dynamic ai walled', CLI_TEST, dynamic('ai'), [CAP]],
@@ -146,10 +182,93 @@ const OWNER_ROWS = [
     [`${owner}: dynamic ink permitted`, path, dynamic('ink')],
     [`${owner}: type-position react permitted`, path, typeOf('react')],
   ]),
+  // The test toolkit's own tests may import `react` and `ink` by exact name and the catalog; react-dom,
+  // the subpaths, the Ink renderer binding and the model SDK stay walled there, and every other path of
+  // the package keeps the four source edges.
+  ['test-kit test: static react permitted', TEST_KIT_TEST, REACT],
+  ['test-kit test: static ink permitted', TEST_KIT_TEST, named('render', 'ink')],
+  ['test-kit test: dynamic ink permitted', TEST_KIT_TEST, dynamic('ink')],
+  ['test-kit test: type-position react permitted', TEST_KIT_TEST, typeOf('react')],
+  ['test-kit test: static react-dom/client walled', TEST_KIT_TEST, RDOM, [IMP]],
+  [
+    'test-kit test: static react subpath walled',
+    TEST_KIT_TEST,
+    named('x', 'react/jsx-runtime'),
+    [IMP],
+  ],
+  [
+    'test-kit test: static @json-render/ink walled',
+    TEST_KIT_TEST,
+    named('x', '@json-render/ink'),
+    [IMP],
+  ],
+  [
+    'test-kit test: dynamic @json-render/ink walled',
+    TEST_KIT_TEST,
+    dynamic('@json-render/ink'),
+    [CAP],
+  ],
+  [
+    'test-kit test: type-position @json-render/ink walled',
+    TEST_KIT_TEST,
+    typeOf('@json-render/ink'),
+    [CAP],
+  ],
+  ['test-kit test: dynamic react-dom walled', TEST_KIT_TEST, dynamic('react-dom'), [CAP]],
+  ['test-kit test: dynamic ai walled', TEST_KIT_TEST, dynamic('ai'), [CAP]],
+  ['test-kit test: DAG -> @minitui/catalog permitted', TEST_KIT_TEST, CATALOG_EDGE],
+  ['test-kit: DAG -> @minitui/catalog (source)', src('test-kit'), CATALOG_EDGE, [DAG]],
+  [
+    'test-kit: DAG -> @minitui/catalog (package-root config)',
+    'packages/test-kit/vitest.config.ts',
+    CATALOG_EDGE,
+    [DAG],
+  ],
+  [
+    'apps/cli: DAG -> @minitui/test-kit',
+    CLI_SRC,
+    `import * as w from '@minitui/test-kit';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'apps/cli test: DAG -> @minitui/test-kit',
+    CLI_TEST,
+    `import * as w from '@minitui/test-kit';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'apps/cli: DAG -> @minitui/test-kit (package-root config)',
+    'apps/cli/vitest.config.ts',
+    `import * as w from '@minitui/test-kit';\nexport { w };\n`,
+    [DAG],
+  ],
+  [
+    'catalog test: import from its scripts walled',
+    tst('catalog'),
+    `import { x } from '../scripts/pack-consumer.mjs';\nexport { x };\n`,
+    [DAG],
+  ],
+  [
+    'sanitizer test: the runtime-leaf helper permitted',
+    tst('sanitizer'),
+    `import { externalBundledInputs } from '../scripts/runtime-leaf.mjs';\nexport { externalBundledInputs };\n`,
+  ],
   ['exec root: static child_process permitted', src('exec'), SPAWN],
   ['exec root: dynamic child_process walled', src('exec'), dynamic('node:child_process'), [CAP]],
+  // Every exec source file outside the spawner, the sandbox and the barrel is walled, present or future.
+  ['exec errors: static child_process walled', 'packages/exec/src/errors.ts', SPAWN, [IMP]],
+  ['exec sandbox: static child_process permitted', EXEC_SANDBOX, SPAWN],
   ['exec permission: static child_process walled', EXEC_PERMISSION, SPAWN, [IMP]],
   ['exec permission: dynamic runtime walled', EXEC_PERMISSION, dynamic(RUNTIME), [CAP]],
+  // A test-named file inside exec source sits under the exec spawn wall too: the capability rule AND the
+  // syntax arm that closes the dynamic form must both report, so a later block for test files cannot
+  // replace the wall's selectors there.
+  [
+    'exec permission: dynamic child_process walled in a test-named source file',
+    'packages/exec/src/permission/__witness__.test.ts',
+    dynamic('node:child_process'),
+    [CAP, 'no-restricted-syntax'],
+  ],
   ['exec permission: type-position runtime permitted', EXEC_PERMISSION, typeOf(RUNTIME)],
   [
     'exec permission: type-position child_process permitted',
@@ -186,10 +305,12 @@ const CARRIERS = {
     ['types', src('types')],
     ['agent-core', AGENT],
     ['renderer-ink', src('renderer-ink')],
+    ['test-kit test', TEST_KIT_TEST],
   ],
   sdk: [
     ['types', src('types')],
     ['renderer-ink', src('renderer-ink')],
+    ['test-kit test', TEST_KIT_TEST],
     ['exec root', src('exec')],
     ['exec permission', EXEC_PERMISSION],
   ],
@@ -393,7 +514,8 @@ for (const path of 'test/__witness__ src/__witness__.test src/__witness__.spec s
   witness('test glob .mjs: vi import', `packages/types/${path}.mjs`, VI_TEST, [VI_API]);
 }
 
-// Wall-exempt script directories: package source may not import from them; scripts and tests may.
+// Wall-exempt script directories: package source may not import from them; scripts may, and a test only
+// the two named pure helpers.
 witness(
   'package src -> its scripts dir',
   src('types'),
@@ -475,6 +597,16 @@ const VI_CONTROLS = [
 for (const [what, code] of VI_CONTROLS) witness(`test file control: ${what}`, tst('types'), code);
 
 const VI_USE = `import { vi } from 'vitest';\nexport const f = vi.fn;\n`;
+// The test toolkit's source is held to the test-file rules: the replacement API in every form, and the
+// two hiding casts.
+for (const [what, code, ids] of [
+  ['imports vi', VI_USE, [VI_API]],
+  ['ambient vi', `export const f = vi;\n`, [VI_API]],
+  ['cast through unknown', `export const s = 1 as unknown as string;\n`, ['no-restricted-syntax']],
+  ['cast to never', `export const n = 1 as never;\n`, ['no-restricted-syntax']],
+]) {
+  witness(`test-kit source: ${what}`, src('test-kit'), code, ids);
+}
 const NODE_TEST_MOCK = pick(NODE_TEST, 'mock import');
 for (const [where, path] of [
   ['source', src('types')],

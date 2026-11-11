@@ -5,16 +5,13 @@ import {
   getByPath,
   parseSpecStreamLine,
 } from '@json-render/core';
-import { JSON_RESOURCE_LIMITS } from '@minitui/types';
+import { decodePointerToken, JSON_RESOURCE_LIMITS, RESERVED_JSON_KEYS } from '@minitui/types';
 import type { Spec } from './spec-types.js';
 
 // Re-export the adopted compiler verbatim (the decided wire model is JSONL RFC-6902 patch lines). This
 // module does not apply lines through it: the adopted compiler skips a line whose text it has already
 // seen, which drops a legitimately repeated patch.
 export { createSpecStreamCompiler };
-
-/** RFC-6901 reference tokens that reach a prototype when used as an object key. */
-const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * A problem in the model's patch lines. The loop turns exactly this class into a repair attempt; every
@@ -36,11 +33,6 @@ const NOT_APPLIED = 'a patch line could not be applied to the spec';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Decode one RFC-6901 reference token (`~1`→`/`, `~0`→`~`). */
-function decodeToken(token: string): string {
-  return token.replace(/~1/g, '/').replace(/~0/g, '~');
-}
-
 /**
  * Reject a model-authored patch whose RFC-6901 `path`/`from` walks a reserved
  * prototype segment BEFORE it reaches the sink. The adopted compiler routes
@@ -58,7 +50,7 @@ function assertSafePatchPath(patch: Record<string, unknown>): void {
   for (const ref of [patch.path, patch.from]) {
     if (typeof ref !== 'string') continue;
     for (const token of ref.split('/')) {
-      if (RESERVED_SEGMENTS.has(decodeToken(token)))
+      if (RESERVED_JSON_KEYS.includes(decodePointerToken(token)))
         throw new SpecStreamContentError(RESERVED_PATH);
     }
   }
@@ -134,7 +126,10 @@ export async function compileSpecStream(stream: AsyncIterable<string>): Promise<
   // the object every line is applied to; the adopted patch functions take a plain record
   const result: Record<string, unknown> = {};
   const budget: CloneBudget = { left: JSON_RESOURCE_LIMITS.maxNodes };
-  let buffer = '';
+  // The pieces of the line not yet ended. Each chunk is scanned once for a newline, so a long line costs
+  // time in proportion to its length; appending to one string and scanning it again per chunk would
+  // cost its length squared.
+  let pending: string[] = [];
   const pushLine = (line: string): void => {
     if (line.trim() === '') return;
     const parsed = parseLine(line);
@@ -157,13 +152,17 @@ export async function compileSpecStream(stream: AsyncIterable<string>): Promise<
     }
   };
   for await (const chunk of stream) {
-    buffer += chunk;
-    for (let nl = buffer.indexOf('\n'); nl !== -1; nl = buffer.indexOf('\n')) {
-      pushLine(buffer.slice(0, nl));
-      buffer = buffer.slice(nl + 1);
+    let start = 0;
+    for (let nl = chunk.indexOf('\n'); nl !== -1; nl = chunk.indexOf('\n', start)) {
+      pending.push(chunk.slice(start, nl));
+      const line = pending.join('');
+      pending = [];
+      pushLine(line);
+      start = nl + 1;
     }
+    if (start < chunk.length) pending.push(chunk.slice(start));
   }
-  pushLine(buffer); // flush a final unterminated line
+  pushLine(pending.join('')); // flush a final unterminated line
   // Typed as a Spec like the adopted compiler's own result, and not yet trusted: the screen and the wire
   // parse that follow check the shape.
   return result as unknown as Spec;

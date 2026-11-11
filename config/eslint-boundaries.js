@@ -13,7 +13,9 @@
 // disk. The scripts zone below is not a package zone: it keeps package source out of the
 // wall-exempt scripts directories. Beyond it, no later change edits this table except the
 // `apps/cli` zone — apps/cli is outside the `packages/*` glob seeded here, so that one zone
-// is appended separately (the only gate for the cli -> not-test-kit/integration-tests edge).
+// is appended separately (the only gate for the cli -> not-test-kit/integration-tests edge) —
+// and the test-kit catalog split: the toolkit's own tests may import the catalog, nothing else
+// in that package may.
 //
 // Encoding (verified against eslint-plugin-import 2.31.0 `no-restricted-paths`):
 // from='./packages' bars EVERY internal package; `except` re-permits the package's OWN
@@ -33,7 +35,7 @@ import { fileURLToPath, URL } from 'node:url';
 // from resolves to a nonexistent subpath there, so the DAG gate matches nothing in CI.
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** @typedef {{ target: string, from: string | string[], except?: string[], message: string }} BoundaryZone */
+/** @typedef {{ target: string | string[], from: string | string[], except?: string[], message: string }} BoundaryZone */
 
 /**
  * One package zone: `pkg` may import ONLY the listed `allowed` internal packages (plus
@@ -96,14 +98,51 @@ export const BOUNDARY_ZONES = [
   pkgZone('runtime-host', 'types', 'transport', 'spec', 'renderer-core'),
   pkgZone('renderer-ink', 'types', 'renderer-core', 'catalog', 'sanitizer'),
   pkgZone('library', 'types', 'spec'),
-  pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink'),
+  // The toolkit's own tests need a real catalog value; the second zone keeps every other path of
+  // the package (source, package-root configs, any later directory) on the four source edges.
+  pkgZone('test-kit', 'types', 'spec', 'renderer-core', 'renderer-ink', 'catalog'),
+  {
+    target: ['./packages/test-kit/*', './packages/test-kit/!(test)/**'],
+    from: './packages/catalog',
+    message: 'Only the test-kit tests may import @minitui/catalog; its source may not.',
+  },
+  // No file of the app may import the test packages: not its source, its tests, its bin or its
+  // package-root configs. The app builds React elements, and no package that may build one may
+  // import test-kit; the integration tests under ./test import the app, never the reverse. A plain
+  // directory target, not a glob, so a file added anywhere in the app is covered.
+  {
+    target: './apps/cli',
+    from: ['./packages/test-kit', './test'],
+    message:
+      'apps/cli may not import the dev-only test-kit or the integration tests, from any file.',
+  },
+  // A package's own files, tests included, may not import the integration suites or their support code:
+  // that code pulls in exec, catalog and renderer-ink, past any package's row of the DAG.
+  {
+    target: './packages',
+    from: ['./test/e2e', './test/security', './test/conformance'],
+    message: 'a package may not import the integration tests or their support code, from any file.',
+  },
   // Package source may not import from a wall-exempt scripts directory: those directories (and the
   // repo-level scripts/) lift the capability walls, so reaching one from shipped source would
-  // launder a walled import through it. Tests keep their access (the sanitizer leaf test loads its script).
+  // launder a walled import through it. Tests are held to the named list in the zone below.
   {
     target: './packages/*/src/**/*',
     from: ['./packages/*/scripts/**/*', './scripts/**/*'],
     message: 'package source may not import from a wall-exempt scripts directory.',
+  },
+  // A test may import from a wall-exempt scripts directory only the pure helpers named here: a script
+  // that spawns would hand a test the capability its own wall forbids. In glob mode the plugin
+  // matches each exception against the path the import resolver returns, which is the .d.mts
+  // declaration beside a .mjs when there is one, hence the **/ form and the pair of extensions.
+  {
+    target: ['./packages/*/test/**/*', './apps/*/test/**/*', './test/**/*'],
+    from: ['./packages/*/scripts/**/*', './scripts/**/*'],
+    except: [
+      '**/packages/sanitizer/scripts/runtime-leaf.{mjs,d.mts}',
+      '**/scripts/grammar-checksum.{mjs,d.mts}',
+    ],
+    message: 'a test may import from a scripts directory only the named pure helpers.',
   },
   // Witness for the pkgZone encoding itself. The two fixture zones at the top are bare
   // file-target zones with no `except`, so they prove nothing about the from:'./packages'

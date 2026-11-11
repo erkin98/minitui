@@ -41,6 +41,21 @@ export function resolvePointer(doc: JsonValue, pointer: string): JsonValue | und
   return cur;
 }
 
+// The pointers of the ${/pointer} holes of a template, in order. One pass: a hole ends at the first
+// closing brace after its opening, and when no closing brace is left no later hole can close either.
+export function holePointersOf(template: string): string[] {
+  const pointers: string[] = [];
+  let from = 0;
+  for (;;) {
+    const open = template.indexOf('${/', from);
+    if (open === -1) return pointers;
+    const close = template.indexOf('}', open + 3);
+    if (close === -1) return pointers;
+    pointers.push(template.slice(open + 2, close));
+    from = close + 1;
+  }
+}
+
 /**
  * Resolve a PermissionDescriptor.resourceTemplate's ${/pointer} holes against the
  * HOST-controlled state document. A hole whose pointer is missing or resolves to a

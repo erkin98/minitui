@@ -1,0 +1,38 @@
+{
+  "name": "@minitui/test-kit",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@minitui/renderer-core": "workspace:*",
+    "@minitui/renderer-ink": "workspace:*",
+    "@minitui/spec": "workspace:*",
+    "@minitui/types": "workspace:*",
+    "ink-testing-library": "catalog:"
+  },
+  "devDependencies": {
+    "@minitui/catalog": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "eslint": "catalog:",
+    "ink": "catalog:",
+    "react": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+  },
+  "type": "module"
+}

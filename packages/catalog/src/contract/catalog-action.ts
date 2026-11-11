@@ -16,6 +16,9 @@ export interface MinituiActionDef<P = unknown> {
   readonly kind: ActionKind;
   readonly permission?: PermissionDescriptor | undefined;
   readonly callableFrom?: VisibilityClass;
+  // Builder-owned: the two state paths the host writes a gated action's progress (a number from 0 to 1)
+  // and outcome text to. The prompt names them and the gate requires both in the generated state.
+  readonly statusPointers?: { readonly progress: string; readonly status: string } | undefined;
 }
 
 // Identity helper pinning the literal type at the definition site.

@@ -118,6 +118,38 @@ const expectedByFile = new Map([
     'test/eslint-boundary-fixture/illegal-vitest-computed-process.test.ts',
     ['minitui/no-vitest-replacement-api'],
   ],
+  // Test files may not build doubles through the mocker or the scoped vitest packages, whatever name they
+  // import; only the coverage provider is tooling.
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-mocker.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-scoped.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-vitest-scoped-dynamic.test.ts',
+    ['minitui/no-vitest-replacement-api'],
+  ],
+  ['test/eslint-boundary-fixture/legal-vitest-coverage-provider.test.ts', []],
+  // The typed test lane, the ts-comment ban and the two cast bans bite in package and app tests.
+  [
+    'apps/eslint-policy-fixture/test/illegal-floating-promise.test.ts',
+    ['@typescript-eslint/no-floating-promises'],
+  ],
+  [
+    'test/eslint-boundary-fixture/illegal-ts-expect-error.test.ts',
+    ['@typescript-eslint/ban-ts-comment'],
+  ],
+  ['test/eslint-boundary-fixture/illegal-cast-never.test.ts', ['no-restricted-syntax']],
+  ['test/eslint-boundary-fixture/illegal-cast-through-unknown.test.ts', ['no-restricted-syntax']],
+  // A test may import from a scripts directory only the two named pure helpers.
+  [
+    'test/eslint-boundary-fixture/illegal-test-scripts-import.test.ts',
+    ['import/no-restricted-paths'],
+  ],
+  ['test/eslint-boundary-fixture/legal-test-scripts-import.test.ts', []],
   ['test/eslint-boundary-fixture/illegal-vitest-eval.test.ts', ['no-eval']],
   ['test/eslint-boundary-fixture/illegal-vitest-implied-eval.test.ts', ['no-implied-eval']],
   ['test/eslint-boundary-fixture/illegal-vitest-function-call.test.ts', ['no-restricted-globals']],
@@ -383,6 +415,24 @@ function enumerationProblems(declaration, banned) {
   return unbanned(mcpNamesOf(declaration), banned).map(
     (name) => `installed ai root exports ${name}, which the agent-core import rule does not ban`,
   );
+}
+
+// The integration package's suites are on the typed lane: a type-aware rule is on for them and their own
+// tsconfig is in the parser's project list. A path is enough; the file need not exist.
+const integrationConfig = await eslint.calculateConfigForFile(
+  join(root, 'test/security/typed-lane.test.ts'),
+);
+const floatingRule = integrationConfig.rules?.['@typescript-eslint/no-floating-promises'];
+const floatingSeverity = Array.isArray(floatingRule) ? floatingRule[0] : floatingRule;
+const integrationProject = integrationConfig.languageOptions?.parserOptions?.project;
+if (
+  !(floatingSeverity === 2 || floatingSeverity === 'error') ||
+  !(Array.isArray(integrationProject) && integrationProject.includes('./test/tsconfig.json'))
+) {
+  console.error(
+    'test/security/ is not on the typed lint lane: no-floating-promises is off or ./test/tsconfig.json is not a parser project',
+  );
+  failed = true;
 }
 
 const sdkRequire = createRequire(join(root, 'packages/agent-core/package.json'));

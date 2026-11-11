@@ -26,6 +26,7 @@ export {
 
 // builders
 export { defineMinituiCatalog, type MinituiCatalog } from './define-catalog.js';
+export { checkActionParams, hostCatalogDeps, type ParamsCatalog } from './host-deps.js';
 
 // allowlist (the two-point gate)
 export { rejectOffCatalog, throwingFallback, type AllowlistIssue } from './allowlist.js';

@@ -236,8 +236,9 @@ describe('controls', () => {
     const run = await drive({ replies: [patchLines(spec)] });
     expect(run.regenerations).toBe(0);
     if (!run.result?.ok) throw new Error('expected acceptance');
-    const element = run.result.spec.elements.status as unknown as Json;
-    expect(element.visibility).toBe('localOnly');
+    // the key is not in the element type, so the element is read as an unknown value
+    const element: unknown = run.result.spec.elements.status;
+    expect(element).toMatchObject({ visibility: 'localOnly' });
     expect(Object.isFrozen(element)).toBe(false);
     expect(Object.isFrozen(run.result.spec.elements)).toBe(false);
   });

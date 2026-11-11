@@ -114,6 +114,33 @@ describe('compileSpecStream: the last line', () => {
   });
 });
 
+describe('compileSpecStream: the work of one long line', () => {
+  // The cost is judged by how it grows, not by a stopwatch: the same line at full size and at an eighth of
+  // it, sent in four-character chunks, the fastest of five drains at each size. Scanning each chunk once
+  // makes the work grow about eightfold (measured 9.7 to 9.9); scanning the growing buffer again for every
+  // chunk makes it grow far more (measured 147 to 193). A busy machine slows both sizes alike.
+  const drainTime = async (length: number): Promise<number> => {
+    const line = JSON.stringify({ op: 'add', path: '/root', value: 'x'.repeat(length) });
+    const pieces: string[] = [];
+    for (let i = 0; i < line.length; i += 4) pieces.push(line.slice(i, i + 4));
+    pieces.push('\n');
+    let best = Infinity;
+    for (let run = 0; run < 5; run++) {
+      const started = performance.now();
+      const spec = await compileSpecStream(chunks(pieces));
+      best = Math.min(best, performance.now() - started);
+      expect(spec.root).toHaveLength(length);
+    }
+    return best;
+  };
+
+  it('drains a long line in time that grows in proportion to its length', async () => {
+    const full = await drainTime(200_000);
+    const eighth = await drainTime(25_000);
+    expect(full / Math.max(eighth, 0.2)).toBeLessThan(24);
+  });
+});
+
 describe('compileSpecStream: lines are applied one by one', () => {
   const op = (value: Record<string, unknown>): string => JSON.stringify(value) + '\n';
   const add = (path: string, value: unknown) => op({ op: 'add', path, value });

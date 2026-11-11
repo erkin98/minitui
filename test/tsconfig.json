@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true
+  },
+  "include": ["e2e/**/*.ts", "security/**/*.ts", "conformance/**/*.ts"]
+}

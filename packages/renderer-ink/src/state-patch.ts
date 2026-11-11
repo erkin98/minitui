@@ -1,15 +1,16 @@
 import fastJsonPatch, { type Operation } from 'fast-json-patch';
 import {
   assertJsonResourceBudget,
+  decodePointerToken,
   JsonObjectSchema,
   JsonPatchArraySchema,
+  RESERVED_JSON_KEYS,
   type JsonPatch,
   type JsonValue,
 } from '@minitui/types';
 import { sanitize } from '@minitui/sanitizer';
 
 const { applyOperation, JsonPatchError } = fastJsonPatch;
-const RESERVED_STATE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_STATE_POINTER_DEPTH = 256;
 
 // Every message below is a fixed string. A pointer, a token, a key or a value of the patch is agent
@@ -30,12 +31,9 @@ function parseCanonicalPointer(pointer: string): string[] {
   }
   if (pointer === '') return [];
   if (!pointer.startsWith('/')) throw new Error('invalid JSON pointer');
-  const tokens = pointer
-    .slice(1)
-    .split('/')
-    .map((token) => token.replace(/~1/g, '/').replace(/~0/g, '~'));
+  const tokens = pointer.slice(1).split('/').map(decodePointerToken);
   for (const token of tokens) {
-    if (RESERVED_STATE_KEYS.has(token)) throw new Error(`reserved state key not allowed: ${token}`);
+    if (RESERVED_JSON_KEYS.includes(token)) throw new Error('reserved state key not allowed');
     if (sanitize(token) !== token) throw new Error('state key is not canonical');
   }
   return tokens;
@@ -64,7 +62,7 @@ function assertCanonicalStateValue(value: JsonValue): void {
       for (const item of current) pending.push(item);
     } else if (isObjectValue(current)) {
       for (const [key, item] of Object.entries(current)) {
-        if (RESERVED_STATE_KEYS.has(key)) throw new Error(`reserved state key not allowed: ${key}`);
+        if (RESERVED_JSON_KEYS.includes(key)) throw new Error('reserved state key not allowed');
         if (sanitize(key) !== key) throw new Error('state key is not canonical');
         pending.push(item);
       }

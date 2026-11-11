@@ -69,6 +69,19 @@ describe('Manifest + KeptApp', () => {
     };
     expect(KeptAppSchema.parse(kept)).toEqual(kept);
   });
+  it.each([
+    ['an array', ['h264']],
+    ['a string', 'h264'],
+    ['a number', 1],
+    ['null', null],
+  ])('rejects a KeptApp whose state is %s', (_name, state) => {
+    const kept: unknown = {
+      manifest,
+      spec: { root: 'a', elements: { a: { type: 'Box', props: {} } } },
+      state,
+    };
+    expect(KeptAppSchema.safeParse(kept).success).toBe(false);
+  });
   it('parses an ExecSurface', () => {
     expect(ExecSurfaceSchema.parse({ kind: 'exec-mcp', summary: 's' }).kind).toBe('exec-mcp');
   });

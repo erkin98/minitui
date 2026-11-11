@@ -137,6 +137,47 @@ describe('checkCapabilities', () => {
   });
 });
 
+describe('checkCapabilities: ffmpeg stream copy', () => {
+  const mergeWith = (codec: string): Spec => ({
+    root: 'f',
+    elements: {
+      f: { type: 'Box', props: {}, children: ['merge'] },
+      merge: {
+        type: 'Button',
+        props: { label: 'Merge' },
+        on: { press: { action: 'merge', params: { codec: { $state: '/codec' } } } },
+      },
+    },
+    state: { codec },
+  });
+
+  it('accepts the codec "copy" although no live list names it', async () => {
+    // `ffmpeg -codecs` never lists stream copy, and the merge runs `-c:v copy -c:a copy`.
+    expect(await checkCapabilities(mergeWith('copy'), caps)).toEqual([]);
+  });
+
+  it('control: another codec missing from the live list is still rejected', async () => {
+    const issues = await checkCapabilities(mergeWith('copy2'), caps);
+    expect(issues.map((i) => i.code)).toEqual(['missing_capability']);
+  });
+
+  it('control: "copy" as an encoder or a filter is still checked against its own live list', async () => {
+    const built: Spec = {
+      root: 'f',
+      elements: {
+        f: { type: 'Box', props: {}, children: ['fx'] },
+        fx: { type: 'Select', props: { encoder: 'copy', filter: 'copy' } },
+      },
+      state: {},
+    };
+    const issues = await checkCapabilities(built, caps);
+    expect(issues.map((i) => i.message)).toEqual([
+      'encoder "copy" on element "fx" is not supported by the local toolchain.',
+      'filter "copy" on element "fx" is not supported by the local toolchain.',
+    ]);
+  });
+});
+
 describe('checkCapabilities: callbacks that are not objects', () => {
   it.each([['"done"'], ['5'], ['true']])(
     'an onSuccess and onError of %s resolve to no issue',

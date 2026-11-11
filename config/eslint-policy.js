@@ -406,6 +406,18 @@ const isVitestModule = (source) => {
 const isNodeTestModule = (source) => staticModuleName(source) === 'node:test';
 // The bare module is the replacement API; its tooling subpaths (`vitest/config`, `vitest/node`) are not.
 const isBareVitest = (source) => staticModuleName(source) === 'vitest';
+// vitest/mocker and the @vitest/* packages build replacement doubles whatever name a test imports from them
+// (an automocker is one named export away); only the coverage provider is tooling.
+const COVERAGE_PROVIDER = '@vitest/coverage-v8';
+const isMockerModule = (source) => {
+  const name = staticModuleName(source);
+  if (name === undefined) return false;
+  return (
+    name === 'vitest/mocker' ||
+    name.startsWith('vitest/mocker/') ||
+    (name.startsWith('@vitest/') && name !== COVERAGE_PROVIDER)
+  );
+};
 const hasRestrictedImport = (node) =>
   node.specifiers.some(
     (specifier) =>
@@ -468,6 +480,8 @@ const noVitestReplacementApi = {
       const name = staticModuleName(source);
       if (name === undefined) {
         context.report({ node, messageId: 'nonliteral' });
+      } else if (isMockerModule(source)) {
+        context.report({ node, messageId: 'replacement' });
       } else if (isVitestModule(source)) {
         context.report({ node, messageId: 'replacement' });
       } else if (isNodeTestModule(source)) {
@@ -487,7 +501,9 @@ const noVitestReplacementApi = {
 
     return {
       ImportDeclaration(node) {
-        if (isVitestModule(node.source) && hasRestrictedImport(node)) {
+        if (isMockerModule(node.source)) {
+          context.report({ node, messageId: 'replacement' });
+        } else if (isVitestModule(node.source) && hasRestrictedImport(node)) {
           context.report({ node, messageId: 'replacement' });
         } else if (isNodeTestModule(node.source)) {
           context.report({ node, messageId: 'nodeTest' });
@@ -496,7 +512,9 @@ const noVitestReplacementApi = {
         }
       },
       ExportNamedDeclaration(node) {
-        if (node.source && isVitestModule(node.source) && hasRestrictedExport(node)) {
+        if (node.source && isMockerModule(node.source)) {
+          context.report({ node, messageId: 'replacement' });
+        } else if (node.source && isVitestModule(node.source) && hasRestrictedExport(node)) {
           context.report({ node, messageId: 'replacement' });
         } else if (node.source && isNodeTestModule(node.source)) {
           context.report({ node, messageId: 'nodeTest' });
@@ -505,7 +523,7 @@ const noVitestReplacementApi = {
         }
       },
       ExportAllDeclaration(node) {
-        if (isVitestModule(node.source)) {
+        if (isMockerModule(node.source) || isVitestModule(node.source)) {
           context.report({ node, messageId: 'replacement' });
         } else if (isNodeTestModule(node.source)) {
           context.report({ node, messageId: 'nodeTest' });
@@ -620,6 +638,23 @@ export const TEST_FILE_GLOBS = [
   `**/test/**/*.${SOURCE_EXT}`,
   `**/__tests__/**/*.${SOURCE_EXT}`,
 ];
+
+// The test toolkit's source is test code shipped to other packages' tests: its doubles are held to the
+// same zero-mocks and cast rules as a test file. It keeps the typed lint lane, so it is not part of
+// TEST_FILE_GLOBS (that list also feeds the untyped lane).
+export const TEST_KIT_SRC_GLOBS = [`packages/test-kit/src/**/*.${SOURCE_EXT}`];
+
+// The test rows that may cast to never or through unknown, counted per file. Each row carries
+// `// eslint-disable-next-line no-restricted-syntax -- <reason>` on the line above it;
+// scripts/lint-test-policy.mjs fails when a file holds more or fewer such directives than listed.
+export const CAST_DIRECTIVE_ALLOWLIST = Object.freeze({
+  // assertNever takes a parameter typed never: its runtime throw is reachable only through a cast
+  'packages/types/test/catalog.test.ts': 6,
+  // ink's stream options name the full Node stream types; the fakes implement the part ink reads
+  'packages/renderer-ink/test/support/fake-streams.ts': 2,
+  // the same two rows in the test toolkit's own copy of those streams
+  'packages/test-kit/src/render/fake-streams.ts': 2,
+});
 
 export const policyPlugin = {
   rules: {

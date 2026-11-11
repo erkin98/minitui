@@ -1,11 +1,10 @@
-# Minimal single-lane CI. A later change brings the full OS x Node-22/24 matrix, the
-# hygiene split, the e2e workflow, and the pack/coverage/audit lanes.
-# This one ubuntu/node-22 gate runs the local pre-push chain so a push or PR cannot
-# reach a type-broken / lint-broken / test-broken tree while there is no full CI yet.
+# The gate on ubuntu, on both supported Node versions: the local pre-push chain, so a push to master or a
+# pull request cannot reach a type-broken, lint-broken or test-broken tree. macOS and Windows lanes come
+# once the suites have been run on those systems. The live sandbox lane is e2e.yml.
 # Branch trigger follows the repo convention: on.push targets `master` (the default);
 # feature-branch work gates through a pull_request. (Never key a trigger to `main` —
 # there is no `main` ref, so it would silently never fire.)
-name: ci
+name: CI
 on:
   push:
     branches: [master]
@@ -17,17 +16,23 @@ concurrency:
   cancel-in-progress: true
 jobs:
   gate:
+    name: Lint, typecheck and test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
     env:
-      MINITUI_NODE_RUNTIME: node-22
+      MINITUI_NODE_RUNTIME: node-${{ matrix.node }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 11.8.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Warm the graph so cross-package declaration types resolve before the cold tsc -b.

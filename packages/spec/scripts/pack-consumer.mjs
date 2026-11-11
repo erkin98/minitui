@@ -4,7 +4,7 @@
 // exercises the shipped validate surface. Proves the tarball, not just source. Spec has
 // four internal workspace deps in its runtime closure — @minitui/catalog (and catalog's
 // own types/renderer-core/sanitizer) — packed alongside and pinned via pnpm overrides;
-// their 0.0.0 versions are on no registry. External deps (@json-render/core, zod, and
+// their 0.0.0 versions are on no registry. External deps (@json-render/core and
 // catalog's ink/react/marked transitives) resolve from the offline store. Permanent (run
 // by the root package gate + pre-push).
 /* global console, process, URL */
@@ -71,7 +71,7 @@ try {
   const m = JSON.parse(
     execFileSync('tar', ['-xzOf', tgz, 'package/package.json'], { encoding: 'utf8' }),
   );
-  // Every dep (the internal workspace deps + @json-render/core + zod) MUST be a concrete
+  // Every dep (the internal workspace deps + @json-render/core) MUST be a concrete
   // semver — a leaked workspace:* or a range reds here.
   assertConcreteDependencies(m.dependencies, 'packed manifest', die);
   // Engines floor checked by VALUE against the repo floor (not mere presence): a

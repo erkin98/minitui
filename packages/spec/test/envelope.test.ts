@@ -162,6 +162,7 @@ describe('formatSchemaIssues', () => {
       unionOver(['b'], ['z']),
       { code: 'custom', path: ['c'] },
     ]);
+    expect(lines).toHaveLength(3);
     for (const { message } of lines) {
       expect(message).not.toMatch(/Invalid input|Unrecognized key|\bexpected\b|\breceived\b/);
     }

@@ -3,7 +3,8 @@
 // silent field/discriminant drift reds `tsc -p tsconfig.test.json`.
 // Type-only: vitest ignores it (no `.test` suffix); tsc typechecks it under the
 // package's strict flags (tsconfig.test includes test/**/*.ts). No runtime code.
-import type { Pointer } from '../src/pointer.js';
+import type { JsonValue, Pointer } from '../src/pointer.js';
+import type { KeptApp } from '../src/library.js';
 import type { AgentEvent, EventType } from '../src/events.js';
 import type { CommandRoot, Decision, PermissionRule } from '../src/permission.js';
 import type {
@@ -114,4 +115,9 @@ export type _PermissionRequestsExact = Expect<
     PermissionGatePort['requests'],
     AsyncIterable<import('../src/permission.js').PermissionRequest>
   >
+>;
+
+// A kept app's state is a JSON object, never an array or a scalar.
+export type _KeptAppStateIsObject = Expect<
+  Equal<KeptApp['state'], Readonly<Record<string, JsonValue>>>
 >;
