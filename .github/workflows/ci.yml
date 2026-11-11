@@ -4,7 +4,7 @@
 # Branch trigger follows the repo convention: on.push targets `master` (the default);
 # feature-branch work gates through a pull_request. (Never key a trigger to `main` —
 # there is no `main` ref, so it would silently never fire.)
-name: ci
+name: CI
 on:
   push:
     branches: [master]
@@ -16,6 +16,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   gate:
+    name: Lint, typecheck and test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

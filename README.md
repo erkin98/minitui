@@ -1,6 +1,6 @@
 # minitui
 
-[![ci](https://github.com/erkin98/minitui/actions/workflows/ci.yml/badge.svg)](https://github.com/erkin98/minitui/actions/workflows/ci.yml)
+[![CI](https://github.com/erkin98/minitui/actions/workflows/ci.yml/badge.svg)](https://github.com/erkin98/minitui/actions/workflows/ci.yml)
 ![status: pre-release](https://img.shields.io/badge/status-pre--release-orange)
 ![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-339933)
 ![typescript strict](https://img.shields.io/badge/typescript-strict-3178c6)
