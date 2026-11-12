@@ -115,8 +115,9 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 
 ## What runs before code is accepted
 
-The pre-commit hook runs the type check, format, test policy and lint, plus syncpack when a manifest changes. The
-pre-push hook (`lefthook.yml`) runs ten
+The pre-commit hook runs its steps one after another and stops at the first failure: format, syncpack when a
+manifest changes (the root one included), test policy, type check, then lint. The type check comes before lint because
+it rebuilds the packages' declarations, which lint's typed rules read. The pre-push hook (`lefthook.yml`) runs ten
 steps in order, cheapest first, and stops at the first failure: syncpack, format, policy fixtures, build, lint, type
 check, composite type check, tests, coverage, and the pack check that installs each published tarball into a throwaway
 consumer.
