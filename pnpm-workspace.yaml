@@ -62,7 +62,7 @@ catalog:
   ink-testing-library: 4.0.0
   '@json-render/core': 0.19.0
   '@json-render/ink': 0.19.0
-  zod: 4.3.6
+  zod: 4.6.7
   '@ag-ui/client': 0.0.57
   '@ag-ui/core': 0.0.57
   fast-json-patch: 3.1.1
