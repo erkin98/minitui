@@ -314,6 +314,15 @@ describe('cliMain: the effort', () => {
     },
   );
 
+  it('an empty level names none, as for the model', async () => {
+    const flag = harness();
+    expect(await cliMain(['--effort', '', 'merge'], flag.deps)).toBe(0);
+    expect(flag.built[0]?.effort).toBeUndefined();
+    const env = harness({ env: { ANTHROPIC_API_KEY: KEY, MINITUI_EFFORT: '' } });
+    await cliMain(['merge'], env.deps);
+    expect(env.built[0]?.effort).toBeUndefined();
+  });
+
   it('is checked before the API key, so a bad level is a usage error even without a key', async () => {
     const h = harness({ env: {} });
     expect(await cliMain(['--effort', 'extreme', 'merge'], h.deps)).toBe(2);

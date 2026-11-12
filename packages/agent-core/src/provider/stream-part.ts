@@ -138,7 +138,8 @@ const READERS = {
     };
   },
   // The SDK reports a model stream that closed with no output and no finish as this error part. It is read
-  // as nothing, so the stream counts as closed without a finish: the retriable drop it is.
+  // as nothing, so the stream counts as closed without a finish: on the SDK loop the retriable drop it is,
+  // and on the other loop the ending that loop already gives a stream with no finish.
   error: (part) =>
     NoOutputGeneratedError.isInstance(part.error)
       ? undefined
