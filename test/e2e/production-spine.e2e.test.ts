@@ -42,7 +42,7 @@ describe('the production composition', () => {
       const app = mergeAppWithState({ inputs, codec: 'copy', output });
 
       const streamTextImpl: NonNullable<AgentConfig['streamTextImpl']> = () => ({
-        fullStream: (async function* () {
+        stream: (async function* () {
           yield { type: 'text-delta', text: specPatchText(app) };
           yield { type: 'finish', finishReason: 'stop' };
         })(),

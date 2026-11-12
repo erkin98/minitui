@@ -34,7 +34,7 @@ const visibility: VisibilityChannel = {
 };
 
 // Inject a stream function through AgentConfig.streamTextImpl (a typed seam). It mirrors the real result
-// shape: fullStream is an async-iterable PROPERTY.
+// shape: stream is an async-iterable PROPERTY.
 const fakeStreamText = partsStream;
 
 const tools = [{ name: 'ffmpeg', description: 'm', inputSchema: z.object({ a: z.number() }) }];
@@ -72,7 +72,7 @@ describe('AgentSession', () => {
       tools,
       config: {
         streamTextImpl: () => ({
-          fullStream: (async function* () {
+          stream: (async function* () {
             yield { type: 'text-delta', text: 'spec ready' };
             await new Promise((r) => setTimeout(r, 10));
             yield { type: 'finish', finishReason: 'stop' };
@@ -97,7 +97,7 @@ describe('AgentSession', () => {
       tools,
       config: {
         streamTextImpl: () => ({
-          fullStream: (async function* () {
+          stream: (async function* () {
             yield { type: 'text-delta', text: 'a' };
             // a slow second part the cancel should cut off
             await new Promise((r) => setTimeout(r, 50));
@@ -130,7 +130,7 @@ describe('AgentSession', () => {
         turnTimeoutMs: 5,
         idleTimeoutMs: 5000, // high, so the whole-turn deadline (not the idle guard) is what fires
         streamTextImpl: () => ({
-          fullStream: (async function* () {
+          stream: (async function* () {
             // The finish part never arrives before the 5ms whole-turn deadline.
             await new Promise((r) => setTimeout(r, 40));
             yield { type: 'finish', finishReason: 'stop' };
@@ -176,7 +176,7 @@ describe('AgentSession', () => {
         // on. The aborted dispatch resolves isError:true, so execute THROWS by design — swallow it here
         // exactly like the real SDK does (it catches the throw and emits a tool-error part).
         streamTextImpl: (options) => ({
-          fullStream: (async function* () {
+          stream: (async function* () {
             void runTool(options, 'ffmpeg', { a: 1 }, 't1');
             yield { type: 'text-delta', text: 'working' };
             await new Promise((r) => setTimeout(r, 50));

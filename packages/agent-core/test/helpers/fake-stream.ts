@@ -8,7 +8,7 @@ export type StreamOptions = Parameters<StreamTextFn>[0];
 /** A stream function that yields the given parts in order and calls no tool. */
 export function partsStream(parts: readonly ModelStreamPart[]): StreamTextFn {
   return () => ({
-    fullStream: (async function* () {
+    stream: (async function* () {
       for (const p of parts) yield p;
     })(),
   });
@@ -50,7 +50,7 @@ export function toolCallsThenFinish(
   settled?: (outcome: { readonly output: unknown } | { readonly error: unknown }) => void,
 ): StreamTextFn {
   return (options) => ({
-    fullStream: (async function* () {
+    stream: (async function* () {
       for (const call of calls) {
         const outcome = await runTool(options, call.name, call.input, call.toolCallId);
         settled?.(outcome);

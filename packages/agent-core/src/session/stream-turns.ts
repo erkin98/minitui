@@ -1,4 +1,4 @@
-import { stepCountIs, tool, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { assertNever, JsonObjectSchema, type JsonValue } from '@minitui/types';
 import type { ToolCallResult, ToolDispatchPort } from '../ports/index.js';
@@ -49,7 +49,7 @@ export interface RunTurnsDeps {
   readonly toolDispatch: ToolDispatchPort;
   readonly tools: readonly ToolSchema[];
   readonly stepCeiling?: number;
-  /** Per-pull stall deadline for fullStream; default DEFAULT_IDLE_TIMEOUT_MS. */
+  /** Per-pull stall deadline for stream; default DEFAULT_IDLE_TIMEOUT_MS. */
   readonly idleTimeoutMs?: number | undefined;
   /** Mid-stream-drop re-run budget; default DEFAULT_STREAM_MAX_RETRIES. */
   readonly streamMaxRetries?: number | undefined;
@@ -133,7 +133,7 @@ function buildTools(
         // The redaction chokepoint: EVERY dispatch OUTCOME is redacted before the provider sees it — a
         // resolved result crosses routeToolCallResult (which redacts `content` AND `error` and folds
         // ok:false/denied into isError), a rejection crosses the catch above. Raw ToolCallResult strings
-        // NEVER reach the SDK re-feed; what the model sees (and what fullStream later echoes as the
+        // NEVER reach the SDK re-feed; what the model sees (and what stream later echoes as the
         // tool-result/tool-error parts) is the redacted observation.
         const ev = routeToolCallResult(result, policy);
         // routeToolCallResult always yields a TOOL_CALL_RESULT event; the check narrows the union.
@@ -160,7 +160,7 @@ function buildTools(
 
 /**
  * Thin streamText() wrapper. The SDK OWNS the multi-step loop via stopWhen; this never re-feeds.
- * Maps fullStream parts to MinituiEvents pushed into the queue. Terminal errors become RUN_ERROR.
+ * Maps stream parts to MinituiEvents pushed into the queue. Terminal errors become RUN_ERROR.
  */
 // eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
 export async function runTurns(args: {
@@ -238,7 +238,7 @@ export async function runTurns(args: {
         // this same list.
         activeTools: deps.tools.map((s) => s.name),
         stopWhen: [
-          stepCountIs(deps.stepCeiling ?? DEFAULT_STEP_CEILING),
+          isStepCount(deps.stepCeiling ?? DEFAULT_STEP_CEILING),
           repeatedToolCallDetector(),
         ],
         // Tool-call repair, called by the SDK only when a call fails to parse. A wrong-CASE name is fixed in
@@ -247,7 +247,7 @@ export async function runTurns(args: {
         // model learns what went wrong and the turn goes on. The SDK's repair type requires a Promise
         // return, so this is async even though its body does no awaiting.
         // eslint-disable-next-line @typescript-eslint/require-await
-        experimental_repairToolCall: async (failed) => {
+        repairToolCall: async (failed) => {
           const lower = failed.toolCall.toolName.toLowerCase();
           if (lower !== failed.toolCall.toolName && Object.hasOwn(toolSet, lower)) {
             return { ...failed.toolCall, toolName: lower };
@@ -260,11 +260,11 @@ export async function runTurns(args: {
         onError,
       });
 
-      // Race each pull of fullStream against the idle deadline — a silently-stalled stream throws a
+      // Race each pull of stream against the idle deadline — a silently-stalled stream throws a
       // retriable ProviderError (the whole-turn AbortSignal never fires on a stall). The catch below
       // decides whether the drop is re-run or surfaced.
       const parts = withIdleTimeout(
-        result.fullStream,
+        result.stream,
         idleTimeoutMs,
         () => new ProviderError('idle timeout waiting for model stream', true),
       );
@@ -372,7 +372,7 @@ export async function runTurns(args: {
         }
       }
       if (signal.aborted) return;
-      // fullStream ended without a `finish` part — a truncated stream — or with one whose reason says how
+      // stream ended without a `finish` part — a truncated stream — or with one whose reason says how
       // the run ends: a failed or dropped generation is raised as a retriable error (the re-run rule below
       // applies), a cut, filtered or halted one ends the run as a non-retriable error.
       const ending = sawFinish ? endingOf(finishReason) : endingOf(undefined);
@@ -452,7 +452,7 @@ async function dispatchToolCall(
  * The NON-SDK provider path. When the injected provider is NOT the ai-sdk-provider — it leaves
  * `usesSdkLoop` unset, e.g. a scripted provider — there is NO streamText tool loop to run: the provider
  * yields a flat ProviderChunk stream. This consumes provider.streamChat(req, signal) and maps each chunk
- * to a MinituiEvent — the mirror of runTurns' fullStream mapping. A `tool-call` chunk is the host's
+ * to a MinituiEvent — the mirror of runTurns' stream mapping. A `tool-call` chunk is the host's
  * dispatch site: with no SDK loop to run the tool, this dispatches it through ToolDispatchPort (crossing
  * the routeToolCallResult redaction chokepoint) and pushes the observation; a pre-composed `tool-result`
  * chunk (a remote provider reporting its OWN result) maps straight through. AgentSession routes here when

@@ -79,7 +79,7 @@ function anthropicProvider(opts: {
 }
 
 /**
- * The day-1 ModelProvider: wraps the Vercel AI SDK streamText().fullStream and maps each stream part
+ * The day-1 ModelProvider: wraps the Vercel AI SDK streamText().stream and maps each stream part
  * into the minitui-owned ProviderChunk. This file is the only place SDK stream-part types are read.
  */
 export function createAiSdkProvider(
@@ -105,10 +105,9 @@ export function createAiSdkProvider(
       routeProviderWarnings(diagnostics);
       const result = streamText({
         model: anthropic(req.config.model),
-        // `system` is the current SDK option name; a future major renames it — update this one call site
-        // on the bump. Optional args use conditional spread: never forward a `T | undefined` where the SDK
-        // declares a bare `?: T` (exactOptionalPropertyTypes).
-        ...(req.config.system !== undefined ? { system: req.config.system } : {}),
+        // The system prompt goes as the SDK's instructions option. Optional args use conditional spread:
+        // never forward a `T | undefined` where the SDK declares a bare `?: T` (exactOptionalPropertyTypes).
+        ...(req.config.system !== undefined ? { instructions: req.config.system } : {}),
         // ProviderMessage rows are a structural subset of the SDK ModelMessage union; the cast narrows the
         // per-row role/content pair to the union member (the one documented boundary cast).
         messages: req.messages.map((m) => ({ role: m.role, content: m.content })) as ModelMessage[],
@@ -123,7 +122,7 @@ export function createAiSdkProvider(
         onError: streamErrorHandler(diagnostics, opts.redactionPolicy),
       });
 
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         if (signal.aborted) return;
         const step = readStreamPart(part, undefined);
         if (step === undefined) continue;

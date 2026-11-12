@@ -8,11 +8,11 @@ export interface ModelStreamPart {
 }
 
 /**
- * The part of the SDK's streamText this package uses: one call, read through its fullStream. The
+ * The part of the SDK's streamText this package uses: one call, read through its stream. The
  * installed streamText satisfies it; a test passes a function of this shape and nothing more.
  */
 export type StreamTextFn = (options: Parameters<typeof streamText>[0]) => {
-  readonly fullStream: AsyncIterable<ModelStreamPart>;
+  readonly stream: AsyncIterable<ModelStreamPart>;
 };
 
 /**

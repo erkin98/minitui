@@ -23,7 +23,7 @@ function fakeStreamText(opts: {
   parts: readonly ModelStreamPart[];
 }): StreamTextFn {
   return (options) => ({
-    fullStream: (async function* () {
+    stream: (async function* () {
       const call = opts.callTool;
       // a failed execute THROWS by design; runTool settles it the way the SDK does (a tool-error)
       if (call !== undefined && options.tools?.[call.name] !== undefined) {
@@ -64,7 +64,7 @@ function repairArgs(toolCallId: string, toolName: string, input: string) {
 }
 
 describe('stream-turns', () => {
-  it('maps fullStream parts to MinituiEvents in order, RUN_FINISHED carries the real threadId+runId', async () => {
+  it('maps stream parts to MinituiEvents in order, RUN_FINISHED carries the real threadId+runId', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const parts = [
       { type: 'text-delta', text: 'on it' },
@@ -178,7 +178,7 @@ describe('stream-turns', () => {
     // A host permission-gate refusal (ok:false + denied:true) must stay DISTINGUISHABLE from a plain
     // execution failure on the model-facing observation — not flattened into error text. buildTools
     // attaches `denied` to the thrown Error; the SDK echoes it as the tool-error part's `error`, and
-    // the fullStream mapping re-emits the observation with denied:true.
+    // the stream mapping re-emits the observation with denied:true.
     const deniedDispatch: ToolDispatchPort = {
       dispatch: async (req) => ({
         toolCallId: req.toolCallId,
@@ -443,10 +443,10 @@ describe('stream-turns', () => {
     expect(out.at(-1)).toMatchObject({ type: 'RUN_ERROR', message: 'rate' });
   });
 
-  it('idle-timeout: a stalled fullStream surfaces a retriable RUN_ERROR', async () => {
+  it('idle-timeout: a stalled stream surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const stalling: StreamTextFn = () => ({
-      fullStream: (async function* () {
+      stream: (async function* () {
         yield { type: 'text-delta', text: 'thinking' };
         await new Promise<void>(() => {}); // silent forever — the idle deadline must break this
         yield { type: 'finish', finishReason: 'stop' };
@@ -478,7 +478,7 @@ describe('stream-turns', () => {
   it('truncated stream (ends without a finish part) surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const truncated: StreamTextFn = () => ({
-      fullStream: (async function* () {
+      stream: (async function* () {
         yield { type: 'text-delta', text: 'partial' };
         // ends WITHOUT a finish part — a truncated stream
       })(),
@@ -510,7 +510,7 @@ describe('stream-turns', () => {
       calls += 1;
       const attempt = calls;
       return {
-        fullStream: (async function* () {
+        stream: (async function* () {
           if (attempt === 1) return; // first attempt: truncated with NO content -> a re-runnable drop
           yield { type: 'text-delta', text: 'ok' };
           yield { type: 'finish', finishReason: 'stop' };
@@ -546,7 +546,7 @@ describe('stream-turns', () => {
     const dropsAfterContent: StreamTextFn = () => {
       calls += 1;
       return {
-        fullStream: (async function* () {
+        stream: (async function* () {
           yield { type: 'text-delta', text: 'half' };
           // drops (truncated) AFTER emitting content — must be surfaced, never retried
         })(),
@@ -695,10 +695,10 @@ describe('stream-turns', () => {
 
   it('repairs a wrong-CASE tool name in place — tier 1; the model is offered only the catalog tools', async () => {
     // Capture the repair fn + activeTools runTurns passes to streamText, then drive the repair directly.
-    let repair: StreamOptions['experimental_repairToolCall'];
+    let repair: StreamOptions['repairToolCall'];
     let activeTools: StreamOptions['activeTools'];
     const capturing: StreamTextFn = (options) => {
-      repair = options.experimental_repairToolCall;
+      repair = options.repairToolCall;
       activeTools = options.activeTools;
       return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
     };
@@ -719,9 +719,9 @@ describe('stream-turns', () => {
   });
 
   it('leaves a still-unknown tool call to the SDK — tier 2 returns null, so the original error is reported', async () => {
-    let repair: StreamOptions['experimental_repairToolCall'];
+    let repair: StreamOptions['repairToolCall'];
     const capturing: StreamTextFn = (options) => {
-      repair = options.experimental_repairToolCall;
+      repair = options.repairToolCall;
       return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
     };
     const queue = createAsyncEventQueue<MinituiEvent>();

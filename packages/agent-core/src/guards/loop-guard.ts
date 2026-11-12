@@ -7,7 +7,7 @@ import type { StopCondition, ToolSet } from 'ai';
  */
 export type StopWhenCondition = StopCondition<ToolSet>;
 
-/** Default turn ceiling the session hands to stepCountIs when it assembles its stop conditions. */
+/** Default turn ceiling the session hands to isStepCount when it assembles its stop conditions. */
 export const DEFAULT_STEP_CEILING = 20;
 
 /** The only fields the doom-loop detector reads off a step's tool calls. */

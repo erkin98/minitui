@@ -16,7 +16,7 @@ const req: ProviderRequest = {
   config: { model: 'claude' },
 };
 
-// A fake streamText mirroring the real result shape: fullStream is an async-iterable property
+// A fake streamText mirroring the real result shape: stream is an async-iterable property
 // (not a method the caller invokes).
 const fakeStreamText = partsStream;
 
