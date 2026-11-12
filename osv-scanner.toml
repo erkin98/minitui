@@ -1,0 +1,18 @@
+# Known advisories accepted for a fixed time. Each entry names one advisory, says why it does not reach
+# minitui's lower-trust input or the shipped packages, and expires: after the date the scheduled osv run
+# reds master again, which forces a fresh look.
+
+[[IgnoredVulns]]
+id = "GHSA-mrhx-c7xc-m3w5"
+effectiveUntil = 2027-02-10
+reason = "zod 3.25.76 is pulled in only by @ag-ui/* 0.0.57 and @anthropic-ai/sandbox-runtime 0.0.60, and no zod 3 release carries the fix (fixed in 4.6.6). minitui's own code uses zod 4.6.7. On the product path no model-authored or peer-supplied data reaches the zod 3 parsers; only the exported, unwired AG-UI HTTP port parses peer bytes with them. Revisit when either parent moves to zod 4."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+effectiveUntil = 2027-02-10
+reason = "minimatch 9.0.7 (syncpack, through an override) and 10.2.6 (typescript-eslint) are development tools only: they expand glob patterns written in this repository's own lint and version-sync configuration, never input from a user or the model. The fix exists only in minimatch 11, which neither parent accepts. Revisit when syncpack or typescript-eslint moves to minimatch 11."
+
+[[IgnoredVulns]]
+id = "GHSA-g7r4-m6w7-qqqr"
+effectiveUntil = 2027-02-10
+reason = "esbuild 0.27.7 comes in only through tsup 8.5.1, which asks for ^0.27.0. The bug is a file read through esbuild's development server on Windows. tsup calls only esbuild's build, transform and formatMessages and never starts that server, and minitui is not built on Windows. Fixed in 0.28.1, which only tsup 9 accepts. Revisit with the tsup 9 upgrade."
