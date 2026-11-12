@@ -1,6 +1,6 @@
-import { streamText as realStreamText, type LanguageModel, type ModelMessage } from 'ai';
+import { streamText as realStreamText, type ModelMessage } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import type { ModelProvider } from './provider-port.js';
+import type { SdkLoopProvider, SdkModelV4 } from './provider-port.js';
 import type { ProviderChunk, ProviderRequest } from './provider-types.js';
 import type { FinishReason } from '../session/finish-reason.js';
 import { assertNever, noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
@@ -84,7 +84,7 @@ export function createAiSdkProvider(
     diagnostics?: DiagnosticsPort;
     redactionPolicy?: RedactionPolicy | undefined;
   } = {},
-): ModelProvider {
+): SdkLoopProvider {
   const streamText = opts.streamTextImpl ?? realStreamText;
   const diagnostics = opts.diagnostics ?? noopDiagnostics;
   const anthropic = anthropicProvider({ apiKey: opts.apiKey });
@@ -94,6 +94,8 @@ export function createAiSdkProvider(
     // Drives the SDK streamText tool loop — the session routes it through the SDK path, not the
     // direct-stream path. A scripted / non-SDK provider leaves this unset.
     usesSdkLoop: true,
+    // No per-call option is set yet, so nothing is sent.
+    sdkCallOptions: () => ({}),
     // eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
     async *streamChat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
       routeProviderWarnings(diagnostics);
@@ -196,6 +198,6 @@ export function createAiSdkProvider(
 export function createAnthropicModel(
   modelId: string,
   opts: { apiKey?: string; fetch?: FetchFunction } = {},
-): LanguageModel {
+): SdkModelV4 {
   return anthropicProvider(opts)(modelId);
 }

@@ -38,9 +38,8 @@ export interface AppGraphDeps {
   readonly mode: ApprovalMode;
   readonly accessible: boolean;
   readonly binding: WidgetCatalogBinding;
-  /** The entry builds the real provider; a test passes a scripted one. */
-  readonly provider: SessionDeps['provider'];
-  readonly model: SessionDeps['model'];
+  /** The provider with the model it runs. The entry builds the real one; a test passes a scripted one. */
+  readonly route: SessionDeps['route'];
   /** The directory the person runs from, told to the model so it can write absolute paths. */
   readonly workingDirectory: string;
   /** In production `(wiring) => new AgentSession(wiring)`. */

@@ -245,7 +245,10 @@ describe('cliMain: a run', () => {
 });
 
 describe('cliMain: the model', () => {
-  const modelOf = (h: Harness): unknown => Reflect.get(h.built[0]?.model ?? {}, 'modelId');
+  const modelOf = (h: Harness): unknown => {
+    const model = h.built[0]?.route.model;
+    return typeof model === 'object' ? model.modelId : model;
+  };
 
   it('is the default, the environment variable or the flag, in that order of precedence', async () => {
     const plain = harness();
@@ -323,12 +326,11 @@ describe('cliMain: the session', () => {
     const h = harness();
     await cliMain(['merge'], h.deps);
     const session = h.built[0]?.makeSession({
-      provider: createMockProvider({ script: [] }),
+      route: { provider: createMockProvider({ script: [] }), model: 'test-model' },
       toolDispatch: { dispatch: () => Promise.reject(new Error('not used')) },
       specSink: createSpecSink(),
       visibility: createVisibilityChannel({}),
       tools: [],
-      model: 'test-model',
     });
     expect(typeof session?.submit).toBe('function');
     expect(typeof session?.cancel).toBe('function');

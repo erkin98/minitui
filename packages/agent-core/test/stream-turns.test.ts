@@ -15,7 +15,7 @@ import {
   type StreamOptions,
   type StreamTextFn,
 } from './helpers/fake-stream.js';
-import { scriptedModel, toolCallTurn } from './helpers/sdk-model.js';
+import { scriptedModel, toolCallTurn, unusedModel } from './helpers/sdk-model.js';
 
 // A stream function that (1) runs a registered tool the way the SDK does, then (2) yields the given parts.
 function fakeStreamText(opts: {
@@ -81,7 +81,7 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts }),
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -127,7 +127,7 @@ describe('stream-turns', () => {
         }),
         toolDispatch: localDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
@@ -159,7 +159,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: failingDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: failingDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -197,7 +197,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: deniedDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: deniedDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -250,7 +250,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: leakyDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: leakyDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -295,7 +295,7 @@ describe('stream-turns', () => {
         streamTextImpl: sdkLike,
         toolDispatch: rejectingDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -349,7 +349,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: noopDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: noopDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -389,7 +389,7 @@ describe('stream-turns', () => {
         streamTextImpl: sdkLike,
         toolDispatch: orgDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         redactionPolicy: { extraSecretPatterns: [/COMPANY-\d{6}/g] },
       },
     }).then(() => queue.close());
@@ -434,7 +434,7 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts: [{ type: 'error', error: new Error('rate') }] }),
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -462,7 +462,7 @@ describe('stream-turns', () => {
         streamTextImpl: stalling,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         idleTimeoutMs: 20,
         streamMaxRetries: 0,
       },
@@ -493,7 +493,7 @@ describe('stream-turns', () => {
         streamTextImpl: truncated,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 0,
       },
     }).then(() => queue.close());
@@ -527,7 +527,7 @@ describe('stream-turns', () => {
         streamTextImpl: flaky,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 2,
         // a virtual clock: its waits return at once, so the re-run does not sleep for real
         clock: fixedClock(0),
@@ -562,7 +562,7 @@ describe('stream-turns', () => {
         streamTextImpl: dropsAfterContent,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 2,
       },
     }).then(() => queue.close());
@@ -709,7 +709,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
@@ -731,7 +731,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
@@ -783,7 +783,7 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts: [{ type: 'finish', finishReason: 'stop' }] }),
         toolDispatch: dispatch,
         tools: [{ name: 'invalid', description: 'x', inputSchema: z.object({}) }],
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 0,
       },
     }).then(() => queue.close());
@@ -810,7 +810,7 @@ describe('stream-turns', () => {
         streamTextImpl: capturing,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         instructions: 'you build merge apps',
       },
     }).then(() => queue.close());
@@ -836,7 +836,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: counting, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: counting, toolDispatch: dispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);

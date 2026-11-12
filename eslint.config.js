@@ -251,6 +251,8 @@ export default tseslint.config(
       '**/*.d.cts',
       'test/eslint-boundary-fixture/**',
       'apps/eslint-policy-fixture/**',
+      // Compiled only by scripts/check-type-fixtures.mjs, where each must fail on its marked line.
+      'packages/agent-core/type-fixtures/**',
       // Any local-only working-copy trees (absent in a clean clone) come from the
       // best-effort loader above; the rule set is untouched.
       ...localIgnores,

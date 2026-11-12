@@ -68,8 +68,7 @@ async function build(
     mode: over.mode ?? 'default',
     accessible: false,
     binding: createInkBinding(videoMergeCatalog),
-    provider: createMockProvider({ script: [] }),
-    model: 'test-model',
+    route: { provider: createMockProvider({ script: [] }), model: 'test-model' },
     workingDirectory: '/work/dir',
     makeSession: (w) => {
       wiring = w;
@@ -92,7 +91,7 @@ describe('buildAppGraph: the session', () => {
     expect(typeof w?.toolDispatch.dispatch).toBe('function');
     expect(typeof w?.specSink.emit).toBe('function');
     expect(w?.tools).toEqual([]);
-    expect(w?.model).toBe('test-model');
+    expect(w?.route.model).toBe('test-model');
     expect(w?.config?.system).toBe(graph.systemPrompt);
     expect(w?.config?.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
     expect(w?.diagnostics).toBe(log.diagnostics);

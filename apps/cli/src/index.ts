@@ -167,8 +167,10 @@ async function runInteractive(
       mode: args.mode,
       accessible: args.accessible,
       binding: createInkBinding(videoMergeCatalog),
-      provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
-      model: createAnthropicModel(modelId, { apiKey }),
+      route: {
+        provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
+        model: createAnthropicModel(modelId, { apiKey }),
+      },
       workingDirectory: deps.cwd,
       makeSession: (wiring) => new AgentSession(wiring),
       diagnostics,

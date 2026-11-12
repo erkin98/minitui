@@ -1,4 +1,4 @@
-import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { stepCountIs, tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { assertNever, JsonObjectSchema, type JsonValue } from '@minitui/types';
 import type { ToolCallResult, ToolDispatchPort } from '../ports/index.js';
@@ -6,7 +6,7 @@ import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import type { Conversation } from './conversation.js';
-import type { ModelProvider } from '../provider/provider-port.js';
+import type { ModelProvider, SdkModelV4 } from '../provider/provider-port.js';
 import type { ProviderChunk, ProviderRequest } from '../provider/provider-types.js';
 import {
   textContent,
@@ -50,7 +50,7 @@ export interface RunTurnsDeps {
   readonly streamMaxRetries?: number | undefined;
   /** Host redaction policy passed to routeToolCallResult on every dispatch result (extraSecretPatterns). */
   readonly redactionPolicy?: RedactionPolicy | undefined;
-  readonly model: LanguageModel;
+  readonly model: SdkModelV4;
   /** The system prompt, sent as the SDK's own instructions option; forwarded only when defined. */
   readonly instructions?: string | undefined;
   /** Output-token ceiling for one model call; forwarded only when defined. */
@@ -448,7 +448,8 @@ export async function runProviderStream(args: {
   conversation: Conversation;
   threadId: string;
   runId: string;
-  model: LanguageModel;
+  /** The model id the provider is asked for. */
+  model: string;
   system?: string | undefined;
   toolDispatch: ToolDispatchPort;
   /** The tools the model may call; a call to any other name is refused without a dispatch. */
@@ -470,15 +471,14 @@ export async function runProviderStream(args: {
     queue,
     signal,
   } = args;
-  // A real non-SDK provider reads config.model; a scripted double ignores the request entirely. When the
-  // model handle is an opaque object (not a bare id string) fall back to the provider id. The system
+  // A real non-SDK provider reads config.model; a scripted double ignores the request entirely. The system
   // prompt is already the conversation's head row (AgentSession seeds it) — do NOT also thread it via
   // config.system, or a non-SDK provider honoring both channels applies it twice.
   const headIsSystem = conversation.messages[0]?.role === 'system';
   const request: ProviderRequest = {
     messages: conversation.messages,
     config: {
-      model: typeof model === 'string' ? model : provider.id,
+      model,
       ...(system !== undefined && !headIsSystem ? { system } : {}),
     },
   };

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { streamText as realStreamText, type LanguageModel } from 'ai';
+import { streamText as realStreamText } from 'ai';
 import type { StreamTextFn } from '../provider/stream-part.js';
 import type { AppSpec } from '@minitui/types';
-import type { ModelProvider } from '../provider/provider-port.js';
+import { isSdkLoopRoute, type ModelRoute } from '../provider/provider-port.js';
 import {
   systemClock,
   type ToolDispatchPort,
@@ -128,37 +128,35 @@ export class AgentSession {
   readonly #controllers = new Set<AbortController>();
   // The queue of the most recently started turn: emitSpec() pushes there.
   #queue: AsyncEventQueue<MinituiEvent> | undefined;
-  readonly #provider: ModelProvider;
   readonly #toolDispatch: ToolDispatchPort;
   readonly #specSink: SpecSinkPort;
   readonly #tools: readonly ToolSchema[];
-  readonly #model: LanguageModel;
+  readonly #route: ModelRoute;
   readonly #config: AgentConfig;
   readonly #clock: Clock;
   readonly #diagnostics: DiagnosticsPort;
 
   constructor(deps: {
-    provider: ModelProvider;
+    /** The provider with the model it runs; an SDK-loop provider takes a model object, never an id. */
+    route: ModelRoute;
     toolDispatch: ToolDispatchPort;
     specSink: SpecSinkPort;
     visibility: VisibilityChannel;
     tools: readonly ToolSchema[];
-    model: LanguageModel;
     clock?: Clock;
     diagnostics?: DiagnosticsPort;
     config?: AgentConfig;
   }) {
     this.threadId = randomUUID();
-    // provider supplies the day-1 model handle and is the swap point for a non-SDK provider. specSink is
+    // route is the provider with the model it runs, and the swap point for a non-SDK provider. specSink is
     // LIVE here — emitSpec() below is its call path. clock (re-run waits) and diagnostics are read from here
     // on. visibility is accepted as a required seam dep but is not read on this path yet (it will drive
     // observation routing); a field is added the same change that first reads it, so no unread state
     // lingers here.
-    this.#provider = deps.provider;
+    this.#route = deps.route;
     this.#toolDispatch = deps.toolDispatch;
     this.#specSink = deps.specSink;
     this.#tools = deps.tools;
-    this.#model = deps.model;
     this.#config = deps.config ?? {};
     assertConfig(this.#config);
     this.#clock = deps.clock ?? systemClock;
@@ -201,7 +199,7 @@ export class AgentSession {
 
       // The SDK loop sends the system prompt as its own instructions option; the other loop keeps it as the
       // history's head row, which is what a non-SDK provider reads.
-      const headRow = this.#config.system && this.#provider.usesSdkLoop !== true;
+      const headRow = this.#config.system && !isSdkLoopRoute(this.#route);
       const conversation = createConversation(
         headRow ? [{ role: 'system', content: this.#config.system ?? '' }] : [],
       ).append({ role: 'user', content: intent });
@@ -247,13 +245,14 @@ export class AgentSession {
     signal: AbortSignal;
   }): Promise<void> {
     const { conversation, runId, queue, signal } = args;
-    if (this.#provider.usesSdkLoop !== true) {
+    const route = this.#route;
+    if (!isSdkLoopRoute(route)) {
       return runProviderStream({
-        provider: this.#provider,
+        provider: route.provider,
         conversation,
         threadId: this.threadId,
         runId,
-        model: this.#model,
+        model: route.model,
         system: this.#config.system,
         toolDispatch: this.#toolDispatch,
         tools: this.#tools,
@@ -271,7 +270,7 @@ export class AgentSession {
       idleTimeoutMs: this.#config.idleTimeoutMs,
       streamMaxRetries: this.#config.streamMaxRetries,
       redactionPolicy: this.#config.redactionPolicy,
-      model: this.#model,
+      model: route.model,
       instructions: this.#config.system,
       maxOutputTokens: this.#config.maxOutputTokens,
       clock: this.#clock,

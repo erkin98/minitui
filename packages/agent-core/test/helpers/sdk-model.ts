@@ -172,10 +172,31 @@ import { AgentSession, type AgentConfig } from '../../src/session/agent-session.
 import type { ToolSchema } from '../../src/session/stream-turns.js';
 import type { ToolDispatchPort, SpecSinkPort, Clock } from '../../src/ports/index.js';
 import type { VisibilityChannel } from '../../src/visibility/index.js';
-import type { ModelProvider } from '../../src/provider/provider-port.js';
+import type {
+  ModelProvider,
+  ModelRoute,
+  SdkLoopProvider,
+} from '../../src/provider/provider-port.js';
 import { activitySnapshot } from '../../src/events/event-factory.js';
 
-const sdkProvider: ModelProvider = { id: 'sdk', usesSdkLoop: true, async *streamChat() {} };
+const sdkProvider: SdkLoopProvider = {
+  id: 'sdk',
+  usesSdkLoop: true,
+  sdkCallOptions: () => ({}),
+  async *streamChat() {},
+};
+
+/** A model object for a loop whose stream function is injected, so the model itself is never called. */
+export const unusedModel: SdkModel = scriptedModel([], 0).model;
+
+// The route a test session runs: a non-SDK provider takes the model id, the SDK loop a model object.
+function routeOf(model: SdkModel | string, provider: ModelProvider | undefined): ModelRoute {
+  if (provider !== undefined && provider.usesSdkLoop !== true) {
+    return { provider, model: typeof model === 'string' ? model : model.modelId };
+  }
+  if (typeof model === 'string') throw new Error('the SDK loop takes a model object, not an id');
+  return { provider: provider ?? sdkProvider, model };
+}
 const specSink: SpecSinkPort = { emit: (spec) => activitySnapshot(spec) };
 const visibility: VisibilityChannel = {
   classOf: () => 'modelVisible',
@@ -194,7 +215,7 @@ const okDispatch: ToolDispatchPort = {
 };
 
 export function makeSession(args: {
-  readonly model: LanguageModel;
+  readonly model: SdkModel | string;
   readonly config?: AgentConfig;
   readonly tools?: readonly ToolSchema[];
   readonly toolDispatch?: ToolDispatchPort;
@@ -204,12 +225,11 @@ export function makeSession(args: {
   readonly diagnostics?: DiagnosticsPort;
 }): AgentSession {
   return new AgentSession({
-    provider: args.provider ?? sdkProvider,
+    route: routeOf(args.model, args.provider),
     toolDispatch: args.toolDispatch ?? okDispatch,
     specSink,
     visibility,
     tools: args.tools ?? [],
-    model: args.model,
     ...(args.config !== undefined ? { config: args.config } : {}),
     ...(args.clock !== undefined ? { clock: args.clock } : {}),
     ...(args.diagnostics !== undefined ? { diagnostics: args.diagnostics } : {}),

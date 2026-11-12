@@ -34,14 +34,13 @@ const GOLDEN_DIR = new URL('./__golden__/', import.meta.url);
 
 function scriptedSession(provider: MockLlmProvider): AgentSession {
   return new AgentSession({
-    provider,
+    route: { provider, model: 'scripted' },
     toolDispatch: {
       dispatch: (req) => Promise.reject(new Error(`the model called a tool: ${req.toolName}`)),
     },
     specSink: createSpecSink(),
     visibility: createVisibilityChannel(catalogVisibilityToChannel(videoMergeCatalog)),
     tools: [],
-    model: 'scripted',
   });
 }
 

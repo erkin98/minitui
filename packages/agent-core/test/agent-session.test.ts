@@ -3,13 +3,19 @@ import { z } from 'zod';
 import { AgentSession } from '../src/session/agent-session.js';
 import type { ToolDispatchPort, ToolCallResult, SpecSinkPort } from '../src/ports/index.js';
 import type { VisibilityChannel } from '../src/visibility/index.js';
-import type { ModelProvider } from '../src/provider/provider-port.js';
+import type { DirectProvider, SdkLoopProvider } from '../src/provider/provider-port.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import { activitySnapshot } from '../src/events/event-factory.js';
 import { partsStream, runTool } from './helpers/fake-stream.js';
+import { unusedModel } from './helpers/sdk-model.js';
 
 // A provider that drives the SDK loop, so a turn runs through the stream function the config injects.
-const provider: ModelProvider = { id: 'x', usesSdkLoop: true, async *streamChat() {} };
+const provider: SdkLoopProvider = {
+  id: 'x',
+  usesSdkLoop: true,
+  sdkCallOptions: () => ({}),
+  async *streamChat() {},
+};
 const toolDispatch: ToolDispatchPort = {
   dispatch: async (req): Promise<ToolCallResult> => ({
     toolCallId: req.toolCallId,
@@ -36,12 +42,11 @@ const tools = [{ name: 'ffmpeg', description: 'm', inputSchema: z.object({ a: z.
 describe('AgentSession', () => {
   it('submit yields RUN_STARTED ... RUN_FINISHED bracketing the turn', async () => {
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         streamTextImpl: fakeStreamText([
           { type: 'text-delta', text: 'hi' },
@@ -60,12 +65,11 @@ describe('AgentSession', () => {
     // The specSink wiring: the compose-loop caller calls emitSpec once validation passes; the event
     // must ride the SAME submit() stream the transport consumes.
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         streamTextImpl: () => ({
           fullStream: (async function* () {
@@ -86,12 +90,11 @@ describe('AgentSession', () => {
 
   it('cancel aborts the in-flight turn so the generator ends early', async () => {
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         streamTextImpl: () => ({
           fullStream: (async function* () {
@@ -118,12 +121,11 @@ describe('AgentSession', () => {
     // TimeoutError bracket in submit(), the turn would return silently — RUN_STARTED with no terminal
     // event, so a consumer waiting for RUN_FINISHED/RUN_ERROR hangs forever.
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         turnTimeoutMs: 5,
         idleTimeoutMs: 5000, // high, so the whole-turn deadline (not the idle guard) is what fires
@@ -164,12 +166,11 @@ describe('AgentSession', () => {
       },
     };
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch: slowDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         // streamText calls the tool's execute (which awaits dispatch), then emits a text delta we cancel
         // on. The aborted dispatch resolves isError:true, so execute THROWS by design — swallow it here
@@ -195,7 +196,7 @@ describe('AgentSession', () => {
     // A scripted ModelProvider carries its own chunks and does NOT set usesSdkLoop, so submit() consumes
     // provider.streamChat instead of the SDK streamText loop. Without this every event after RUN_STARTED
     // goes missing (the script is dead).
-    const scripted: ModelProvider = {
+    const scripted: DirectProvider = {
       id: 'scripted',
       async *streamChat() {
         yield { type: 'text', text: 'from script' };
@@ -207,12 +208,11 @@ describe('AgentSession', () => {
       },
     };
     const session = new AgentSession({
-      provider: scripted,
+      route: { provider: scripted, model: 'test-model' },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
     });
     const out: string[] = [];
     for await (const e of session.submit('merge these')) out.push(e.type);
@@ -230,7 +230,7 @@ describe('AgentSession', () => {
   it('takes the non-SDK path when the provider does not set usesSdkLoop, even with a stream function in the config', async () => {
     // The provider alone chooses the loop. A stream function in the config only replaces the SDK's own on
     // the SDK path, so here the events must be the provider's chunks and not the stream function's parts.
-    const scripted: ModelProvider = {
+    const scripted: DirectProvider = {
       id: 'scripted',
       async *streamChat() {
         yield { type: 'text', text: 'from the provider' };
@@ -238,12 +238,11 @@ describe('AgentSession', () => {
       },
     };
     const session = new AgentSession({
-      provider: scripted,
+      route: { provider: scripted, model: 'test-model' },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         streamTextImpl: partsStream([
           { type: 'text-delta', text: 'from the stream function' },
@@ -266,12 +265,11 @@ describe('AgentSession', () => {
     // one thread (stable threadId), a distinct runId per run. A regression witness for the still-alive
     // ingress contract (submit is already re-callable).
     const session = new AgentSession({
-      provider,
+      route: { provider, model: unusedModel },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: {
         streamTextImpl: fakeStreamText([
           { type: 'text-delta', text: 'ok' },
@@ -304,7 +302,7 @@ describe('AgentSession', () => {
     // Every submit starts a fresh conversation, so the caller's text is the whole of what the model is
     // told: it must arrive byte for byte (no trim, no prefix), directly after the system message.
     const seen: Array<ReadonlyArray<{ role: string; content: unknown }>> = [];
-    const recording: ModelProvider = {
+    const recording: DirectProvider = {
       id: 'recording',
       async *streamChat(req) {
         seen.push(req.messages);
@@ -312,12 +310,11 @@ describe('AgentSession', () => {
       },
     };
     const session = new AgentSession({
-      provider: recording,
+      route: { provider: recording, model: 'test-model' },
       toolDispatch,
       specSink,
       visibility,
       tools,
-      model: 'test-model',
       config: { system: 'sys' },
     });
     const reprompt = '\n  the merge action failed with exit 1 — regenerate a corrected spec  \n';
