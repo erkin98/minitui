@@ -73,3 +73,27 @@ describe('the pre-push hook', () => {
     expect(PRE_PUSH).not.toContain('test-policy:');
   });
 });
+
+// The pre-commit hook runs its gates one after another, the type check before lint: run side by side,
+// the type check rebuilds the packages' dist while lint's typed rules read their declarations, and lint
+// then reports every imported workspace type as an error type. Its manifest check matches the root
+// package.json too, which `**/package.json` alone never does.
+describe('the pre-commit hook', () => {
+  const block = settings(blockOf(readFileSync(hooksFile, 'utf8'), 'pre-commit'));
+  const priorityOf = (name: string): number => {
+    const found = new RegExp(`\n    ${name}:\n(?:      .*\n)*?      priority: (\\d+)\n`).exec(
+      `\n${block}\n`,
+    );
+    return Number(found?.[1]);
+  };
+
+  it('runs its gates one after another, the type check before lint', () => {
+    expect(block).toContain('  piped: true');
+    expect(block).not.toContain('parallel: true');
+    expect(priorityOf('typecheck')).toBeLessThan(priorityOf('lint'));
+  });
+
+  it('checks the root manifest as well as every package one', () => {
+    expect(block).toContain("glob: '{package.json,**/package.json}'");
+  });
+});
