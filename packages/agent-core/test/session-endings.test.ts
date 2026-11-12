@@ -51,6 +51,13 @@ describe('every finish reason ends the run as what it was (SDK loop)', () => {
     expect((await endingOf([{ chunks: textTurn('hi', 'other') }]))?.type).toBe('RUN_FINISHED');
   });
 
+  it('interrupted ends with the retriable interrupted-generation error', async () => {
+    expect(await endingOf([{ chunks: textTurn('hi', 'interrupted') }])).toEqual({
+      type: 'RUN_ERROR',
+      message: 'the provider interrupted the generation',
+    });
+  });
+
   it('length ends with a non-retriable error, never a clean finish', async () => {
     expect(await endingOf([{ chunks: textTurn('hi', 'length') }])).toEqual({
       type: 'RUN_ERROR',
@@ -253,6 +260,13 @@ describe('the other loop ends a finish chunk as what it was', () => {
 
   it.each(['stop', 'other'] as const)('%s ends RUN_FINISHED', async (reason) => {
     expect((await endWith({ type: 'finish', reason }))?.type).toBe('RUN_FINISHED');
+  });
+
+  it('interrupted ends with the retriable interrupted-generation error', async () => {
+    expect(await endWith({ type: 'finish', reason: 'interrupted' })).toEqual({
+      type: 'RUN_ERROR',
+      message: 'the provider interrupted the generation',
+    });
   });
 
   it('length ends non-retriable', async () => {

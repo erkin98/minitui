@@ -199,8 +199,11 @@ export class AgentSession {
       const runId = randomUUID();
       yield runStarted(this.threadId, runId);
 
+      // The SDK loop sends the system prompt as its own instructions option; the other loop keeps it as the
+      // history's head row, which is what a non-SDK provider reads.
+      const headRow = this.#config.system && this.#provider.usesSdkLoop !== true;
       const conversation = createConversation(
-        this.#config.system ? [{ role: 'system', content: this.#config.system }] : [],
+        headRow ? [{ role: 'system', content: this.#config.system ?? '' }] : [],
       ).append({ role: 'user', content: intent });
 
       // The run's own errors surface as in-band RUN_ERROR events, so a terminal .catch keeps a
@@ -269,6 +272,7 @@ export class AgentSession {
       streamMaxRetries: this.#config.streamMaxRetries,
       redactionPolicy: this.#config.redactionPolicy,
       model: this.#model,
+      instructions: this.#config.system,
       maxOutputTokens: this.#config.maxOutputTokens,
       clock: this.#clock,
       diagnostics: this.#diagnostics,

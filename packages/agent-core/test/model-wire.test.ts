@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { makeSession } from './helpers/sdk-model.js';
+import { createAnthropicModel } from '../src/provider/ai-sdk-provider.js';
 import {
   fieldOf,
   messagesOf,
@@ -39,12 +40,33 @@ describe('how a turn reaches the model API', () => {
     expect(events.at(-1)?.type).toBe('RUN_FINISHED');
   });
 
-  it('reports the reply’s token usage on RUN_FINISHED, input without the cache counts', async () => {
+  it('reports the reply’s token usage on RUN_FINISHED, input counting the cache reads and writes', async () => {
     const { events } = await turn('you build merge apps');
     const last = events.at(-1);
+    // 11 uncached + 5 written to the cache + 7 read from it. Before the SDK's current major version the
+    // input count was the uncached 11 only.
     expect(last).toMatchObject({
       type: 'RUN_FINISHED',
-      usage: { inputTokens: 11, outputTokens: 9 },
+      usage: { inputTokens: 23, outputTokens: 9 },
     });
+  });
+});
+
+describe('the model endpoint is fixed', () => {
+  it('sends the request to api.anthropic.com even when ANTHROPIC_BASE_URL names another host', async () => {
+    const before = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = 'https://elsewhere.test/v1';
+    try {
+      const wire = recordingFetch(textReply('hello', USAGE));
+      const model = createAnthropicModel('test-model', { apiKey: 'test', fetch: wire.fetch });
+      const session = makeSession({ model, config: { maxOutputTokens: 1000 } });
+      for await (const ev of session.submit('merge the clips')) void ev;
+      expect(wire.requests.map((r) => new URL(r.url).origin)).toEqual([
+        'https://api.anthropic.com',
+      ]);
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = before;
+    }
   });
 });

@@ -67,8 +67,8 @@ catalog:
   '@ag-ui/core': 0.0.57
   fast-json-patch: 3.1.1
   rxjs: 7.8.1
-  ai: 5.0.45
-  '@ai-sdk/anthropic': 2.0.17
+  ai: 7.0.162
+  '@ai-sdk/anthropic': 4.0.96
   # v2 client. alpha.2 KEPT over the published beta.2 (re-verified 2026-07-06): beta.2 targets the
   # newer 2026-07-28 spec RC (breaking API changes expected), while the whole MCP consumer surface
   # (paginated listTools, callTool(params, options), ProtocolError) is verified against the

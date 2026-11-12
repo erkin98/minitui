@@ -51,6 +51,8 @@ export interface RunTurnsDeps {
   /** Host redaction policy passed to routeToolCallResult on every dispatch result (extraSecretPatterns). */
   readonly redactionPolicy?: RedactionPolicy | undefined;
   readonly model: LanguageModel;
+  /** The system prompt, sent as the SDK's own instructions option; forwarded only when defined. */
+  readonly instructions?: string | undefined;
   /** Output-token ceiling for one model call; forwarded only when defined. */
   readonly maxOutputTokens?: number | undefined;
   /** Waits between re-runs; default systemClock. */
@@ -92,12 +94,6 @@ function buildTools(
   // No prototype: a call to `constructor`, `toString` or `__proto__` is an unknown tool like any other.
   const out = Object.create(null) as ToolSet;
   for (const s of schemas) {
-    // `invalid` is reserved for the synthetic repair-reroute tool registered below — a catalog tool
-    // of that name would be silently shadowed by it. Reject the collision (the frozen v1 catalog has
-    // no such tool).
-    if (s.name === 'invalid') {
-      throw new Error("tool name 'invalid' is reserved for the repair-reroute tool");
-    }
     out[s.name] = tool({
       description: s.description,
       inputSchema: s.inputSchema,
@@ -150,21 +146,6 @@ function buildTools(
       },
     });
   }
-  // The synthetic `invalid` tool a repaired (still-unknown) call reroutes to. Its result tells the
-  // model what it got wrong so it self-corrects on the next step. Registered so the SDK's re-parse of
-  // the repaired call resolves. It is left out of activeTools below, but the model can still name it in a
-  // call: calling it dispatches nothing. It is NOT a ToolDispatchPort dispatch — no exec, no gate, so it
-  // does NOT cross routeToolCallResult (the payload is the model's own bad tool name + the SDK error
-  // text: nothing to redact).
-  out.invalid = tool({
-    description:
-      'Internal: reports a malformed tool call back to the model so it retries correctly.',
-    inputSchema: z.object({ tool: z.string(), error: z.string() }),
-    execute: ({ tool: attempted, error }) =>
-      `Invalid tool call "${attempted}": ${error}. Valid tools: ${schemas
-        .map((s) => s.name)
-        .join(', ')}. Retry with a valid tool name and arguments.`,
-  });
   return out;
 }
 
@@ -188,7 +169,7 @@ export async function runTurns(args: {
   const onError = streamErrorHandler(deps.diagnostics ?? noopDiagnostics, deps.redactionPolicy);
 
   // Build the tool set ONCE, outside the re-run loop: it does not depend on the attempt. A deterministic
-  // config throw here (e.g. a reserved tool name) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
+  // config throw here (e.g. a schema the SDK refuses) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
   // never re-run as if it were a transient stream drop. The repair closure also consults it.
   let toolSet: ToolSet;
   try {
@@ -196,6 +177,19 @@ export async function runTurns(args: {
   } catch (err) {
     await queue.push(
       runError(redact(toRunError(err).message, deps.redactionPolicy), 'non-retriable'),
+    );
+    return;
+  }
+
+  // The system prompt travels as instructions. A system row in the history is refused here, before any
+  // attempt: the SDK refuses it too, but only inside the stream, where the re-run tier would read it as a
+  // retriable drop and send the same history again.
+  if (conversation.messages.some((m) => m.role === 'system')) {
+    await queue.push(
+      runError(
+        'a system message cannot be part of the history; it is sent as instructions',
+        'non-retriable',
+      ),
     );
     return;
   }
@@ -224,31 +218,28 @@ export async function runTurns(args: {
           role: m.role,
           content: m.content,
         })) as ModelMessage[],
+        // The system prompt is its own option: the history never carries a system row (refused above).
+        ...(deps.instructions !== undefined ? { instructions: deps.instructions } : {}),
         tools: toolSet,
-        // The model may only call the real catalog tools; the synthetic `invalid` tool is reachable
-        // ONLY via the repair reroute below, never as a direct model call.
+        // The model is offered exactly the catalog tools, and the SDK parses a repaired call again against
+        // this same list.
         activeTools: deps.tools.map((s) => s.name),
         stopWhen: [
           stepCountIs(deps.stepCeiling ?? DEFAULT_STEP_CEILING),
           repeatedToolCallDetector(),
         ],
-        // Two-tier tool-call repair. The SDK invokes this only when a tool call fails to parse. Tier 1
-        // case-fixes a wrong-CASE name in place when the lowercased name is a registered tool; tier 2
-        // reroutes any still-unknown call to the synthetic `invalid` tool so the model learns what went
-        // wrong instead of the turn dying. The repaired call is re-parsed against toolSet, so tier 2's
-        // target MUST be registered (it is). The SDK's repair type requires a Promise return, so this is
-        // async even though its body does no awaiting.
+        // Tool-call repair, called by the SDK only when a call fails to parse. A wrong-CASE name is fixed in
+        // place when the lowercased name is a catalog tool. Anything else is left to the SDK (null): its
+        // own invalid-call path reports the original error to the model as a failed tool result, so the
+        // model learns what went wrong and the turn goes on. The SDK's repair type requires a Promise
+        // return, so this is async even though its body does no awaiting.
         // eslint-disable-next-line @typescript-eslint/require-await
         experimental_repairToolCall: async (failed) => {
           const lower = failed.toolCall.toolName.toLowerCase();
           if (lower !== failed.toolCall.toolName && Object.hasOwn(toolSet, lower)) {
             return { ...failed.toolCall, toolName: lower };
           }
-          return {
-            ...failed.toolCall,
-            input: JSON.stringify({ tool: failed.toolCall.toolName, error: failed.error.message }),
-            toolName: 'invalid',
-          };
+          return null;
         },
         ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         abortSignal: attemptSignal,

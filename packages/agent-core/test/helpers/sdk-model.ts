@@ -1,38 +1,43 @@
 import type { LanguageModel } from 'ai';
 import type { DiagnosticsPort } from '@minitui/types';
 
-// A real model object for the installed `streamText`. The provider interface is not exported by name
-// from `ai`, and the provider package is not a declared dependency, so the types are derived from the
-// public `LanguageModel` union.
-export type SdkModel = Exclude<LanguageModel, string>;
+// A real model object for the installed `streamText`, at the current model specification (v4). The provider
+// interface is not exported by name from `ai`, and the provider package is not a declared dependency, so the
+// types are derived from the public `LanguageModel` union. An older specification would make the SDK log a
+// compatibility warning on every call.
+export type SdkModel = Extract<LanguageModel, { readonly specificationVersion: 'v4' }>;
 export type CallOptions = Parameters<SdkModel['doStream']>[0];
 type Stream = Awaited<ReturnType<SdkModel['doStream']>>['stream'];
 export type StreamPart = Stream extends ReadableStream<infer P> ? P : never;
 
-const USAGE = { inputTokens: 3, outputTokens: 2, totalTokens: 5 } as const;
+type FinishPart = Extract<StreamPart, { type: 'finish' }>;
+/** A finish reason as the SDK reports it to the caller; the model part carries it with its raw value. */
+export type Reason = FinishPart['finishReason']['unified'];
+
+/** A finish part with the given reason and small fixed usage. */
+export const finishPart = (reason: Reason): FinishPart => ({
+  type: 'finish',
+  finishReason: { unified: reason, raw: reason },
+  usage: {
+    inputTokens: { total: 3, noCache: 3, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 2, text: 2, reasoning: undefined },
+  },
+});
 
 /** A stream-start part, one text block, and a finish part with the given reason. */
-export function textTurn(
-  text: string,
-  finishReason: Extract<StreamPart, { type: 'finish' }>['finishReason'] = 'stop',
-): readonly StreamPart[] {
+export function textTurn(text: string, finishReason: Reason = 'stop'): readonly StreamPart[] {
   return [
     { type: 'stream-start', warnings: [] },
     { type: 'text-start', id: 't' },
     { type: 'text-delta', id: 't', delta: text },
     { type: 'text-end', id: 't' },
-    { type: 'finish', finishReason, usage: USAGE },
+    finishPart(finishReason),
   ];
 }
 
 /** A stream-start part and a finish part: a reply with no content. */
-export function finishOnly(
-  finishReason: Extract<StreamPart, { type: 'finish' }>['finishReason'],
-): readonly StreamPart[] {
-  return [
-    { type: 'stream-start', warnings: [] },
-    { type: 'finish', finishReason, usage: USAGE },
-  ];
+export function finishOnly(finishReason: Reason): readonly StreamPart[] {
+  return [{ type: 'stream-start', warnings: [] }, finishPart(finishReason)];
 }
 
 /** A stream-start part and one tool call. The model then waits for the tool result. */
@@ -40,12 +45,12 @@ export function toolCallTurn(
   toolCallId: string,
   toolName: string,
   input: unknown,
-  finishReason: Extract<StreamPart, { type: 'finish' }>['finishReason'] = 'tool-calls',
+  finishReason: Reason = 'tool-calls',
 ): readonly StreamPart[] {
   return [
     { type: 'stream-start', warnings: [] },
     { type: 'tool-call', toolCallId, toolName, input: JSON.stringify(input) },
-    { type: 'finish', finishReason, usage: USAGE },
+    finishPart(finishReason),
   ];
 }
 
@@ -118,7 +123,7 @@ export interface ScriptedModel {
 export function scriptedModel(scripts: readonly CallScript[], maxCalls = 25): ScriptedModel {
   const calls: CallOptions[] = [];
   const model: SdkModel = {
-    specificationVersion: 'v2',
+    specificationVersion: 'v4',
     provider: 'scripted',
     modelId: 'scripted-model',
     supportedUrls: {},

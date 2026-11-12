@@ -370,7 +370,9 @@ console.log(`witness matrix: ${witnessRows.length} rows in ${matrixSeconds} s`);
 // The agent-core rule bans the SDK's MCP names one by one, so the list is bound to the installed SDK
 // version. Enumerate what the SDK's root declaration file exports (a runtime import shows only the value
 // exports): export lists, type-only export lists and direct declarations. Fail on any MCP name the rule
-// does not ban. The check refuses to pass vacuously, and its readers are tested on synthetic text below.
+// does not ban. A root with no MCP name has nothing to ban (the SDK's current major version ships its MCP
+// client as a separate package). The check refuses to pass when it cannot see the root's names, and its
+// readers are tested on synthetic text below.
 const EXPORT_LIST = /export\s*(?:type\s+)?\{([^}]*)\}/g;
 const STAR_REEXPORT = /export\s*(?:type\s+)?\*/;
 const DIRECT_EXPORT =
@@ -399,17 +401,15 @@ const mcpNamesOf = (declaration) =>
       .filter(Boolean),
   );
 const unbanned = (names, banned) => [...names].filter((name) => !banned.has(name));
-// An enumeration that could not have found an MCP name proves nothing: no export list, a star re-export
-// (it hides names behind another module) or no MCP name at all.
+// An enumeration that could not have seen an MCP name proves nothing: no export list, or a star re-export
+// (it hides names behind another module).
 const coversNothing = (declaration) =>
-  exportItemsOf(declaration).length === 0 ||
-  STAR_REEXPORT.test(declaration) ||
-  mcpNamesOf(declaration).size === 0;
+  exportItemsOf(declaration).length === 0 || STAR_REEXPORT.test(declaration);
 // What an enumeration of `declaration` finds wrong, given the names the agent-core rule bans.
 function enumerationProblems(declaration, banned) {
   if (coversNothing(declaration)) {
     return [
-      'installed ai declaration has no export list, re-exports a module with a star, or lists no MCP name: the MCP enumeration would cover nothing',
+      'installed ai declaration has no export list or re-exports a module with a star: the MCP enumeration would cover nothing',
     ];
   }
   return unbanned(mcpNamesOf(declaration), banned).map(
@@ -482,10 +482,10 @@ const SELF_TESTS = [
   ],
   ['an export list that names only banned MCP names', 'export { MCPThing };', MCP_THING, []],
   [
-    'plain names have no MCP name to find',
+    'plain names: no MCP name, so nothing to ban',
     'export { Plain as Other };\nexport declare const plain: 1;',
     new Set(),
-    [NOTHING],
+    [],
   ],
   [
     'a star re-export blinds the enumeration',

@@ -47,6 +47,15 @@ describe('ai-sdk-provider', () => {
     ]);
   });
 
+  it('keeps an interrupted finish as interrupted, not as other', async () => {
+    const p = createAiSdkProvider({
+      streamTextImpl: fakeStreamText([{ type: 'finish', finishReason: 'interrupted' }]),
+    });
+    const out: ProviderChunk[] = [];
+    for await (const c of p.streamChat(req, new AbortController().signal)) out.push(c);
+    expect(out).toEqual([{ type: 'finish', reason: 'interrupted' }]);
+  });
+
   it('maps a tool-error part to a tool-result chunk with isError:true', async () => {
     // A thrown tool execute is caught by the SDK and emitted as a tool-error part, never a tool-result.
     const p = createAiSdkProvider({

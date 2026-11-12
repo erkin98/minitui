@@ -49,10 +49,11 @@ const tools = [{ name: 'ffmpeg', description: 'merge', inputSchema: z.object({ a
 // What the SDK hands the repair function for a call to a tool it does not know.
 function repairArgs(toolCallId: string, toolName: string, input: string) {
   return {
+    instructions: undefined,
     system: undefined,
     messages: [],
     tools: {},
-    inputSchema: () => ({}),
+    inputSchema: () => Promise.resolve({}),
     toolCall: { type: 'tool-call' as const, toolCallId, toolName, input },
     error: new NoSuchToolError({
       toolName,
@@ -692,7 +693,7 @@ describe('stream-turns', () => {
     expect(results[1] && 'error' in results[1]).toBe(false);
   });
 
-  it('repairs a wrong-CASE tool name in place — tier 1, and never lets the model call `invalid`', async () => {
+  it('repairs a wrong-CASE tool name in place — tier 1; the model is offered only the catalog tools', async () => {
     // Capture the repair fn + activeTools runTurns passes to streamText, then drive the repair directly.
     let repair: StreamOptions['experimental_repairToolCall'];
     let activeTools: StreamOptions['activeTools'];
@@ -712,13 +713,12 @@ describe('stream-turns', () => {
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    // The synthetic `invalid` tool is registered but NOT model-callable — only the real catalog tools are.
     expect(activeTools).toEqual(['ffmpeg']);
     const fixed = await repair?.(repairArgs('t1', 'FFMPEG', '{"a":1}'));
     expect(fixed).toMatchObject({ toolName: 'ffmpeg', toolCallId: 't1' });
   });
 
-  it('reroutes a still-unknown tool call to the synthetic `invalid` tool — tier 2', async () => {
+  it('leaves a still-unknown tool call to the SDK — tier 2 returns null, so the original error is reported', async () => {
     let repair: StreamOptions['experimental_repairToolCall'];
     const capturing: StreamTextFn = (options) => {
       repair = options.experimental_repairToolCall;
@@ -735,13 +735,7 @@ describe('stream-turns', () => {
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    const rerouted = await repair?.(repairArgs('t2', 'delete_everything', '{}'));
-    expect(rerouted?.toolName).toBe('invalid');
-    // The invalid tool's input carries the model's bad name + the SDK error, so its result can tell the model.
-    expect(JSON.parse(rerouted?.input ?? 'null')).toEqual({
-      tool: 'delete_everything',
-      error: 'no such tool: delete_everything',
-    });
+    expect(await repair?.(repairArgs('t2', 'delete_everything', '{}'))).toBeNull();
   });
 
   it('aborts immediately on a non-retriable provider error — RUN_ERROR, no empty/malformed turn', async () => {
@@ -777,10 +771,7 @@ describe('stream-turns', () => {
     expect(out.some((e) => e.type === 'RUN_FINISHED')).toBe(false);
   });
 
-  it('rejects a catalog tool named `invalid` — reserved for the repair-reroute tool', async () => {
-    // buildTools registers a synthetic `invalid` tool for the repair reroute; a catalog tool of that name
-    // would be silently shadowed. runTurns surfaces the collision as RUN_ERROR (a config error, not a
-    // dead-shadowed grant) — the frozen v1 catalog has no such tool, so this guards a future change.
+  it('accepts a catalog tool named `invalid` like any other: no name is reserved', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -799,9 +790,64 @@ describe('stream-turns', () => {
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
     await done;
-    const last = out.at(-1);
-    expect(last?.type).toBe('RUN_ERROR');
-    if (last?.type === 'RUN_ERROR') expect(last.message).toContain('reserved');
-    expect(out.some((e) => e.type === 'RUN_FINISHED')).toBe(false);
+    expect(out.at(-1)?.type).toBe('RUN_FINISHED');
+  });
+
+  it('sends the system prompt as instructions, never as a history row', async () => {
+    let seen: StreamOptions | undefined;
+    const capturing: StreamTextFn = (options) => {
+      seen = options;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation([{ role: 'user', content: 'merge' }]),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: {
+        streamTextImpl: capturing,
+        toolDispatch: dispatch,
+        tools,
+        model: 'test-model',
+        instructions: 'you build merge apps',
+      },
+    }).then(() => queue.close());
+    for await (const _ of queue) void _;
+    await done;
+    expect(seen?.instructions).toBe('you build merge apps');
+    expect(seen?.messages?.map((m) => m.role)).toEqual(['user']);
+  });
+
+  it('refuses a system row in the history before any attempt: non-retriable, the model never called', async () => {
+    let calls = 0;
+    const counting: StreamTextFn = (options) => {
+      calls += 1;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation([
+        { role: 'system', content: 'you build merge apps' },
+        { role: 'user', content: 'merge' },
+      ]),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: { streamTextImpl: counting, toolDispatch: dispatch, tools, model: 'test-model' },
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    expect(calls).toBe(0);
+    expect(out).toEqual([
+      {
+        type: 'RUN_ERROR',
+        message: 'a system message cannot be part of the history; it is sent as instructions',
+        code: 'non-retriable',
+      },
+    ]);
   });
 });

@@ -17,6 +17,7 @@ function toFinishReason(raw: unknown): FinishReason {
     'tool-calls',
     'content-filter',
     'error',
+    'interrupted',
     'other',
   ];
   return (allowed as readonly string[]).includes(raw as string) ? (raw as FinishReason) : 'other';
@@ -51,6 +52,27 @@ function classifyStreamError(err: unknown): Extract<ProviderChunk, { type: 'erro
     : { type: 'error', message, retriable: true, retryAfterMs };
 }
 
+/** The fetch the provider package accepts; a test passes one that records the request. */
+type FetchFunction = NonNullable<NonNullable<Parameters<typeof createAnthropic>[0]>['fetch']>;
+
+/**
+ * The model API's one fixed endpoint. The provider package would otherwise read ANTHROPIC_BASE_URL, so a
+ * variable set for another tool could send the prompts and the key to another host.
+ */
+const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1';
+
+// The one place the provider package is constructed: both the provider and the model handle come from here.
+function anthropicProvider(opts: {
+  apiKey?: string | undefined;
+  fetch?: FetchFunction | undefined;
+}) {
+  return createAnthropic({
+    baseURL: ANTHROPIC_ENDPOINT,
+    ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+    ...(opts.fetch !== undefined ? { fetch: opts.fetch } : {}),
+  });
+}
+
 /**
  * The day-1 ModelProvider: wraps the Vercel AI SDK streamText().fullStream and maps each stream part
  * into the minitui-owned ProviderChunk. This file is the only place SDK stream-part types are read.
@@ -65,7 +87,7 @@ export function createAiSdkProvider(
 ): ModelProvider {
   const streamText = opts.streamTextImpl ?? realStreamText;
   const diagnostics = opts.diagnostics ?? noopDiagnostics;
-  const anthropic = createAnthropic(opts.apiKey ? { apiKey: opts.apiKey } : {});
+  const anthropic = anthropicProvider({ apiKey: opts.apiKey });
 
   return {
     id: 'anthropic',
@@ -165,15 +187,15 @@ export function createAiSdkProvider(
 }
 
 /**
- * Build a day-1 Anthropic LanguageModel handle from a model id — a thin createAnthropic({apiKey})(modelId)
- * wrapper. agent-core is the only package allowed to import ai/@ai-sdk/*, so the composition root cannot
+ * Build a day-1 Anthropic LanguageModel handle from a model id, at the fixed endpoint. `fetch` is for tests;
+ * the composition root leaves it unset. agent-core is the only package allowed to import ai/@ai-sdk/*, so the composition root cannot
  * construct the model handle itself; it imports this and passes the handle to the session. `apiKey` is
  * optional — the SDK reads ANTHROPIC_API_KEY lazily at request time, never at model construction, so this
  * makes no network call and cannot throw on a missing key.
  */
 export function createAnthropicModel(
   modelId: string,
-  opts: { apiKey?: string } = {},
+  opts: { apiKey?: string; fetch?: FetchFunction } = {},
 ): LanguageModel {
-  return createAnthropic(opts.apiKey ? { apiKey: opts.apiKey } : {})(modelId);
+  return anthropicProvider(opts)(modelId);
 }

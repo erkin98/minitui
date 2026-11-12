@@ -27,7 +27,7 @@ export async function runTool(
   const execute = options.tools?.[name]?.execute;
   if (execute === undefined) throw new Error(`no tool named ${name}`);
   try {
-    const output: unknown = await execute(input, { toolCallId, messages: [] });
+    const output: unknown = await execute(input, { toolCallId, messages: [], context: {} });
     return { output };
   } catch (error) {
     return { error };

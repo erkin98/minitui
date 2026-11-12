@@ -1,4 +1,4 @@
-import type { streamText } from 'ai';
+import { NoOutputGeneratedError, type streamText } from 'ai';
 import { redact, type RedactionPolicy } from '../visibility/redaction.js';
 
 /** One part of the model stream as this package reads it: a type tag, and fields checked before use. */
@@ -142,7 +142,11 @@ export function readStreamPart(
       };
     }
     case 'error':
-      return { kind: 'error', error: part.error };
+      // The SDK reports a model stream that closed with no output and no finish as this error part. It is
+      // read as nothing, so the stream counts as closed without a finish: the retriable drop it is.
+      return NoOutputGeneratedError.isInstance(part.error)
+        ? undefined
+        : { kind: 'error', error: part.error };
     default:
       return undefined;
   }

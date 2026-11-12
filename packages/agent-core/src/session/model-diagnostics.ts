@@ -35,7 +35,7 @@ export function streamErrorHandler(
  * receives every warning. Called at the start of every turn and every streamChat call.
  */
 export function routeProviderWarnings(port: DiagnosticsPort): void {
-  globalThis.AI_SDK_LOG_WARNINGS = (warnings) => {
+  globalThis.AI_SDK_LOG_WARNINGS = ({ warnings }) => {
     for (const warning of warnings) {
       report(port, 'model provider warning', () => ({ warning: JSON.stringify(warning) }));
     }
