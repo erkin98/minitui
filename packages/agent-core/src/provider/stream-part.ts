@@ -59,7 +59,8 @@ export type StreamStep =
       readonly finishReason: unknown;
       readonly usage: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
     }
-  | { readonly kind: 'error'; readonly error: unknown };
+  | { readonly kind: 'error'; readonly error: unknown }
+  | { readonly kind: 'step'; readonly modelId: string };
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
@@ -118,6 +119,8 @@ const READERS = {
     message: redact(part.error instanceof Error ? part.error.message : String(part.error), policy),
     denied: field(part.error, 'denied') === true,
   }),
+  // One model call ended: the model id its response named, for the per-step record.
+  'finish-step': (part) => ({ kind: 'step', modelId: text(field(part.response, 'modelId')) }),
   'tool-approval-request': readApproval,
   'tool-approval-response': readApproval,
   finish: (part) => {
@@ -147,7 +150,6 @@ export type HandledPartType = keyof typeof READERS;
 
 /** Every other part type of the installed SDK, each with the reason it is not read. */
 export const IGNORED_PARTS = {
-  'finish-step': 'one model call ended; the run ends on finish',
   'start-step': 'one model call began; nothing to show',
   start: 'the run began; the session has already said so',
   abort: 'the turn was cancelled; the loop already stops on its own signal',

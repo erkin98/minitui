@@ -278,6 +278,57 @@ describe('cliMain: the model', () => {
   });
 });
 
+describe('cliMain: the effort', () => {
+  const LEVELS = 'low, medium, high, xhigh, max';
+
+  it('is unset by default, then the environment variable, then the flag, in that order', async () => {
+    const plain = harness();
+    await cliMain(['merge'], plain.deps);
+    expect(plain.built[0]?.effort).toBeUndefined();
+    const env = harness({ env: { ANTHROPIC_API_KEY: KEY, MINITUI_EFFORT: 'low' } });
+    await cliMain(['merge'], env.deps);
+    expect(env.built[0]?.effort).toBe('low');
+    const flag = harness({ env: { ANTHROPIC_API_KEY: KEY, MINITUI_EFFORT: 'low' } });
+    await cliMain(['--effort', 'max', 'merge'], flag.deps);
+    expect(flag.built[0]?.effort).toBe('max');
+  });
+
+  it.each([
+    ['the flag', ['--effort', 'extreme', 'merge'], {}, '--effort'],
+    ['the environment', ['merge'], { MINITUI_EFFORT: 'extreme' }, 'MINITUI_EFFORT'],
+    [
+      'the environment, under a good flag',
+      ['--effort', 'max', 'merge'],
+      { MINITUI_EFFORT: 'HIGH' },
+      'MINITUI_EFFORT',
+    ],
+  ] as const)(
+    'a bad level from %s is a usage error: exit 2 naming the levels, nothing built',
+    async (_label, argv, extra, source) => {
+      const h = harness({ env: { ANTHROPIC_API_KEY: KEY, ...extra } });
+      expect(await cliMain(argv, h.deps)).toBe(2);
+      expect(h.err.join('\n')).toContain(`${source} must be one of ${LEVELS}`);
+      expect(h.err.join('\n')).toContain('usage: minitui');
+      expect(h.built).toEqual([]);
+      expect(h.events).toEqual([]);
+    },
+  );
+
+  it('is checked before the API key, so a bad level is a usage error even without a key', async () => {
+    const h = harness({ env: {} });
+    expect(await cliMain(['--effort', 'extreme', 'merge'], h.deps)).toBe(2);
+  });
+
+  it('is listed in the help with its levels and its default', async () => {
+    const h = harness();
+    await cliMain(['--help'], h.deps);
+    const help = h.out.join('\n');
+    expect(help).toContain('--effort <lvl>');
+    expect(help).toContain(LEVELS);
+    expect(help).toContain('MINITUI_EFFORT');
+  });
+});
+
 describe('cliMain: the API key stays out of everything it writes', () => {
   it('is removed from every line the log sink writes, and the control character with it', async () => {
     const h = harness();

@@ -112,6 +112,7 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
       system: systemPrompt,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       ...(deps.redactionPolicy !== undefined ? { redactionPolicy: deps.redactionPolicy } : {}),
+      ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     },
   });
   sessionRef.current = built;

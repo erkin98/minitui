@@ -177,6 +177,22 @@ describe('provider output reaches the diagnostics port, never the console', () =
         return { warn, debug: () => {} };
       },
     ],
+    [
+      'a port whose debug throws',
+      (): DiagnosticsPort => ({
+        warn: () => {},
+        debug: () => {
+          throw new Error('port broke');
+        },
+      }),
+    ],
+    [
+      'a port whose debug returns a rejected promise',
+      (): DiagnosticsPort => {
+        const debug = (): Promise<never> => Promise.reject(new Error('port rejected'));
+        return { warn: () => {}, debug };
+      },
+    ],
   ])('a turn is the same with %s', async (_label, makePort) => {
     // one turn that would finish cleanly, with a provider warning; one that ends in a provider error
     const warned = (): CallScript[] => [

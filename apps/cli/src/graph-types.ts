@@ -1,4 +1,4 @@
-import type { AgentSession, RedactionPolicy } from '@minitui/agent-core';
+import type { AgentSession, Effort, RedactionPolicy } from '@minitui/agent-core';
 import type { SandboxManagerHandle } from '@minitui/exec';
 import type { ActionDispatcher, RendererPort, WidgetCatalogBinding } from '@minitui/renderer-core';
 import type { InkRendererDeps } from '@minitui/renderer-ink';
@@ -54,6 +54,8 @@ export interface AppGraphDeps {
   readonly capabilities?: CapabilityProvider | undefined;
   /** The host's own secret patterns, applied wherever text goes to the model. */
   readonly redactionPolicy?: RedactionPolicy | undefined;
+  /** How much the model reasons; left out, nothing is sent and the model's own default applies. */
+  readonly effort?: Effort | undefined;
   /** The renderer; left out, the Ink renderer over the shared store. A test injects a real recording one. */
   readonly renderer?: RendererPort | undefined;
   /** Streams for the Ink renderer; left out, the real terminal. */

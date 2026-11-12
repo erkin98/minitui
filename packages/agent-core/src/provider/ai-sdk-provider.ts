@@ -1,6 +1,6 @@
 import { streamText as realStreamText, type ModelMessage } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import type { SdkLoopProvider, SdkModelV4 } from './provider-port.js';
+import type { Effort, SdkLoopProvider, SdkModelV4, SdkProviderOptions } from './provider-port.js';
 import type { ProviderChunk, ProviderRequest } from './provider-types.js';
 import type { FinishReason } from '../session/finish-reason.js';
 import { assertNever, noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
@@ -61,6 +61,11 @@ type FetchFunction = NonNullable<NonNullable<Parameters<typeof createAnthropic>[
  */
 const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1';
 
+// The provider package's per-call options for an effort: its own `effort` option, sent as the request's
+// output_config.effort, never a thinking budget. Unset, nothing is sent, so the model keeps its default.
+const anthropicOptions = (effort: Effort | undefined): SdkProviderOptions =>
+  effort === undefined ? {} : { anthropic: { effort } };
+
 // The one place the provider package is constructed: both the provider and the model handle come from here.
 function anthropicProvider(opts: {
   apiKey?: string | undefined;
@@ -94,8 +99,7 @@ export function createAiSdkProvider(
     // Drives the SDK streamText tool loop — the session routes it through the SDK path, not the
     // direct-stream path. A scripted / non-SDK provider leaves this unset.
     usesSdkLoop: true,
-    // No per-call option is set yet, so nothing is sent.
-    sdkCallOptions: () => ({}),
+    sdkCallOptions: ({ effort }) => anthropicOptions(effort),
     // eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
     async *streamChat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
       routeProviderWarnings(diagnostics);
@@ -111,6 +115,9 @@ export function createAiSdkProvider(
         ...(req.config.temperature !== undefined ? { temperature: req.config.temperature } : {}),
         ...(req.config.maxOutputTokens !== undefined
           ? { maxOutputTokens: req.config.maxOutputTokens }
+          : {}),
+        ...(req.config.effort !== undefined
+          ? { providerOptions: anthropicOptions(req.config.effort) }
           : {}),
         abortSignal: signal,
         onError: streamErrorHandler(diagnostics, opts.redactionPolicy),
@@ -174,6 +181,9 @@ export function createAiSdkProvider(
               reason: toFinishReason(step.finishReason),
               ...(step.usage !== undefined ? { usage: step.usage } : {}),
             };
+            break;
+          case 'step':
+            // A model step ended; the per-step record is written by the SDK-driven loop.
             break;
           case 'error':
             // Surface the classified error in-band (fatal vs retriable + retry-after) and end the stream,

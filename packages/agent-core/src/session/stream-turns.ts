@@ -6,7 +6,12 @@ import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import type { Conversation } from './conversation.js';
-import type { ModelProvider, SdkModelV4 } from '../provider/provider-port.js';
+import type {
+  Effort,
+  ModelProvider,
+  SdkModelV4,
+  SdkProviderOptions,
+} from '../provider/provider-port.js';
 import type { ProviderChunk, ProviderRequest } from '../provider/provider-types.js';
 import {
   textContent,
@@ -21,7 +26,7 @@ import { withIdleTimeout } from '../guards/timeout.js';
 import { noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
 import { toRunError, ProviderError } from '../errors.js';
 import { systemClock, type Clock } from '../ports/index.js';
-import { streamErrorHandler } from './model-diagnostics.js';
+import { reportModelStep, streamErrorHandler } from './model-diagnostics.js';
 import { endingOf } from './finish-reason.js';
 import { readStreamPart, type StreamTextFn } from '../provider/stream-part.js';
 
@@ -53,6 +58,10 @@ export interface RunTurnsDeps {
   readonly model: SdkModelV4;
   /** The system prompt, sent as the SDK's own instructions option; forwarded only when defined. */
   readonly instructions?: string | undefined;
+  /** The provider's per-call options; forwarded only when they set something. */
+  readonly providerOptions?: SdkProviderOptions | undefined;
+  /** The effort written on each step's debug line; default 'model-default'. */
+  readonly effortLabel?: Effort | 'model-default' | undefined;
   /** Output-token ceiling for one model call; forwarded only when defined. */
   readonly maxOutputTokens?: number | undefined;
   /** Waits between re-runs; default systemClock. */
@@ -166,7 +175,8 @@ export async function runTurns(args: {
   const idleTimeoutMs = deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const streamMaxRetries = deps.streamMaxRetries ?? DEFAULT_STREAM_MAX_RETRIES;
   const clock = deps.clock ?? systemClock;
-  const onError = streamErrorHandler(deps.diagnostics ?? noopDiagnostics, deps.redactionPolicy);
+  const diagnostics = deps.diagnostics ?? noopDiagnostics;
+  const onError = streamErrorHandler(diagnostics, deps.redactionPolicy);
 
   // Build the tool set ONCE, outside the re-run loop: it does not depend on the attempt. A deterministic
   // config throw here (e.g. a schema the SDK refuses) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
@@ -220,6 +230,9 @@ export async function runTurns(args: {
         })) as ModelMessage[],
         // The system prompt is its own option: the history never carries a system row (refused above).
         ...(deps.instructions !== undefined ? { instructions: deps.instructions } : {}),
+        ...(deps.providerOptions !== undefined && Object.keys(deps.providerOptions).length > 0
+          ? { providerOptions: deps.providerOptions }
+          : {}),
         tools: toolSet,
         // The model is offered exactly the catalog tools, and the SDK parses a repaired call again against
         // this same list.
@@ -329,6 +342,9 @@ export async function runTurns(args: {
                 approved: step.approved,
               }),
             );
+            break;
+          case 'step':
+            reportModelStep(diagnostics, deps.effortLabel ?? 'model-default', step.modelId);
             break;
           case 'finish':
             // The SDK's terminal marker (always emitted on a clean stream). Its ABSENCE after the loop
@@ -451,6 +467,7 @@ export async function runProviderStream(args: {
   /** The model id the provider is asked for. */
   model: string;
   system?: string | undefined;
+  effort?: Effort | undefined;
   toolDispatch: ToolDispatchPort;
   /** The tools the model may call; a call to any other name is refused without a dispatch. */
   tools: readonly ToolSchema[];
@@ -465,6 +482,7 @@ export async function runProviderStream(args: {
     runId,
     model,
     system,
+    effort,
     toolDispatch,
     tools,
     redactionPolicy,
@@ -480,6 +498,7 @@ export async function runProviderStream(args: {
     config: {
       model,
       ...(system !== undefined && !headIsSystem ? { system } : {}),
+      ...(effort !== undefined ? { effort } : {}),
     },
   };
   try {

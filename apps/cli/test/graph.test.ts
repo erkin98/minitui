@@ -53,6 +53,7 @@ async function build(
     mode?: AppGraphDeps['mode'];
     session?: ReturnType<typeof fakeSession>;
     redactionPolicy?: AppGraphDeps['redactionPolicy'];
+    effort?: AppGraphDeps['effort'];
     renderer?: RendererPort;
   } = {},
 ) {
@@ -79,6 +80,7 @@ async function build(
     createSandbox: () => Promise.resolve(sandbox.handle),
     capabilities: capableHost,
     ...(over.redactionPolicy !== undefined ? { redactionPolicy: over.redactionPolicy } : {}),
+    ...(over.effort !== undefined ? { effort: over.effort } : {}),
     ...(over.renderer !== undefined ? { renderer: over.renderer } : {}),
   });
   return { graph, sandbox, session, log, stderr, wiring: () => wiring };
@@ -95,6 +97,13 @@ describe('buildAppGraph: the session', () => {
     expect(w?.config?.system).toBe(graph.systemPrompt);
     expect(w?.config?.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
     expect(w?.diagnostics).toBe(log.diagnostics);
+  });
+
+  it('passes a chosen effort to the session, and none when unset', async () => {
+    const chosen = await build({ effort: 'high' });
+    expect(chosen.wiring()?.config?.effort).toBe('high');
+    const unset = await build();
+    expect(Object.hasOwn(unset.wiring()?.config ?? {}, 'effort')).toBe(false);
   });
 
   it('tells the model the working directory, so it can write the absolute paths the host requires', async () => {

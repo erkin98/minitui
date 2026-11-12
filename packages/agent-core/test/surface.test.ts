@@ -32,10 +32,15 @@ const PUBLIC_SURFACE = [
   'Clock',
   'ContextOverflowError',
   'DEFAULT_STEP_CEILING',
+  'DirectProvider',
+  'DirectRoute',
+  'EFFORTS',
+  'Effort',
   'FinishReason',
   'MinituiEvent',
   'ModelConfig',
   'ModelProvider',
+  'ModelRoute',
   'ObservationInput',
   'ProviderChunk',
   'ProviderError',
@@ -46,6 +51,10 @@ const PUBLIC_SURFACE = [
   'RepairIngress',
   'RouteError',
   'RuntimeRepairBuilder',
+  'SdkLoopProvider',
+  'SdkLoopRoute',
+  'SdkModelV4',
+  'SdkProviderOptions',
   'SpecSinkPort',
   'ToolCallRequest',
   'ToolCallResult',
@@ -62,6 +71,7 @@ const PUBLIC_SURFACE = [
   'createSpecSink',
   'createVisibilityChannel',
   'fixedClock',
+  'isSdkLoopRoute',
   'isTerminal',
   'redact',
   'redactDeep',
@@ -80,8 +90,8 @@ describe('agent-core public surface', () => {
     expect(barrelExports()).toEqual(PUBLIC_SURFACE);
   });
 
-  it('lists 48 names', () => {
-    expect(PUBLIC_SURFACE).toHaveLength(48);
+  it('lists 58 names', () => {
+    expect(PUBLIC_SURFACE).toHaveLength(58);
   });
 });
 

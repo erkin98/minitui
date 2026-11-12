@@ -8,6 +8,8 @@ export interface CliArgs {
   readonly showVersion: boolean;
   readonly showHelp: boolean;
   readonly model?: string | undefined;
+  /** As given; the entry checks the level, together with the environment's. */
+  readonly effort?: string | undefined;
   readonly parseError?: string | undefined;
 }
 
@@ -35,6 +37,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         version: { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
         model: { type: 'string' },
+        effort: { type: 'string' },
       },
     });
     const intent = positionals.join(' ');
@@ -49,6 +52,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       showVersion: values.version === true,
       showHelp: values.help === true,
       model: values.model,
+      effort: values.effort,
     };
   } catch (e) {
     return { ...base, parseError: e instanceof Error ? e.message : 'invalid arguments' };

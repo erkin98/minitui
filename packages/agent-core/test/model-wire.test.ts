@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { makeSession } from './helpers/sdk-model.js';
-import { createAnthropicModel } from '../src/provider/ai-sdk-provider.js';
+import { createAiSdkProvider, createAnthropicModel } from '../src/provider/ai-sdk-provider.js';
+import type { AgentConfig } from '../src/session/agent-session.js';
 import {
   fieldOf,
   messagesOf,
@@ -68,5 +69,34 @@ describe('the model endpoint is fixed', () => {
       if (before === undefined) delete process.env.ANTHROPIC_BASE_URL;
       else process.env.ANTHROPIC_BASE_URL = before;
     }
+  });
+});
+
+describe('effort on the wire', () => {
+  // One turn through the real provider package and its effort mapping, over a recording fetch.
+  async function bodyWith(config: AgentConfig): Promise<unknown> {
+    const wire = recordingFetch(textReply('hello', USAGE));
+    const model = createAnthropicModel('test-model', { apiKey: 'test', fetch: wire.fetch });
+    const session = makeSession({
+      model,
+      provider: createAiSdkProvider(),
+      config: { system: 'you build merge apps', maxOutputTokens: 1000, ...config },
+    });
+    for await (const ev of session.submit('merge the clips')) void ev;
+    expect(wire.requests).toHaveLength(1);
+    return wire.requests[0]?.body;
+  }
+
+  it('sends a chosen effort as output_config.effort, with the system text and no thinking budget', async () => {
+    const body = await bodyWith({ effort: 'medium' });
+    expect(fieldOf(fieldOf(body, 'output_config'), 'effort')).toBe('medium');
+    expect(textOf(fieldOf(body, 'system'))).toBe('you build merge apps');
+    expect(JSON.stringify(body)).not.toContain('budget_tokens');
+  });
+
+  it('sends no effort and no thinking when effort is unset', async () => {
+    const body = await bodyWith({});
+    expect(fieldOf(fieldOf(body, 'output_config'), 'effort')).toBeUndefined();
+    expect(fieldOf(body, 'thinking')).toBeUndefined();
   });
 });

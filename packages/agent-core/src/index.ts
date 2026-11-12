@@ -1,7 +1,18 @@
 export { AgentSession } from './session/agent-session.js';
 export type { AgentConfig } from './session/agent-session.js';
 export type { MinituiEvent } from './events/event-types.js';
-export type { ModelProvider } from './provider/provider-port.js';
+export type {
+  DirectProvider,
+  DirectRoute,
+  Effort,
+  ModelProvider,
+  ModelRoute,
+  SdkLoopProvider,
+  SdkLoopRoute,
+  SdkModelV4,
+  SdkProviderOptions,
+} from './provider/provider-port.js';
+export { EFFORTS, isSdkLoopRoute } from './provider/provider-port.js';
 export type {
   ProviderChunk,
   ProviderRequest,

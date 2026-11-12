@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { streamText as realStreamText } from 'ai';
 import type { StreamTextFn } from '../provider/stream-part.js';
 import type { AppSpec } from '@minitui/types';
-import { isSdkLoopRoute, type ModelRoute } from '../provider/provider-port.js';
+import {
+  EFFORTS,
+  isSdkLoopRoute,
+  type Effort,
+  type ModelRoute,
+} from '../provider/provider-port.js';
 import {
   systemClock,
   type ToolDispatchPort,
@@ -30,6 +35,8 @@ export interface AgentConfig {
   readonly streamMaxRetries?: number;
   /** Output-token ceiling for one model call; forwarded to the model only when set. */
   readonly maxOutputTokens?: number;
+  /** How much the model reasons. Unset, nothing is sent and the model's own default applies. */
+  readonly effort?: Effort | undefined;
   /**
    * Test seam: the streamText the SDK-driven loop calls. Production leaves this undefined (the installed
    * SDK is used). It does not choose the loop: the provider's usesSdkLoop does.
@@ -50,7 +57,7 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 // The numeric config fields and the integer range each accepts. An absent field keeps its default.
 const CONFIG_LIMITS: ReadonlyArray<
   readonly [
-    field: Exclude<keyof AgentConfig, 'system' | 'streamTextImpl' | 'redactionPolicy'>,
+    field: Exclude<keyof AgentConfig, 'system' | 'streamTextImpl' | 'redactionPolicy' | 'effort'>,
     min: number,
     max: number,
   ]
@@ -62,8 +69,14 @@ const CONFIG_LIMITS: ReadonlyArray<
   ['maxOutputTokens', 1, MAX_TIMER_MS],
 ];
 
-/** Throws a RangeError that names the field when a present numeric value is not an integer in range. */
+/**
+ * Throws a RangeError that names the field when a present numeric value is not an integer in range, or a
+ * present effort is not one of the levels.
+ */
 function assertConfig(config: AgentConfig): void {
+  if (config.effort !== undefined && !EFFORTS.includes(config.effort)) {
+    throw new RangeError(`AgentConfig.effort must be one of ${EFFORTS.join(', ')}`);
+  }
   for (const [field, min, max] of CONFIG_LIMITS) {
     const value = config[field];
     if (value === undefined) continue;
@@ -254,6 +267,7 @@ export class AgentSession {
         runId,
         model: route.model,
         system: this.#config.system,
+        effort: this.#config.effort,
         toolDispatch: this.#toolDispatch,
         tools: this.#tools,
         redactionPolicy: this.#config.redactionPolicy,
@@ -272,6 +286,8 @@ export class AgentSession {
       redactionPolicy: this.#config.redactionPolicy,
       model: route.model,
       instructions: this.#config.system,
+      providerOptions: route.provider.sdkCallOptions({ effort: this.#config.effort }),
+      effortLabel: this.#config.effort ?? 'model-default',
       maxOutputTokens: this.#config.maxOutputTokens,
       clock: this.#clock,
       diagnostics: this.#diagnostics,

@@ -7,7 +7,7 @@ import { createAsyncEventQueue } from '../src/events/event-stream.js';
 import { createConversation } from '../src/session/conversation.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import type { ToolCallResult, ToolDispatchPort } from '../src/ports/index.js';
-import { partsStream, type StreamTextFn } from './helpers/fake-stream.js';
+import { partsStream, type StreamOptions, type StreamTextFn } from './helpers/fake-stream.js';
 import type { DiagnosticsPort } from '@minitui/types';
 import type { RedactionPolicy } from '../src/visibility/index.js';
 
@@ -45,6 +45,42 @@ describe('ai-sdk-provider', () => {
       },
       { type: 'finish', reason: 'stop', usage: { inputTokens: 5, outputTokens: 7 } },
     ]);
+  });
+
+  it('maps an effort to the provider package’s own effort option, and sends nothing when unset', () => {
+    const p = createAiSdkProvider();
+    expect(p.sdkCallOptions({ effort: 'xhigh' })).toEqual({ anthropic: { effort: 'xhigh' } });
+    expect(p.sdkCallOptions({})).toEqual({});
+  });
+
+  it('forwards a request’s effort as provider options on its own call, and none when unset', async () => {
+    const seen: StreamOptions[] = [];
+    const capturing: StreamTextFn = (options) => {
+      seen.push(options);
+      return fakeStreamText([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
+    const p = createAiSdkProvider({ streamTextImpl: capturing });
+    const signal = new AbortController().signal;
+    for await (const _ of p.streamChat(
+      { ...req, config: { ...req.config, effort: 'low' } },
+      signal,
+    ))
+      void _;
+    for await (const _ of p.streamChat(req, signal)) void _;
+    expect(seen[0]?.providerOptions).toEqual({ anthropic: { effort: 'low' } });
+    expect(seen[1] !== undefined && Object.hasOwn(seen[1], 'providerOptions')).toBe(false);
+  });
+
+  it('reads a step end as nothing on this path', async () => {
+    const p = createAiSdkProvider({
+      streamTextImpl: fakeStreamText([
+        { type: 'finish-step', response: { modelId: 'm' } },
+        { type: 'finish', finishReason: 'stop' },
+      ]),
+    });
+    const out: ProviderChunk[] = [];
+    for await (const c of p.streamChat(req, new AbortController().signal)) out.push(c);
+    expect(out).toEqual([{ type: 'finish', reason: 'stop' }]);
   });
 
   it('keeps an interrupted finish as interrupted, not as other', async () => {
