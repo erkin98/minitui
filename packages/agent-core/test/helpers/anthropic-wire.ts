@@ -18,39 +18,85 @@ export interface WireUsage {
 const sse = (events: readonly Record<string, unknown>[]): string =>
   events.map((e) => `event: ${String(e.type)}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 
+const SMALL_USAGE: WireUsage = {
+  input_tokens: 3,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+  output_tokens: 2,
+};
+
+const messageStart = (usage: WireUsage): Record<string, unknown> => ({
+  type: 'message_start',
+  message: {
+    id: 'msg_test',
+    type: 'message',
+    role: 'assistant',
+    model: 'test-model',
+    content: [],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: { ...usage, output_tokens: 1 },
+  },
+});
+
+const messageEnd = (stopReason: string, usage: WireUsage): Record<string, unknown>[] => [
+  {
+    type: 'message_delta',
+    delta: { stop_reason: stopReason, stop_sequence: null },
+    usage: { output_tokens: usage.output_tokens },
+  },
+  { type: 'message_stop' },
+];
+
+const textBlock = (text: string): Record<string, unknown>[] => [
+  { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+  { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+];
+
 /** A reply of one text block, with `usage` on message_start and the final output count on message_delta. */
-export function textReply(text: string, usage: WireUsage): string {
+export function textReply(text: string, usage: WireUsage = SMALL_USAGE): string {
   return sse([
-    {
-      type: 'message_start',
-      message: {
-        id: 'msg_test',
-        type: 'message',
-        role: 'assistant',
-        model: 'test-model',
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { ...usage, output_tokens: 1 },
-      },
-    },
-    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+    messageStart(usage),
+    ...textBlock(text),
     { type: 'content_block_stop', index: 0 },
-    {
-      type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
-      usage: { output_tokens: usage.output_tokens },
-    },
-    { type: 'message_stop' },
+    ...messageEnd('end_turn', usage),
   ]);
 }
+
+/** A reply of one tool call, its input streamed as one JSON delta, ending for tool use. */
+export function toolUseReply(name: string, input: unknown): string {
+  return sse([
+    messageStart(SMALL_USAGE),
+    {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', id: 'toolu_test', name, input: {} },
+    },
+    {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) },
+    },
+    { type: 'content_block_stop', index: 0 },
+    ...messageEnd('tool_use', SMALL_USAGE),
+  ]);
+}
+
+/** A reply the connection cut: some text arrived, then the stream ended with no stop. */
+export const cutAfterTextReply = (text: string): string =>
+  sse([messageStart(SMALL_USAGE), ...textBlock(text)]);
+
+/** A reply the connection cut before any output: only the message start arrived. */
+export const cutBeforeOutputReply = (): string => sse([messageStart(SMALL_USAGE)]);
 
 const urlOf = (input: string | URL | Request): string =>
   typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
-/** A fetch that records each request and answers every one with `reply`. */
-export function recordingFetch(reply: string): {
+/**
+ * A fetch that records each request and answers the n-th one with the n-th reply; past the end of the list
+ * it answers with the last.
+ */
+export function recordingFetch(replies: string | readonly string[]): {
   readonly fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   readonly requests: readonly WireRequest[];
 } {
@@ -60,6 +106,8 @@ export function recordingFetch(reply: string): {
     fetch: (input, init) => {
       const raw = init?.body;
       requests.push({ url: urlOf(input), body: typeof raw === 'string' ? JSON.parse(raw) : raw });
+      const list = typeof replies === 'string' ? [replies] : replies;
+      const reply = list[Math.min(requests.length - 1, list.length - 1)] ?? '';
       return Promise.resolve(
         new Response(reply, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
       );
