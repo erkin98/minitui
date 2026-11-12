@@ -53,6 +53,7 @@ async function build(
     mode?: AppGraphDeps['mode'];
     session?: ReturnType<typeof fakeSession>;
     redactionPolicy?: AppGraphDeps['redactionPolicy'];
+    effort?: AppGraphDeps['effort'];
     renderer?: RendererPort;
   } = {},
 ) {
@@ -68,8 +69,7 @@ async function build(
     mode: over.mode ?? 'default',
     accessible: false,
     binding: createInkBinding(videoMergeCatalog),
-    provider: createMockProvider({ script: [] }),
-    model: 'test-model',
+    route: { provider: createMockProvider({ script: [] }), model: 'test-model' },
     workingDirectory: '/work/dir',
     makeSession: (w) => {
       wiring = w;
@@ -80,6 +80,7 @@ async function build(
     createSandbox: () => Promise.resolve(sandbox.handle),
     capabilities: capableHost,
     ...(over.redactionPolicy !== undefined ? { redactionPolicy: over.redactionPolicy } : {}),
+    ...(over.effort !== undefined ? { effort: over.effort } : {}),
     ...(over.renderer !== undefined ? { renderer: over.renderer } : {}),
   });
   return { graph, sandbox, session, log, stderr, wiring: () => wiring };
@@ -92,10 +93,17 @@ describe('buildAppGraph: the session', () => {
     expect(typeof w?.toolDispatch.dispatch).toBe('function');
     expect(typeof w?.specSink.emit).toBe('function');
     expect(w?.tools).toEqual([]);
-    expect(w?.model).toBe('test-model');
+    expect(w?.route.model).toBe('test-model');
     expect(w?.config?.system).toBe(graph.systemPrompt);
     expect(w?.config?.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
     expect(w?.diagnostics).toBe(log.diagnostics);
+  });
+
+  it('passes a chosen effort to the session, and none when unset', async () => {
+    const chosen = await build({ effort: 'high' });
+    expect(chosen.wiring()?.config?.effort).toBe('high');
+    const unset = await build();
+    expect(Object.hasOwn(unset.wiring()?.config ?? {}, 'effort')).toBe(false);
   });
 
   it('tells the model the working directory, so it can write the absolute paths the host requires', async () => {

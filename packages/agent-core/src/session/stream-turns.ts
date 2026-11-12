@@ -1,4 +1,4 @@
-import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { assertNever, JsonObjectSchema, type JsonValue } from '@minitui/types';
 import type { ToolCallResult, ToolDispatchPort } from '../ports/index.js';
@@ -6,7 +6,12 @@ import { routeToolCallResult, redact, type RedactionPolicy } from '../visibility
 import type { AsyncEventQueue } from '../events/event-stream.js';
 import type { MinituiEvent } from '../events/event-types.js';
 import type { Conversation } from './conversation.js';
-import type { ModelProvider } from '../provider/provider-port.js';
+import type {
+  Effort,
+  ModelProvider,
+  SdkModelV4,
+  SdkProviderOptions,
+} from '../provider/provider-port.js';
 import type { ProviderChunk, ProviderRequest } from '../provider/provider-types.js';
 import {
   textContent,
@@ -21,7 +26,7 @@ import { withIdleTimeout } from '../guards/timeout.js';
 import { noopDiagnostics, type DiagnosticsPort } from '@minitui/types';
 import { toRunError, ProviderError } from '../errors.js';
 import { systemClock, type Clock } from '../ports/index.js';
-import { streamErrorHandler } from './model-diagnostics.js';
+import { reportModelStep, streamErrorHandler } from './model-diagnostics.js';
 import { endingOf } from './finish-reason.js';
 import { readStreamPart, type StreamTextFn } from '../provider/stream-part.js';
 
@@ -44,13 +49,19 @@ export interface RunTurnsDeps {
   readonly toolDispatch: ToolDispatchPort;
   readonly tools: readonly ToolSchema[];
   readonly stepCeiling?: number;
-  /** Per-pull stall deadline for fullStream; default DEFAULT_IDLE_TIMEOUT_MS. */
+  /** Per-pull stall deadline for stream; default DEFAULT_IDLE_TIMEOUT_MS. */
   readonly idleTimeoutMs?: number | undefined;
   /** Mid-stream-drop re-run budget; default DEFAULT_STREAM_MAX_RETRIES. */
   readonly streamMaxRetries?: number | undefined;
   /** Host redaction policy passed to routeToolCallResult on every dispatch result (extraSecretPatterns). */
   readonly redactionPolicy?: RedactionPolicy | undefined;
-  readonly model: LanguageModel;
+  readonly model: SdkModelV4;
+  /** The system prompt, sent as the SDK's own instructions option; forwarded only when defined. */
+  readonly instructions?: string | undefined;
+  /** The provider's per-call options; forwarded only when they set something. */
+  readonly providerOptions?: SdkProviderOptions | undefined;
+  /** The effort written on each step's debug line; default 'model-default'. */
+  readonly effortLabel?: Effort | 'model-default' | undefined;
   /** Output-token ceiling for one model call; forwarded only when defined. */
   readonly maxOutputTokens?: number | undefined;
   /** Waits between re-runs; default systemClock. */
@@ -92,12 +103,6 @@ function buildTools(
   // No prototype: a call to `constructor`, `toString` or `__proto__` is an unknown tool like any other.
   const out = Object.create(null) as ToolSet;
   for (const s of schemas) {
-    // `invalid` is reserved for the synthetic repair-reroute tool registered below — a catalog tool
-    // of that name would be silently shadowed by it. Reject the collision (the frozen v1 catalog has
-    // no such tool).
-    if (s.name === 'invalid') {
-      throw new Error("tool name 'invalid' is reserved for the repair-reroute tool");
-    }
     out[s.name] = tool({
       description: s.description,
       inputSchema: s.inputSchema,
@@ -128,7 +133,7 @@ function buildTools(
         // The redaction chokepoint: EVERY dispatch OUTCOME is redacted before the provider sees it — a
         // resolved result crosses routeToolCallResult (which redacts `content` AND `error` and folds
         // ok:false/denied into isError), a rejection crosses the catch above. Raw ToolCallResult strings
-        // NEVER reach the SDK re-feed; what the model sees (and what fullStream later echoes as the
+        // NEVER reach the SDK re-feed; what the model sees (and what stream later echoes as the
         // tool-result/tool-error parts) is the redacted observation.
         const ev = routeToolCallResult(result, policy);
         // routeToolCallResult always yields a TOOL_CALL_RESULT event; the check narrows the union.
@@ -150,27 +155,12 @@ function buildTools(
       },
     });
   }
-  // The synthetic `invalid` tool a repaired (still-unknown) call reroutes to. Its result tells the
-  // model what it got wrong so it self-corrects on the next step. Registered so the SDK's re-parse of
-  // the repaired call resolves. It is left out of activeTools below, but the model can still name it in a
-  // call: calling it dispatches nothing. It is NOT a ToolDispatchPort dispatch — no exec, no gate, so it
-  // does NOT cross routeToolCallResult (the payload is the model's own bad tool name + the SDK error
-  // text: nothing to redact).
-  out.invalid = tool({
-    description:
-      'Internal: reports a malformed tool call back to the model so it retries correctly.',
-    inputSchema: z.object({ tool: z.string(), error: z.string() }),
-    execute: ({ tool: attempted, error }) =>
-      `Invalid tool call "${attempted}": ${error}. Valid tools: ${schemas
-        .map((s) => s.name)
-        .join(', ')}. Retry with a valid tool name and arguments.`,
-  });
   return out;
 }
 
 /**
  * Thin streamText() wrapper. The SDK OWNS the multi-step loop via stopWhen; this never re-feeds.
- * Maps fullStream parts to MinituiEvents pushed into the queue. Terminal errors become RUN_ERROR.
+ * Maps stream parts to MinituiEvents pushed into the queue. Terminal errors become RUN_ERROR.
  */
 // eslint-disable-next-line complexity -- exhaustive closed-union switch over the stream steps (assertNever)
 export async function runTurns(args: {
@@ -185,10 +175,11 @@ export async function runTurns(args: {
   const idleTimeoutMs = deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const streamMaxRetries = deps.streamMaxRetries ?? DEFAULT_STREAM_MAX_RETRIES;
   const clock = deps.clock ?? systemClock;
-  const onError = streamErrorHandler(deps.diagnostics ?? noopDiagnostics, deps.redactionPolicy);
+  const diagnostics = deps.diagnostics ?? noopDiagnostics;
+  const onError = streamErrorHandler(diagnostics, deps.redactionPolicy);
 
   // Build the tool set ONCE, outside the re-run loop: it does not depend on the attempt. A deterministic
-  // config throw here (e.g. a reserved tool name) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
+  // config throw here (e.g. a schema the SDK refuses) surfaces immediately as a NON-RETRIABLE RUN_ERROR —
   // never re-run as if it were a transient stream drop. The repair closure also consults it.
   let toolSet: ToolSet;
   try {
@@ -196,6 +187,19 @@ export async function runTurns(args: {
   } catch (err) {
     await queue.push(
       runError(redact(toRunError(err).message, deps.redactionPolicy), 'non-retriable'),
+    );
+    return;
+  }
+
+  // The system prompt travels as instructions. A system row in the history is refused here, before any
+  // attempt: the SDK refuses it too, but only inside the stream, where the re-run tier would read it as a
+  // retriable drop and send the same history again.
+  if (conversation.messages.some((m) => m.role === 'system')) {
+    await queue.push(
+      runError(
+        'a system message cannot be part of the history; it is sent as instructions',
+        'non-retriable',
+      ),
     );
     return;
   }
@@ -224,31 +228,31 @@ export async function runTurns(args: {
           role: m.role,
           content: m.content,
         })) as ModelMessage[],
+        // The system prompt is its own option: the history never carries a system row (refused above).
+        ...(deps.instructions !== undefined ? { instructions: deps.instructions } : {}),
+        ...(deps.providerOptions !== undefined && Object.keys(deps.providerOptions).length > 0
+          ? { providerOptions: deps.providerOptions }
+          : {}),
         tools: toolSet,
-        // The model may only call the real catalog tools; the synthetic `invalid` tool is reachable
-        // ONLY via the repair reroute below, never as a direct model call.
+        // The model is offered exactly the catalog tools, and the SDK parses a repaired call again against
+        // this same list.
         activeTools: deps.tools.map((s) => s.name),
         stopWhen: [
-          stepCountIs(deps.stepCeiling ?? DEFAULT_STEP_CEILING),
+          isStepCount(deps.stepCeiling ?? DEFAULT_STEP_CEILING),
           repeatedToolCallDetector(),
         ],
-        // Two-tier tool-call repair. The SDK invokes this only when a tool call fails to parse. Tier 1
-        // case-fixes a wrong-CASE name in place when the lowercased name is a registered tool; tier 2
-        // reroutes any still-unknown call to the synthetic `invalid` tool so the model learns what went
-        // wrong instead of the turn dying. The repaired call is re-parsed against toolSet, so tier 2's
-        // target MUST be registered (it is). The SDK's repair type requires a Promise return, so this is
-        // async even though its body does no awaiting.
+        // Tool-call repair, called by the SDK only when a call fails to parse. A wrong-CASE name is fixed in
+        // place when the lowercased name is a catalog tool. Anything else is left to the SDK (null): its
+        // own invalid-call path reports the original error to the model as a failed tool result, so the
+        // model learns what went wrong and the turn goes on. The SDK's repair type requires a Promise
+        // return, so this is async even though its body does no awaiting.
         // eslint-disable-next-line @typescript-eslint/require-await
-        experimental_repairToolCall: async (failed) => {
+        repairToolCall: async (failed) => {
           const lower = failed.toolCall.toolName.toLowerCase();
           if (lower !== failed.toolCall.toolName && Object.hasOwn(toolSet, lower)) {
             return { ...failed.toolCall, toolName: lower };
           }
-          return {
-            ...failed.toolCall,
-            input: JSON.stringify({ tool: failed.toolCall.toolName, error: failed.error.message }),
-            toolName: 'invalid',
-          };
+          return null;
         },
         ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         abortSignal: attemptSignal,
@@ -256,11 +260,11 @@ export async function runTurns(args: {
         onError,
       });
 
-      // Race each pull of fullStream against the idle deadline — a silently-stalled stream throws a
+      // Race each pull of stream against the idle deadline — a silently-stalled stream throws a
       // retriable ProviderError (the whole-turn AbortSignal never fires on a stall). The catch below
       // decides whether the drop is re-run or surfaced.
       const parts = withIdleTimeout(
-        result.fullStream,
+        result.stream,
         idleTimeoutMs,
         () => new ProviderError('idle timeout waiting for model stream', true),
       );
@@ -339,6 +343,9 @@ export async function runTurns(args: {
               }),
             );
             break;
+          case 'step':
+            reportModelStep(diagnostics, deps.effortLabel ?? 'model-default', step.modelId);
+            break;
           case 'finish':
             // The SDK's terminal marker (always emitted on a clean stream). Its ABSENCE after the loop
             // ends means the stream was truncated.
@@ -365,7 +372,7 @@ export async function runTurns(args: {
         }
       }
       if (signal.aborted) return;
-      // fullStream ended without a `finish` part — a truncated stream — or with one whose reason says how
+      // stream ended without a `finish` part — a truncated stream — or with one whose reason says how
       // the run ends: a failed or dropped generation is raised as a retriable error (the re-run rule below
       // applies), a cut, filtered or halted one ends the run as a non-retriable error.
       const ending = sawFinish ? endingOf(finishReason) : endingOf(undefined);
@@ -445,7 +452,7 @@ async function dispatchToolCall(
  * The NON-SDK provider path. When the injected provider is NOT the ai-sdk-provider — it leaves
  * `usesSdkLoop` unset, e.g. a scripted provider — there is NO streamText tool loop to run: the provider
  * yields a flat ProviderChunk stream. This consumes provider.streamChat(req, signal) and maps each chunk
- * to a MinituiEvent — the mirror of runTurns' fullStream mapping. A `tool-call` chunk is the host's
+ * to a MinituiEvent — the mirror of runTurns' stream mapping. A `tool-call` chunk is the host's
  * dispatch site: with no SDK loop to run the tool, this dispatches it through ToolDispatchPort (crossing
  * the routeToolCallResult redaction chokepoint) and pushes the observation; a pre-composed `tool-result`
  * chunk (a remote provider reporting its OWN result) maps straight through. AgentSession routes here when
@@ -457,8 +464,10 @@ export async function runProviderStream(args: {
   conversation: Conversation;
   threadId: string;
   runId: string;
-  model: LanguageModel;
+  /** The model id the provider is asked for. */
+  model: string;
   system?: string | undefined;
+  effort?: Effort | undefined;
   toolDispatch: ToolDispatchPort;
   /** The tools the model may call; a call to any other name is refused without a dispatch. */
   tools: readonly ToolSchema[];
@@ -473,22 +482,23 @@ export async function runProviderStream(args: {
     runId,
     model,
     system,
+    effort,
     toolDispatch,
     tools,
     redactionPolicy,
     queue,
     signal,
   } = args;
-  // A real non-SDK provider reads config.model; a scripted double ignores the request entirely. When the
-  // model handle is an opaque object (not a bare id string) fall back to the provider id. The system
+  // A real non-SDK provider reads config.model; a scripted double ignores the request entirely. The system
   // prompt is already the conversation's head row (AgentSession seeds it) — do NOT also thread it via
   // config.system, or a non-SDK provider honoring both channels applies it twice.
   const headIsSystem = conversation.messages[0]?.role === 'system';
   const request: ProviderRequest = {
     messages: conversation.messages,
     config: {
-      model: typeof model === 'string' ? model : provider.id,
+      model,
       ...(system !== undefined && !headIsSystem ? { system } : {}),
+      ...(effort !== undefined ? { effort } : {}),
     },
   };
   try {

@@ -1,3 +1,4 @@
+import type { Effort } from './provider-port.js';
 import type { FinishReason } from '../session/finish-reason.js';
 
 /**
@@ -49,6 +50,8 @@ export type ProviderChunk =
 
 export interface ModelConfig {
   readonly model: string;
+  /** How much the model reasons; unset, the provider sends nothing for it. */
+  readonly effort?: Effort | undefined;
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly system?: string | undefined;

@@ -1,4 +1,4 @@
-import type { AgentSession, RedactionPolicy } from '@minitui/agent-core';
+import type { AgentSession, Effort, RedactionPolicy } from '@minitui/agent-core';
 import type { SandboxManagerHandle } from '@minitui/exec';
 import type { ActionDispatcher, RendererPort, WidgetCatalogBinding } from '@minitui/renderer-core';
 import type { InkRendererDeps } from '@minitui/renderer-ink';
@@ -38,9 +38,8 @@ export interface AppGraphDeps {
   readonly mode: ApprovalMode;
   readonly accessible: boolean;
   readonly binding: WidgetCatalogBinding;
-  /** The entry builds the real provider; a test passes a scripted one. */
-  readonly provider: SessionDeps['provider'];
-  readonly model: SessionDeps['model'];
+  /** The provider with the model it runs. The entry builds the real one; a test passes a scripted one. */
+  readonly route: SessionDeps['route'];
   /** The directory the person runs from, told to the model so it can write absolute paths. */
   readonly workingDirectory: string;
   /** In production `(wiring) => new AgentSession(wiring)`. */
@@ -55,6 +54,8 @@ export interface AppGraphDeps {
   readonly capabilities?: CapabilityProvider | undefined;
   /** The host's own secret patterns, applied wherever text goes to the model. */
   readonly redactionPolicy?: RedactionPolicy | undefined;
+  /** How much the model reasons; left out, nothing is sent and the model's own default applies. */
+  readonly effort?: Effort | undefined;
   /** The renderer; left out, the Ink renderer over the shared store. A test injects a real recording one. */
   readonly renderer?: RendererPort | undefined;
   /** Streams for the Ink renderer; left out, the real terminal. */

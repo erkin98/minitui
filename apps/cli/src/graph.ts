@@ -101,18 +101,18 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
   });
 
   const built = deps.makeSession({
-    provider: deps.provider,
+    route: deps.route,
     diagnostics,
     toolDispatch: makeToolDispatch(host, onExecEvent),
     specSink: createSpecSink(),
     visibility: createVisibilityChannel(catalogVisibilityToChannel(videoMergeCatalog)),
     // No tool is registered with the model: actions fire from the mounted app through the dispatcher.
     tools: [],
-    model: deps.model,
     config: {
       system: systemPrompt,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       ...(deps.redactionPolicy !== undefined ? { redactionPolicy: deps.redactionPolicy } : {}),
+      ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     },
   });
   sessionRef.current = built;

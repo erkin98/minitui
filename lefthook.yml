@@ -1,12 +1,18 @@
 pre-commit:
-  parallel: true
+  # One after another, the type check before lint: side by side, the type check rebuilds the packages'
+  # dist while lint's typed rules read their declarations, and lint then reports every imported
+  # workspace type as an error type.
+  piped: true
   commands:
     lint:
+      priority: 5
       run: pnpm run lint
     format:
+      priority: 1
       glob: '*.{ts,tsx,mts,mjs,js,json,md,yaml,yml}'
       run: pnpm exec prettier --check {staged_files}
     typecheck:
+      priority: 4
       # Through turbo (^build) so upstream package .d.ts resolve against the built
       # dist/ (tsup); a raw `tsc -b` fails cold now that tsc emits to dist-types/, not
       # dist/, so the exports-resolved dist/index.d.ts wouldn't exist pre-build.
@@ -18,9 +24,12 @@ pre-commit:
       # set as the CI witness. Single-string brace glob with the alternatives inlined —
       # lefthook 1.8.2 predates the glob-array form (added upstream in 1.10.10).
       glob: '{*.test.ts,*.test.tsx,*.test.mts,*.test.cts,*.test.js,*.test.jsx,*.test.mjs,*.test.cjs,**/test/**/*.ts,**/test/**/*.tsx,**/test/**/*.mts,**/test/**/*.cts,**/test/**/*.js,**/test/**/*.jsx,**/test/**/*.mjs,**/test/**/*.cjs,**/__tests__/**/*.ts,**/__tests__/**/*.tsx,**/__tests__/**/*.mts,**/__tests__/**/*.cts,**/__tests__/**/*.js,**/__tests__/**/*.jsx,**/__tests__/**/*.mjs,**/__tests__/**/*.cjs}'
+      priority: 3
       run: pnpm run lint:test-policy
     syncpack:
-      glob: '**/package.json'
+      priority: 2
+      # `**/package.json` alone does not match the root manifest.
+      glob: '{package.json,**/package.json}'
       run: pnpm exec syncpack lint
 
 pre-push:

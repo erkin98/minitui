@@ -1,5 +1,12 @@
 /** The terminal-reason union the provider's `finish` chunk carries (mirrors the SDK FinishReason). */
-export type FinishReason = 'stop' | 'length' | 'tool-calls' | 'content-filter' | 'error' | 'other';
+export type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'tool-calls'
+  | 'content-filter'
+  | 'error'
+  | 'interrupted'
+  | 'other';
 
 /** tool-calls means the SDK loop continues; everything else ends the turn. */
 export function isTerminal(r: FinishReason): boolean {
@@ -13,9 +20,9 @@ export type FinishEnding =
 
 /**
  * The one mapping from a finish reason to the ending of the run, used by the SDK loop and by the finish
- * chunk of the other loop. A cut, filtered or halted generation is a non-retriable error; a failed or
- * dropped one is a retriable error. `reason` is read as unknown: a value outside the known set is the
- * SDK's "no finish reported" and ends as a dropped stream.
+ * chunk of the other loop. A cut, filtered or halted generation is a non-retriable error; a failed,
+ * interrupted or dropped one is a retriable error. `reason` is read as unknown: a value outside the known
+ * set is the SDK's "no finish reported" and ends as a dropped stream.
  */
 export function endingOf(reason: unknown): FinishEnding {
   switch (reason) {
@@ -44,6 +51,12 @@ export function endingOf(reason: unknown): FinishEnding {
       return {
         kind: 'error',
         message: 'the provider reported a failed generation',
+        retriable: true,
+      };
+    case 'interrupted':
+      return {
+        kind: 'error',
+        message: 'the provider interrupted the generation',
         retriable: true,
       };
     default:

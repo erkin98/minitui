@@ -2,10 +2,10 @@ import { basename, join } from 'node:path';
 import {
   AgentSession,
   catalogVisibilityToChannel,
+  createAnthropicModel,
   createSpecSink,
   createVisibilityChannel,
   type AgentConfig,
-  type ModelProvider,
 } from '@minitui/agent-core';
 import { videoMergeCatalog } from '@minitui/catalog';
 import {
@@ -42,27 +42,30 @@ describe('the production composition', () => {
       const app = mergeAppWithState({ inputs, codec: 'copy', output });
 
       const streamTextImpl: NonNullable<AgentConfig['streamTextImpl']> = () => ({
-        fullStream: (async function* () {
+        stream: (async function* () {
           yield { type: 'text-delta', text: specPatchText(app) };
           yield { type: 'finish', finishReason: 'stop' };
         })(),
       });
-      const provider: ModelProvider = {
-        id: 'sdk-loop',
-        usesSdkLoop: true,
-        streamChat: () => {
-          throw new Error('the session took the scripted loop');
-        },
-      };
       const session = new AgentSession({
-        provider,
+        // The stream function is injected, so the model object is built (no network) but never called.
+        route: {
+          provider: {
+            id: 'sdk-loop',
+            usesSdkLoop: true,
+            sdkCallOptions: () => ({}),
+            streamChat: () => {
+              throw new Error('the session took the scripted loop');
+            },
+          },
+          model: createAnthropicModel('test-model'),
+        },
         toolDispatch: {
           dispatch: (req) => Promise.reject(new Error(`the model called a tool: ${req.toolName}`)),
         },
         specSink: createSpecSink(),
         visibility: createVisibilityChannel(catalogVisibilityToChannel(videoMergeCatalog)),
         tools: [],
-        model: 'sdk-loop',
         config: { system: 'merge videos', streamTextImpl },
       });
       const agent = createLocalAgentPort((_input, signal) =>

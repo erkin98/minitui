@@ -68,6 +68,9 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 |The consent answer|`apps/cli/src/consent.ts`|The overlay shows one request at a time, the oldest the engine surfaced, and every reply names that request's id, so an answer can never approve a later request; the rejection feedback is written by the host, never by the agent. Convention, with tests.|
 |The consent answer in tests|`packages/test-kit/src/tools/test-consent-controller.ts`|The twin of the cli's consent controller for tests, which cannot import the cli: the same order (the oldest request first) and the same replies by request id. A change to one is made to the other. Convention, with tests.|
 |The renderer's view of the store in tests|`test/e2e/support/ink-under-host.ts` (`rendererStore`)|The twin of the cli's `createRendererStoreIo` (`apps/cli/src/store-bridge.ts`) for the integration package, which cannot import the app: the snapshot stays the same object until the store changes, and every write goes through the store's own snapshot apply. A change to one is made to the other. Convention, with tests.|
+|The model on the SDK loop|`ModelRoute` in `packages/agent-core/src/provider/provider-port.ts`|An SDK-loop provider comes with a model object, never a model id: on the SDK a string goes to its global provider, which defaults to a hosted gateway. A string there is a compile error. Enforced: `scripts/check-type-fixtures.mjs` (in `pnpm run lint`) compiles a fixture that passes one and must fail on exactly that line.|
+|Reading the model stream|`readStreamPart` in `packages/agent-core/src/provider/stream-part.ts`|One reader per stream part type for both loops, and a list of the types deliberately not read. A part type a new SDK version adds is a compile error until it is placed in one of the two. Enforced: the same fixture check, with a fixture that takes one read type away.|
+|The model API's endpoint|`anthropicProvider` in `packages/agent-core/src/provider/ai-sdk-provider.ts`|The provider package is built in this one place, for the provider and the model handle alike, with the endpoint fixed at `https://api.anthropic.com/v1`, so an `ANTHROPIC_BASE_URL` set for another tool cannot send the prompts or the key elsewhere. Convention, with a test that sets the variable.|
 |Configuration layers|`apps/cli/src/config.ts`|Layers merge by a fixed precedence. The keys that redirect credentials, execution or telemetry are stripped from any layer that is not trusted, whatever their spelling or the layer's rank. Convention, with tests.|
 |Secrets in what the program writes|`apps/cli/src/index.ts`|The API key reaches only the provider. Every finished log line, every crash line and every message to the person goes through one cleaner that removes the key and the terminal control characters, and the redaction policy handed to the session and the provider carries a pattern for the key, so it is removed from text on its way to the model too. Convention, with tests.|
 
@@ -112,8 +115,9 @@ The table follows `config/eslint-boundaries.js`. If they disagree, the config wi
 
 ## What runs before code is accepted
 
-The pre-commit hook runs the type check, format, test policy and lint, plus syncpack when a manifest changes. The
-pre-push hook (`lefthook.yml`) runs ten
+The pre-commit hook runs its steps one after another and stops at the first failure: format, syncpack when a
+manifest changes (the root one included), test policy, type check, then lint. The type check comes before lint because
+it rebuilds the packages' declarations, which lint's typed rules read. The pre-push hook (`lefthook.yml`) runs ten
 steps in order, cheapest first, and stops at the first failure: syncpack, format, policy fixtures, build, lint, type
 check, composite type check, tests, coverage, and the pack check that installs each published tarball into a throwaway
 consumer.

@@ -3,6 +3,8 @@ import {
   AgentSession,
   createAiSdkProvider,
   createAnthropicModel,
+  EFFORTS,
+  type Effort,
   type RedactionPolicy,
 } from '@minitui/agent-core';
 import { videoMergeCatalog } from '@minitui/catalog';
@@ -49,6 +51,8 @@ options:
   --yolo          approve allow/ask automatically (the hard floor still blocks)
   --accessible    render in screen-reader-friendly mode
   --model <id>    model id (default ${DEFAULT_MODEL}; env MINITUI_MODEL)
+  --effort <lvl>  reasoning effort, one of ${EFFORTS.join(', ')} (env MINITUI_EFFORT;
+                  unset, the model's own default applies)
   --version       print version and exit
   --help          print this help and exit
 
@@ -132,6 +136,27 @@ function earlyExit(args: CliArgs, out: Out, err: Out): number | undefined {
   return undefined;
 }
 
+// The effort the run uses: the flag over the environment, unset when neither names one (an empty value
+// names none, as for the model). Both sources are checked, so a bad environment value is refused even when
+// a good flag overrides it.
+function effortFrom(
+  args: CliArgs,
+  env: NodeJS.ProcessEnv,
+): { readonly effort: Effort | undefined } | { readonly error: string } {
+  const read = (source: string, value: string | undefined) => {
+    if (value === undefined || value === '') return { effort: undefined };
+    const effort = EFFORTS.find((level) => level === value);
+    return effort !== undefined
+      ? { effort }
+      : { error: `${source} must be one of ${EFFORTS.join(', ')}` };
+  };
+  const flag = read('--effort', args.effort);
+  const fromEnv = read('MINITUI_EFFORT', env.MINITUI_EFFORT);
+  if ('error' in flag) return flag;
+  if ('error' in fromEnv) return fromEnv;
+  return { effort: flag.effort ?? fromEnv.effort };
+}
+
 async function runInteractive(
   args: CliArgs,
   apiKey: string,
@@ -141,6 +166,7 @@ async function runInteractive(
   deps: {
     err: Out;
     cwd: string;
+    effort: Effort | undefined;
     build: NonNullable<CliDeps['buildAppGraph']>;
     run: NonNullable<CliDeps['runApp']>;
   },
@@ -167,12 +193,15 @@ async function runInteractive(
       mode: args.mode,
       accessible: args.accessible,
       binding: createInkBinding(videoMergeCatalog),
-      provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
-      model: createAnthropicModel(modelId, { apiKey }),
+      route: {
+        provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
+        model: createAnthropicModel(modelId, { apiKey }),
+      },
       workingDirectory: deps.cwd,
       makeSession: (wiring) => new AgentSession(wiring),
       diagnostics,
       redactionPolicy,
+      ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     });
     graph = built;
     // A signal or a crash stops the run before the terminal is touched.
@@ -219,6 +248,12 @@ export async function cliMain(argv: readonly string[], deps: CliDeps = {}): Prom
   const args = parseCliArgs(argv);
   const early = earlyExit(args, out, err);
   if (early !== undefined) return early;
+  const chosen = effortFrom(args, env);
+  if ('error' in chosen) {
+    err(`minitui: ${chosen.error}`);
+    err(HELP);
+    return 2;
+  }
 
   // A missing key is a one-line error now, not a provider failure in the middle of a half-built screen.
   const apiKey = env.ANTHROPIC_API_KEY;
@@ -235,6 +270,7 @@ export async function cliMain(argv: readonly string[], deps: CliDeps = {}): Prom
   return runInteractive(args, apiKey, env, boot, bootEnv, {
     err,
     cwd: deps.cwd ?? process.cwd(),
+    effort: chosen.effort,
     build: deps.buildAppGraph ?? buildAppGraph,
     run: deps.runApp ?? runApp,
   });

@@ -15,7 +15,7 @@ import {
   type StreamOptions,
   type StreamTextFn,
 } from './helpers/fake-stream.js';
-import { scriptedModel, toolCallTurn } from './helpers/sdk-model.js';
+import { scriptedModel, toolCallTurn, unusedModel } from './helpers/sdk-model.js';
 
 // A stream function that (1) runs a registered tool the way the SDK does, then (2) yields the given parts.
 function fakeStreamText(opts: {
@@ -23,7 +23,7 @@ function fakeStreamText(opts: {
   parts: readonly ModelStreamPart[];
 }): StreamTextFn {
   return (options) => ({
-    fullStream: (async function* () {
+    stream: (async function* () {
       const call = opts.callTool;
       // a failed execute THROWS by design; runTool settles it the way the SDK does (a tool-error)
       if (call !== undefined && options.tools?.[call.name] !== undefined) {
@@ -49,10 +49,11 @@ const tools = [{ name: 'ffmpeg', description: 'merge', inputSchema: z.object({ a
 // What the SDK hands the repair function for a call to a tool it does not know.
 function repairArgs(toolCallId: string, toolName: string, input: string) {
   return {
+    instructions: undefined,
     system: undefined,
     messages: [],
     tools: {},
-    inputSchema: () => ({}),
+    inputSchema: () => Promise.resolve({}),
     toolCall: { type: 'tool-call' as const, toolCallId, toolName, input },
     error: new NoSuchToolError({
       toolName,
@@ -63,7 +64,7 @@ function repairArgs(toolCallId: string, toolName: string, input: string) {
 }
 
 describe('stream-turns', () => {
-  it('maps fullStream parts to MinituiEvents in order, RUN_FINISHED carries the real threadId+runId', async () => {
+  it('maps stream parts to MinituiEvents in order, RUN_FINISHED carries the real threadId+runId', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const parts = [
       { type: 'text-delta', text: 'on it' },
@@ -80,7 +81,7 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts }),
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -126,7 +127,7 @@ describe('stream-turns', () => {
         }),
         toolDispatch: localDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
@@ -158,7 +159,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: failingDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: failingDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -177,7 +178,7 @@ describe('stream-turns', () => {
     // A host permission-gate refusal (ok:false + denied:true) must stay DISTINGUISHABLE from a plain
     // execution failure on the model-facing observation — not flattened into error text. buildTools
     // attaches `denied` to the thrown Error; the SDK echoes it as the tool-error part's `error`, and
-    // the fullStream mapping re-emits the observation with denied:true.
+    // the stream mapping re-emits the observation with denied:true.
     const deniedDispatch: ToolDispatchPort = {
       dispatch: async (req) => ({
         toolCallId: req.toolCallId,
@@ -196,7 +197,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: deniedDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: deniedDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -249,7 +250,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: leakyDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: leakyDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -294,7 +295,7 @@ describe('stream-turns', () => {
         streamTextImpl: sdkLike,
         toolDispatch: rejectingDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -348,7 +349,7 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: sdkLike, toolDispatch: noopDispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: sdkLike, toolDispatch: noopDispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
@@ -388,7 +389,7 @@ describe('stream-turns', () => {
         streamTextImpl: sdkLike,
         toolDispatch: orgDispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         redactionPolicy: { extraSecretPatterns: [/COMPANY-\d{6}/g] },
       },
     }).then(() => queue.close());
@@ -433,7 +434,7 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts: [{ type: 'error', error: new Error('rate') }] }),
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
@@ -442,10 +443,10 @@ describe('stream-turns', () => {
     expect(out.at(-1)).toMatchObject({ type: 'RUN_ERROR', message: 'rate' });
   });
 
-  it('idle-timeout: a stalled fullStream surfaces a retriable RUN_ERROR', async () => {
+  it('idle-timeout: a stalled stream surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const stalling: StreamTextFn = () => ({
-      fullStream: (async function* () {
+      stream: (async function* () {
         yield { type: 'text-delta', text: 'thinking' };
         await new Promise<void>(() => {}); // silent forever — the idle deadline must break this
         yield { type: 'finish', finishReason: 'stop' };
@@ -461,7 +462,7 @@ describe('stream-turns', () => {
         streamTextImpl: stalling,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         idleTimeoutMs: 20,
         streamMaxRetries: 0,
       },
@@ -477,7 +478,7 @@ describe('stream-turns', () => {
   it('truncated stream (ends without a finish part) surfaces a retriable RUN_ERROR', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const truncated: StreamTextFn = () => ({
-      fullStream: (async function* () {
+      stream: (async function* () {
         yield { type: 'text-delta', text: 'partial' };
         // ends WITHOUT a finish part — a truncated stream
       })(),
@@ -492,7 +493,7 @@ describe('stream-turns', () => {
         streamTextImpl: truncated,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 0,
       },
     }).then(() => queue.close());
@@ -509,7 +510,7 @@ describe('stream-turns', () => {
       calls += 1;
       const attempt = calls;
       return {
-        fullStream: (async function* () {
+        stream: (async function* () {
           if (attempt === 1) return; // first attempt: truncated with NO content -> a re-runnable drop
           yield { type: 'text-delta', text: 'ok' };
           yield { type: 'finish', finishReason: 'stop' };
@@ -526,7 +527,7 @@ describe('stream-turns', () => {
         streamTextImpl: flaky,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 2,
         // a virtual clock: its waits return at once, so the re-run does not sleep for real
         clock: fixedClock(0),
@@ -545,7 +546,7 @@ describe('stream-turns', () => {
     const dropsAfterContent: StreamTextFn = () => {
       calls += 1;
       return {
-        fullStream: (async function* () {
+        stream: (async function* () {
           yield { type: 'text-delta', text: 'half' };
           // drops (truncated) AFTER emitting content — must be surfaced, never retried
         })(),
@@ -561,7 +562,7 @@ describe('stream-turns', () => {
         streamTextImpl: dropsAfterContent,
         toolDispatch: dispatch,
         tools,
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 2,
       },
     }).then(() => queue.close());
@@ -692,12 +693,12 @@ describe('stream-turns', () => {
     expect(results[1] && 'error' in results[1]).toBe(false);
   });
 
-  it('repairs a wrong-CASE tool name in place — tier 1, and never lets the model call `invalid`', async () => {
+  it('repairs a wrong-CASE tool name in place — tier 1; the model is offered only the catalog tools', async () => {
     // Capture the repair fn + activeTools runTurns passes to streamText, then drive the repair directly.
-    let repair: StreamOptions['experimental_repairToolCall'];
+    let repair: StreamOptions['repairToolCall'];
     let activeTools: StreamOptions['activeTools'];
     const capturing: StreamTextFn = (options) => {
-      repair = options.experimental_repairToolCall;
+      repair = options.repairToolCall;
       activeTools = options.activeTools;
       return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
     };
@@ -708,20 +709,19 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    // The synthetic `invalid` tool is registered but NOT model-callable — only the real catalog tools are.
     expect(activeTools).toEqual(['ffmpeg']);
     const fixed = await repair?.(repairArgs('t1', 'FFMPEG', '{"a":1}'));
     expect(fixed).toMatchObject({ toolName: 'ffmpeg', toolCallId: 't1' });
   });
 
-  it('reroutes a still-unknown tool call to the synthetic `invalid` tool — tier 2', async () => {
-    let repair: StreamOptions['experimental_repairToolCall'];
+  it('leaves a still-unknown tool call to the SDK — tier 2 returns null, so the original error is reported', async () => {
+    let repair: StreamOptions['repairToolCall'];
     const capturing: StreamTextFn = (options) => {
-      repair = options.experimental_repairToolCall;
+      repair = options.repairToolCall;
       return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
     };
     const queue = createAsyncEventQueue<MinituiEvent>();
@@ -731,17 +731,11 @@ describe('stream-turns', () => {
       runId: 'run-1',
       queue,
       signal: new AbortController().signal,
-      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: 'test-model' },
+      deps: { streamTextImpl: capturing, toolDispatch: dispatch, tools, model: unusedModel },
     }).then(() => queue.close());
     for await (const _ of queue) void _;
     await done;
-    const rerouted = await repair?.(repairArgs('t2', 'delete_everything', '{}'));
-    expect(rerouted?.toolName).toBe('invalid');
-    // The invalid tool's input carries the model's bad name + the SDK error, so its result can tell the model.
-    expect(JSON.parse(rerouted?.input ?? 'null')).toEqual({
-      tool: 'delete_everything',
-      error: 'no such tool: delete_everything',
-    });
+    expect(await repair?.(repairArgs('t2', 'delete_everything', '{}'))).toBeNull();
   });
 
   it('aborts immediately on a non-retriable provider error — RUN_ERROR, no empty/malformed turn', async () => {
@@ -777,10 +771,7 @@ describe('stream-turns', () => {
     expect(out.some((e) => e.type === 'RUN_FINISHED')).toBe(false);
   });
 
-  it('rejects a catalog tool named `invalid` — reserved for the repair-reroute tool', async () => {
-    // buildTools registers a synthetic `invalid` tool for the repair reroute; a catalog tool of that name
-    // would be silently shadowed. runTurns surfaces the collision as RUN_ERROR (a config error, not a
-    // dead-shadowed grant) — the frozen v1 catalog has no such tool, so this guards a future change.
+  it('accepts a catalog tool named `invalid` like any other: no name is reserved', async () => {
     const queue = createAsyncEventQueue<MinituiEvent>();
     const done = runTurns({
       conversation: createConversation(),
@@ -792,16 +783,71 @@ describe('stream-turns', () => {
         streamTextImpl: fakeStreamText({ parts: [{ type: 'finish', finishReason: 'stop' }] }),
         toolDispatch: dispatch,
         tools: [{ name: 'invalid', description: 'x', inputSchema: z.object({}) }],
-        model: 'test-model',
+        model: unusedModel,
         streamMaxRetries: 0,
       },
     }).then(() => queue.close());
     const out: MinituiEvent[] = [];
     for await (const e of queue) out.push(e);
     await done;
-    const last = out.at(-1);
-    expect(last?.type).toBe('RUN_ERROR');
-    if (last?.type === 'RUN_ERROR') expect(last.message).toContain('reserved');
-    expect(out.some((e) => e.type === 'RUN_FINISHED')).toBe(false);
+    expect(out.at(-1)?.type).toBe('RUN_FINISHED');
+  });
+
+  it('sends the system prompt as instructions, never as a history row', async () => {
+    let seen: StreamOptions | undefined;
+    const capturing: StreamTextFn = (options) => {
+      seen = options;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation([{ role: 'user', content: 'merge' }]),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: {
+        streamTextImpl: capturing,
+        toolDispatch: dispatch,
+        tools,
+        model: unusedModel,
+        instructions: 'you build merge apps',
+      },
+    }).then(() => queue.close());
+    for await (const _ of queue) void _;
+    await done;
+    expect(seen?.instructions).toBe('you build merge apps');
+    expect(seen?.messages?.map((m) => m.role)).toEqual(['user']);
+  });
+
+  it('refuses a system row in the history before any attempt: non-retriable, the model never called', async () => {
+    let calls = 0;
+    const counting: StreamTextFn = (options) => {
+      calls += 1;
+      return partsStream([{ type: 'finish', finishReason: 'stop' }])(options);
+    };
+    const queue = createAsyncEventQueue<MinituiEvent>();
+    const done = runTurns({
+      conversation: createConversation([
+        { role: 'system', content: 'you build merge apps' },
+        { role: 'user', content: 'merge' },
+      ]),
+      threadId: 'tid',
+      runId: 'run-1',
+      queue,
+      signal: new AbortController().signal,
+      deps: { streamTextImpl: counting, toolDispatch: dispatch, tools, model: unusedModel },
+    }).then(() => queue.close());
+    const out: MinituiEvent[] = [];
+    for await (const e of queue) out.push(e);
+    await done;
+    expect(calls).toBe(0);
+    expect(out).toEqual([
+      {
+        type: 'RUN_ERROR',
+        message: 'a system message cannot be part of the history; it is sent as instructions',
+        code: 'non-retriable',
+      },
+    ]);
   });
 });

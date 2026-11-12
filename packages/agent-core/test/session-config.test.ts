@@ -119,7 +119,8 @@ describe('the tool set has no prototype', () => {
       );
       expect(dispatch.requests).toEqual([]);
       expect(calls).toHaveLength(2); // the model got a second step
-      expect(JSON.stringify(calls[1]?.prompt)).toContain('Invalid tool call');
+      // The SDK's own invalid-call path tells the model which tool it tried and which exist.
+      expect(JSON.stringify(calls[1]?.prompt)).toContain(`unavailable tool '${name}'`);
       expect(events.at(-1)?.type).toBe('RUN_FINISHED');
     },
   );
@@ -135,7 +136,7 @@ describe('the tool set has no prototype', () => {
     expect(dispatch.requests.map((r) => r.toolName)).toEqual(['run']);
   });
 
-  it('a direct call to the reroute tool dispatches nothing', async () => {
+  it('a call to a tool named invalid is an unknown tool like any other: nothing dispatched', async () => {
     const { model: scripted } = scriptedModel([
       { chunks: toolCallTurn('c1', 'invalid', { tool: 'x', error: 'y' }) },
       { chunks: textTurn('done') },

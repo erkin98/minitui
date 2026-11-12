@@ -152,6 +152,8 @@ options:
   --yolo          approve allow/ask automatically (the hard floor still blocks)
   --accessible    render in screen-reader-friendly mode
   --model <id>    model id (default claude-sonnet-5-5; env MINITUI_MODEL)
+  --effort <lvl>  reasoning effort, one of low, medium, high, xhigh, max (env MINITUI_EFFORT;
+                  unset, the model's own default applies)
   --version       print version and exit
   --help          print this help and exit
 ```

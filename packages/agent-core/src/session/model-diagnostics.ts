@@ -5,9 +5,14 @@ import { toRunError } from '../errors.js';
 // One contained call into the diagnostics port. The port is injected by the host and may throw or hand back
 // a rejected promise; neither may change a turn's events or become an unhandled rejection. The record is
 // built inside the same guard, because building it (redaction, JSON) can throw too.
-function report(port: DiagnosticsPort, msg: string, build: () => Record<string, unknown>): void {
+function report(
+  port: DiagnosticsPort,
+  msg: string,
+  build: () => Record<string, unknown>,
+  level: 'warn' | 'debug' = 'warn',
+): void {
   try {
-    const returned: unknown = port.warn(msg, build());
+    const returned: unknown = port[level](msg, build());
     if (returned instanceof Promise) returned.catch(() => {});
   } catch {
     /* a failing diagnostics sink must never reach the turn */
@@ -35,9 +40,17 @@ export function streamErrorHandler(
  * receives every warning. Called at the start of every turn and every streamChat call.
  */
 export function routeProviderWarnings(port: DiagnosticsPort): void {
-  globalThis.AI_SDK_LOG_WARNINGS = (warnings) => {
+  globalThis.AI_SDK_LOG_WARNINGS = ({ warnings }) => {
     for (const warning of warnings) {
       report(port, 'model provider warning', () => ({ warning: JSON.stringify(warning) }));
     }
   };
+}
+
+/**
+ * The debug line written once per model step: the effort the step ran at ('model-default' when none was
+ * chosen) and the model id the response named.
+ */
+export function reportModelStep(port: DiagnosticsPort, effort: string, modelId: string): void {
+  report(port, 'model step', () => ({ effort, modelId }), 'debug');
 }

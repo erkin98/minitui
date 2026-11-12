@@ -20,6 +20,12 @@ describe('parseCliArgs', () => {
     expect(args.model).toBe('some-model');
   });
 
+  it('--effort is read as given; the level is checked by the entry, with the environment', () => {
+    expect(parseCliArgs(['--effort', 'xhigh', 'merge']).effort).toBe('xhigh');
+    expect(parseCliArgs(['--effort', 'anything', 'merge']).effort).toBe('anything');
+    expect(parseCliArgs(['merge']).effort).toBeUndefined();
+  });
+
   it('an unknown flag is a usage error that names the flag', () => {
     const args = parseCliArgs(['--accesible', 'merge']);
     expect(args.parseError).toContain('--accesible');

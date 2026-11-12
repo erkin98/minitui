@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { streamText as realStreamText, type LanguageModel } from 'ai';
+import { streamText as realStreamText } from 'ai';
 import type { StreamTextFn } from '../provider/stream-part.js';
 import type { AppSpec } from '@minitui/types';
-import type { ModelProvider } from '../provider/provider-port.js';
+import {
+  EFFORTS,
+  isSdkLoopRoute,
+  type Effort,
+  type ModelRoute,
+} from '../provider/provider-port.js';
 import {
   systemClock,
   type ToolDispatchPort,
@@ -30,6 +35,8 @@ export interface AgentConfig {
   readonly streamMaxRetries?: number;
   /** Output-token ceiling for one model call; forwarded to the model only when set. */
   readonly maxOutputTokens?: number;
+  /** How much the model reasons. Unset, nothing is sent and the model's own default applies. */
+  readonly effort?: Effort | undefined;
   /**
    * Test seam: the streamText the SDK-driven loop calls. Production leaves this undefined (the installed
    * SDK is used). It does not choose the loop: the provider's usesSdkLoop does.
@@ -50,7 +57,7 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 // The numeric config fields and the integer range each accepts. An absent field keeps its default.
 const CONFIG_LIMITS: ReadonlyArray<
   readonly [
-    field: Exclude<keyof AgentConfig, 'system' | 'streamTextImpl' | 'redactionPolicy'>,
+    field: Exclude<keyof AgentConfig, 'system' | 'streamTextImpl' | 'redactionPolicy' | 'effort'>,
     min: number,
     max: number,
   ]
@@ -62,8 +69,14 @@ const CONFIG_LIMITS: ReadonlyArray<
   ['maxOutputTokens', 1, MAX_TIMER_MS],
 ];
 
-/** Throws a RangeError that names the field when a present numeric value is not an integer in range. */
+/**
+ * Throws a RangeError that names the field when a present numeric value is not an integer in range, or a
+ * present effort is not one of the levels.
+ */
 function assertConfig(config: AgentConfig): void {
+  if (config.effort !== undefined && !EFFORTS.includes(config.effort)) {
+    throw new RangeError(`AgentConfig.effort must be one of ${EFFORTS.join(', ')}`);
+  }
   for (const [field, min, max] of CONFIG_LIMITS) {
     const value = config[field];
     if (value === undefined) continue;
@@ -128,37 +141,35 @@ export class AgentSession {
   readonly #controllers = new Set<AbortController>();
   // The queue of the most recently started turn: emitSpec() pushes there.
   #queue: AsyncEventQueue<MinituiEvent> | undefined;
-  readonly #provider: ModelProvider;
   readonly #toolDispatch: ToolDispatchPort;
   readonly #specSink: SpecSinkPort;
   readonly #tools: readonly ToolSchema[];
-  readonly #model: LanguageModel;
+  readonly #route: ModelRoute;
   readonly #config: AgentConfig;
   readonly #clock: Clock;
   readonly #diagnostics: DiagnosticsPort;
 
   constructor(deps: {
-    provider: ModelProvider;
+    /** The provider with the model it runs; an SDK-loop provider takes a model object, never an id. */
+    route: ModelRoute;
     toolDispatch: ToolDispatchPort;
     specSink: SpecSinkPort;
     visibility: VisibilityChannel;
     tools: readonly ToolSchema[];
-    model: LanguageModel;
     clock?: Clock;
     diagnostics?: DiagnosticsPort;
     config?: AgentConfig;
   }) {
     this.threadId = randomUUID();
-    // provider supplies the day-1 model handle and is the swap point for a non-SDK provider. specSink is
+    // route is the provider with the model it runs, and the swap point for a non-SDK provider. specSink is
     // LIVE here — emitSpec() below is its call path. clock (re-run waits) and diagnostics are read from here
     // on. visibility is accepted as a required seam dep but is not read on this path yet (it will drive
     // observation routing); a field is added the same change that first reads it, so no unread state
     // lingers here.
-    this.#provider = deps.provider;
+    this.#route = deps.route;
     this.#toolDispatch = deps.toolDispatch;
     this.#specSink = deps.specSink;
     this.#tools = deps.tools;
-    this.#model = deps.model;
     this.#config = deps.config ?? {};
     assertConfig(this.#config);
     this.#clock = deps.clock ?? systemClock;
@@ -199,8 +210,11 @@ export class AgentSession {
       const runId = randomUUID();
       yield runStarted(this.threadId, runId);
 
+      // The SDK loop sends the system prompt as its own instructions option; the other loop keeps it as the
+      // history's head row, which is what a non-SDK provider reads.
+      const headRow = this.#config.system && !isSdkLoopRoute(this.#route);
       const conversation = createConversation(
-        this.#config.system ? [{ role: 'system', content: this.#config.system }] : [],
+        headRow ? [{ role: 'system', content: this.#config.system ?? '' }] : [],
       ).append({ role: 'user', content: intent });
 
       // The run's own errors surface as in-band RUN_ERROR events, so a terminal .catch keeps a
@@ -244,14 +258,16 @@ export class AgentSession {
     signal: AbortSignal;
   }): Promise<void> {
     const { conversation, runId, queue, signal } = args;
-    if (this.#provider.usesSdkLoop !== true) {
+    const route = this.#route;
+    if (!isSdkLoopRoute(route)) {
       return runProviderStream({
-        provider: this.#provider,
+        provider: route.provider,
         conversation,
         threadId: this.threadId,
         runId,
-        model: this.#model,
+        model: route.model,
         system: this.#config.system,
+        effort: this.#config.effort,
         toolDispatch: this.#toolDispatch,
         tools: this.#tools,
         redactionPolicy: this.#config.redactionPolicy,
@@ -268,7 +284,10 @@ export class AgentSession {
       idleTimeoutMs: this.#config.idleTimeoutMs,
       streamMaxRetries: this.#config.streamMaxRetries,
       redactionPolicy: this.#config.redactionPolicy,
-      model: this.#model,
+      model: route.model,
+      instructions: this.#config.system,
+      providerOptions: route.provider.sdkCallOptions({ effort: this.#config.effort }),
+      effortLabel: this.#config.effort ?? 'model-default',
       maxOutputTokens: this.#config.maxOutputTokens,
       clock: this.#clock,
       diagnostics: this.#diagnostics,

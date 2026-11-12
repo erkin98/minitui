@@ -7,7 +7,7 @@ import { createConversation } from '../src/session/conversation.js';
 import type { MinituiEvent } from '../src/events/event-types.js';
 import type { ToolCallResult, ToolDispatchPort } from '../src/ports/index.js';
 import type { ModelProvider } from '../src/provider/provider-port.js';
-import { scriptedModel } from './helpers/sdk-model.js';
+import { finishPart, scriptedModel } from './helpers/sdk-model.js';
 
 // The observations both loops make of a tool call that did not come from a plain successful dispatch.
 
@@ -38,13 +38,8 @@ describe('tool observations that never crossed a successful dispatch', () => {
             toolName: 'serverTool',
             result: `failed reading /home/alice/.netrc with ${secret}`,
             isError: true,
-            providerExecuted: true,
           },
-          {
-            type: 'finish',
-            finishReason: 'stop',
-            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-          },
+          finishPart('stop'),
         ],
       },
     ]);
