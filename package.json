@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.8.0",
   "description": "A terminal agent that builds small apps on demand and runs them behind a permission gate and an OS sandbox.",
   "devDependencies": {
-    "@changesets/cli": "2.27.9",
+    "@changesets/cli": "2.31.1",
     "@eslint/js": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
@@ -14,10 +14,10 @@
     "eslint-plugin-import": "catalog:",
     "lefthook": "1.8.2",
     "prettier": "3.3.3",
-    "syncpack": "13.0.0",
+    "syncpack": "13.0.4",
     "tsup": "catalog:",
     "tsx": "catalog:",
-    "turbo": "2.9.7",
+    "turbo": "2.9.14",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"

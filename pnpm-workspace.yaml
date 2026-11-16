@@ -15,6 +15,13 @@ publicHoistPattern:
   - 'ink'
 overrides:
   react: 'catalog:'
+  # syncpack 13.0.4 pins minimatch at exactly 9.0.5, which has three ReDoS advisories fixed in 9.0.7 (same
+  # API). Drop this once syncpack moves past 13.
+  syncpack>minimatch: 9.0.7
+  # vitest accepts vite 6, 7 or 8, but pnpm keeps a locked transitive vite where it is, and 7.3.6 has five
+  # advisories. Pinned to the vite 8 release that is past the release-age window; drop this once a fresh
+  # install of vitest resolves vite 8 by itself.
+  vite: 8.3.6
 
 # supply-chain posture — mirrors the codex project, the strictest
 # of the adopted repos: 7-day quarantine on freshly-published versions, no exotic
@@ -92,14 +99,18 @@ catalog:
   '@types/node': 22.19.19   # Node 22.x DefinitelyTyped substrate. Every package whose src touches
                             # node:*/process/Buffer/AbortSignal/NodeJS.* / a web-stream global pins
                             # "@types/node": "catalog:" — a catalog entry with no consumer installs nothing.
-  tsup: 8.3.5
-  tsx: 4.19.2              # the release scripts run via `pnpm tsx`; single-sourced here so the version lives in ONE file
-  vitest: 4.0.17            # matches the json-render project (^4.0.17); the adopted renderer's test tooling is vitest 4
-  '@vitest/coverage-v8': 4.0.17
-  eslint: 9.13.0
-  '@eslint/js': 9.13.0
+  tsup: 8.5.1
+  tsx: 4.23.15              # the release scripts run via `pnpm tsx`; single-sourced here so the version lives in ONE file
+  vitest: 4.1.12            # matches the json-render project (^4.0.17); the adopted renderer's test tooling is vitest 4
+  '@vitest/coverage-v8': 4.1.12
+  # eslint stays at 9.31.0: from 9.32.0 the core no-implied-eval rule no longer reports the
+  # setTimeout(string) fixtures in test/eslint-boundary-fixture/, and the policy-fixture check reds. A later
+  # bump must restore that detection first.
+  eslint: 9.31.0
+  '@eslint/js': 9.31.0
   eslint-plugin-import: 2.31.0
-  typescript-eslint: 8.12.2
+  # 8.59.0 and later report unnecessary type assertions in src and tests; that bump goes with those fixes.
+  typescript-eslint: 8.58.2
   # release-script tooling — pinned here so the version lives in ONE file (the catalog),
   # same single-source rule as every other tool; each is referenced via "<dep>": "catalog:".
   esbuild: 0.28.1          # the CJS re-bundler for the Node SEA main
