@@ -8,10 +8,11 @@
 // @minitui/types, @minitui/sanitizer, @minitui/renderer-core, @minitui/catalog — packed
 // alongside and pinned via pnpm overrides; their 0.0.0 versions are on no registry. Its
 // external deps (@json-render/core, @json-render/ink, ink, react, fast-json-patch) resolve
-// from the offline store; @json-render/ink is installed WITH the repository's focus patch (the
+// from the store, or the registry under the shared consumer settings when the store lacks them;
+// @json-render/ink is installed WITH the repository's focus patch (the
 // library is external in the bundle, so the patch reaches a consumer only through this entry), and
 // the script fails unless the installed library carries it — the same volatile react/ink/marked transitives the catalog and
-// spec gates already resolve offline. Permanent (run by the root package gate + pre-push).
+// spec gates already pin. Permanent (run by the root package gate, pre-push and CI).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import {
@@ -34,6 +35,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -121,11 +125,12 @@ try {
   );
   // The four internal deps pin to the local tarballs. renderer-ink (and catalog's
   // @json-render/ink transitive) hard-depend on react/ink/marked with RANGES; pin those
-  // three volatile transitives to the versions the repo lockfile resolves — the only ones
-  // guaranteed in the offline store — so the gate is deterministic and offline.
+  // three volatile transitives to the versions the repo lockfile resolves, so the gate is
+  // deterministic and normally needs no fetch.
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
     'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
       'overrides:\n' +
       "  '@minitui/types': file:" +
       typesTgz +
@@ -258,7 +263,7 @@ try {
       "if (isRenderLocalAllowed('setState') !== true || isRenderLocalAllowed('exec') !== false)\n" +
       "  throw new Error('isRenderLocalAllowed not STATE-only on shipped dist');\n",
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // The library file that an `import` of @json-render/ink resolves from renderer-ink must carry the
   // patched dependency list. Without it Tab cannot reach a non-first widget in the packed build.
   const inkRoot = realpathSync(join(tmp, 'node_modules', '@minitui', 'renderer-ink'));

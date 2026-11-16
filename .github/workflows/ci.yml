@@ -1,6 +1,9 @@
-# The gate on ubuntu, on both supported Node versions: the local pre-push chain, so a push to master or a
-# pull request cannot reach a type-broken, lint-broken or test-broken tree. macOS and Windows lanes come
-# once the suites have been run on those systems. The live sandbox lane is e2e.yml.
+# The gate: the local pre-push chain (build, typecheck, tsc -b, lint, format, syncpack, pack:check) once on
+# the .nvmrc floor, then the test suites on every supported Node and on Ubuntu 22.04, Ubuntu 24.04, Fedora
+# and macOS, so a push to master or a pull request cannot reach a broken tree. macOS is advisory until its
+# suites have been swept for Linux-only paths; its result shows on every run but does not block. ci-ok is
+# the single check that sums up the blocking jobs. The live sandbox lane is e2e.yml.
+# Runner labels are pinned, never -latest: ubuntu-latest moved to 26.04, where the sandbox cannot start.
 # Branch trigger follows the repo convention: on.push targets `master` (the default);
 # feature-branch work gates through a pull_request. (Never key a trigger to `main` —
 # there is no `main` ref, so it would silently never fire.)
@@ -9,24 +12,65 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Weekly, so a runner image or registry change shows up even in a quiet week.
+  schedule:
+    - cron: '17 4 * * 1'
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A newer push to a pull request supersedes the older run; every master commit runs to the end.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  gate:
-    name: Lint, typecheck and test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+  quality:
+    name: Lint, typecheck and pack (Node from .nvmrc)
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Warm the graph so cross-package declaration types resolve before the cold tsc -b.
+      - run: pnpm -w run build
+      - run: pnpm -w run typecheck
+      # The tsc -b composite: an import-DAG back-edge reds the PR even if eslint is misconfigured.
+      - run: pnpm -w run typecheck:tsc
+      # eslint (import/no-restricted-paths is error-level) + policy-fixtures + test-policy + trace +
+      # check-action-pins.
+      - run: pnpm -w run lint
+      - run: pnpm -w run format:check
+      - run: pnpm -w exec syncpack lint
+      - run: pnpm -w run pack:check
+
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})${{ matrix.advisory && ' (advisory)' || '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.advisory && 45 || 30 }}
+    # The runner context cannot be read here, so the matrix carries the flag.
+    continue-on-error: ${{ matrix.advisory }}
     strategy:
       fail-fast: false
       matrix:
-        node: [22, 24]
+        include:
+          - { os: ubuntu-24.04, node: 22, advisory: false }
+          - { os: ubuntu-24.04, node: 24, advisory: false }
+          - { os: ubuntu-24.04, node: 26, advisory: false }
+          - { os: ubuntu-22.04, node: 26, advisory: false }
+          - { os: macos-15, node: 26, advisory: true }
     env:
       MINITUI_NODE_RUNTIME: node-${{ matrix.node }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 11.8.0
@@ -35,13 +79,50 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Warm the graph so cross-package declaration types resolve before the cold tsc -b.
       - run: pnpm -w run build
-      - run: pnpm -w run typecheck
-      # The tsc -b composite: an import-DAG back-edge reds the PR even if eslint is misconfigured.
-      - run: pnpm -w run typecheck:tsc
-      # eslint (import/no-restricted-paths is error-level) + policy-fixtures + test-policy + trace.
-      - run: pnpm -w run lint
-      - run: pnpm -w run format:check
-      - run: pnpm -w exec syncpack lint
       - run: pnpm -w run test:all
+
+  test-fedora:
+    name: Test (Fedora 45, Node 26)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The unit and integration suites on a non-Debian userland and glibc. The live sandbox rows need a
+    # real host, not a container, so they stay in e2e.yml.
+    container:
+      image: registry.fedoraproject.org/fedora:45@sha256:fa773d10382c082ff2cccaf7982a5c162f11f296f91274b994357f2d3d473770
+    env:
+      MINITUI_NODE_RUNTIME: node-26
+    steps:
+      # git first, so the checkout below is a real clone made inside the container; setup-node needs tar
+      # and xz to unpack Node, and the official Node binary links libatomic, which the base image lacks.
+      - run: dnf install -y --setopt=install_weak_deps=False git tar xz which libatomic
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w run build
+      - run: pnpm -w run test:all
+
+  ci-ok:
+    # The one check to require on master: green only when every blocking job succeeded. A failed, cancelled
+    # or skipped job reds it. The macOS cell's continue-on-error keeps it out of the sum.
+    name: CI ok
+    if: always()
+    needs: [quality, test, test-fedora]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done

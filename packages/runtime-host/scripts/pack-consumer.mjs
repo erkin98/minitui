@@ -3,7 +3,8 @@
 // re-exports must resolve, then run one ESM import against the shipped surface. The host's runtime
 // closure holds six internal workspace packages (types, transport, spec, renderer-core, and through
 // them sanitizer and catalog); their 0.0.0 versions are on no registry, so they are packed alongside and
-// pinned by pnpm overrides. External packages resolve from the offline store.
+// pinned by pnpm overrides. External packages resolve from the store, or the registry under the shared
+// consumer settings when the store lacks them.
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -17,6 +18,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() throws instead of exiting, so the finally block always removes the temporary directory.
@@ -75,7 +79,7 @@ try {
   if (!eq(Object.keys(m.exports ?? {}), ['.']))
     die('packed exports subpaths ' + JSON.stringify(Object.keys(m.exports ?? {})) + " != ['.']");
   // 4. A fresh strict consumer. The overrides pin each internal package to its tarball; react, ink and
-  // marked are pinned to the versions the repo lockfile resolves, the only ones in the offline store.
+  // marked are pinned to the versions the repo lockfile resolves, so the gate is deterministic.
   writeFileSync(
     join(tmp, 'package.json'),
     JSON.stringify({
@@ -89,6 +93,7 @@ try {
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
     'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
       'overrides:\n' +
       Object.entries(tarballs)
         .map(([name, file]) => "  '@minitui/" + name + "': file:" + file + '\n')
@@ -146,7 +151,7 @@ try {
       "  if (!(err instanceof BindError)) throw new Error('BindError not thrown on shipped dist');\n" +
       '}\n',
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile the declaration closure, then run the ESM probe. tsc comes from the repo toolchain.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {
     cwd: pkgDir,

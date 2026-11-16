@@ -2,31 +2,47 @@
 # runtime and a real spawn run here, and MINITUI_REQUIRE_SANDBOX turns a sandbox that failed to start into
 # a failure instead of a skip. vitest is called directly, never through turbo: turbo's test task passes
 # only the variables it hashes and would drop both.
+# Ubuntu 22.04 and 24.04 use bubblewrap; macOS uses sandbox-exec, which ships with the system, so the
+# install and namespace steps run on Linux only. macOS is advisory until its first green runs.
 name: Sandbox
 on:
   push:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # Weekly, so a runner image that stops letting the sandbox start shows up even in a quiet week.
+  schedule:
+    - cron: '41 4 * * 1'
 permissions:
   contents: read
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   sandbox:
     # Pinned, not ubuntu-latest: on ubuntu-26.04 bubblewrap starts but the sandbox's inner stage gets a
     # user namespace without capabilities even with the settings below, so the live rows cannot pass
-    # there. 24.04 with those settings is the image sandbox-runtime's own CI runs on.
-    name: Live sandbox (Ubuntu 24.04)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # there. 24.04 with those settings is the image sandbox-runtime's own CI runs on. 26.04 is meant to be
+    # refused cleanly by minitui, not run, until the AppArmor profile that causes it changes.
+    name: Live sandbox (${{ matrix.os }})${{ matrix.advisory && ' (advisory)' || '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.advisory && 45 || 20 }}
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, advisory: false }
+          - { os: ubuntu-22.04, advisory: false }
+          - { os: macos-15, advisory: true }
     env:
       MINITUI_NODE_RUNTIME: node-22
       RUN_E2E: '1'
       MINITUI_REQUIRE_SANDBOX: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 11.8.0
@@ -35,10 +51,12 @@ jobs:
           node-version: 22
           cache: pnpm
       # The sandbox runtime on Linux needs bubblewrap, socat and ripgrep.
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
       # Ubuntu's AppArmor setting can forbid the unprivileged user namespaces bubblewrap needs; lift it
       # where the setting exists, and allow unprivileged user namespaces, as sandbox-runtime's own CI does.
-      - run: |
+      - if: runner.os == 'Linux'
+        run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
@@ -48,10 +66,12 @@ jobs:
       # Says in the log whether both stages of the sandbox can start before the suites run: bubblewrap's
       # namespaces, then the nested user namespace the inner stage creates inside it. The live rows fail
       # on their own if either cannot; these lines say which one and under which AppArmor label.
-      - run: |
+      - if: runner.os == 'Linux'
+        run: |
           grep PRETTY_NAME /etc/os-release
           bwrap --version
-          ls /etc/apparmor.d | grep -i -E 'bwrap|userns' || echo 'no bwrap or userns profile'
+          profiles=$(find /etc/apparmor.d -maxdepth 1 \( -iname '*bwrap*' -o -iname '*userns*' \) -printf '%f\n' 2>/dev/null)
+          echo "${profiles:-no bwrap or userns profile}"
           bwrap --ro-bind / / --unshare-net true && echo 'bwrap namespaces: ok' || echo 'bwrap namespaces: FAILED'
           bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc cat /proc/self/attr/current || true
           bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc unshare --user --map-root-user --mount true \
@@ -60,5 +80,5 @@ jobs:
       - run: pnpm -w run build
       - run: pnpm exec vitest run --project integration-tests
       # On a red run, the kernel's AppArmor lines name the profile that refused, if one did.
-      - if: failure()
+      - if: failure() && runner.os == 'Linux'
         run: sudo dmesg | grep -i apparmor | tail -n 20 || true

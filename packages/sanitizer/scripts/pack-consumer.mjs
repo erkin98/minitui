@@ -15,6 +15,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -78,7 +81,8 @@ try {
   // shipping unreviewed; presence-only checking cannot see it.
   if (!eq(Object.keys(m.exports ?? {}), ['.']))
     die('packed exports subpaths ' + JSON.stringify(Object.keys(m.exports ?? {})) + " ≠ ['.']");
-  // 4. Install the tarball into a fresh strict consumer (pinned pnpm, not ambient).
+  // 4. Install the tarball into a fresh strict consumer (pinned pnpm, not ambient), the same way
+  // as the other pack gates: the tarball as a file: dependency, and the shared consumer settings.
   writeFileSync(
     join(tmp, 'package.json'),
     JSON.stringify({
@@ -86,8 +90,10 @@ try {
       private: true,
       type: 'module',
       packageManager: EXPECTED_PACKAGE_MANAGER,
+      dependencies: { '@minitui/sanitizer': 'file:' + tgz },
     }),
   );
+  writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n' + CONSUMER_WORKSPACE_SETTINGS);
   writeFileSync(
     join(tmp, 'tsconfig.json'),
     JSON.stringify({
@@ -123,7 +129,7 @@ try {
     "import { sanitize } from '@minitui/sanitizer';\n" +
       "if (sanitize('a\\u001b[31mb') !== 'ab') { throw new Error('ESM import broken'); }\n",
   );
-  execFileSync('pnpm', ['add', '--offline', tgz], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile (declaration closure) + run one ESM import. tsc comes from the
   // repo toolchain (catalog-pinned) run AGAINST the consumer project — the tmp
   // consumer has no typescript install of its own, and adding one here would

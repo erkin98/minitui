@@ -1,6 +1,17 @@
 export const EXPECTED_NODE_FLOOR = '>=22.13';
 export const EXPECTED_PACKAGE_MANAGER = 'pnpm@11.8.0';
 
+// How every throwaway consumer installs the packed tarballs. The consumer resolves the newest mature
+// in-range versions of their dependencies, which a cold store (a fresh CI runner) does not hold, so the
+// install uses the store when it can and fetches the rest. The consumer lives in the temp directory,
+// outside this workspace, so it inherits none of the workspace's supply-chain settings: these keep the
+// same seven-day release window (strict: the newest mature version in range, failing only when no
+// version in range is mature) and refuse exotic subdependencies. stdin is ignored so that pnpm, in
+// strict mode, can never stop at an interactive prompt during a hand-run gate.
+export const CONSUMER_WORKSPACE_SETTINGS = 'minimumReleaseAge: 10080\nblockExoticSubdeps: true\n';
+export const CONSUMER_INSTALL_ARGS = ['install', '--prefer-offline'];
+export const CONSUMER_INSTALL_STDIO = ['ignore', 'inherit', 'inherit'];
+
 const CONCRETE_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export function assertRootToolchain(rootPackage, die) {

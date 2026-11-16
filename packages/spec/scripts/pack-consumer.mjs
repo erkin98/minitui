@@ -5,8 +5,9 @@
 // four internal workspace deps in its runtime closure — @minitui/catalog (and catalog's
 // own types/renderer-core/sanitizer) — packed alongside and pinned via pnpm overrides;
 // their 0.0.0 versions are on no registry. External deps (@json-render/core and
-// catalog's ink/react/marked transitives) resolve from the offline store. Permanent (run
-// by the root package gate + pre-push).
+// catalog's ink/react/marked transitives) resolve from the store, or the registry under the
+// shared consumer settings when the store lacks them. Permanent (run by the root package
+// gate, pre-push and CI).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -20,6 +21,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -101,11 +105,12 @@ try {
   );
   // The four internal deps pin to the local tarballs. catalog's @json-render/ink transitive
   // hard-depends on react/ink/marked with RANGES; pin those three volatile transitives to
-  // the versions the repo lockfile resolves — the only ones guaranteed in the offline store
-  // — so the gate is deterministic and offline.
+  // the versions the repo lockfile resolves, so the gate is deterministic and normally needs
+  // no fetch.
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
     'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
       'overrides:\n' +
       "  '@minitui/types': file:" +
       typesTgz +
@@ -230,7 +235,7 @@ try {
       "if (formatStructuralIssues([]) !== '')\n" +
       "  throw new Error('formatStructuralIssues of [] not empty on shipped dist');\n",
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the repo
   // toolchain (spec-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {
