@@ -21,6 +21,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs.
@@ -86,7 +89,7 @@ try {
   // 4. Install into a fresh strict consumer. @minitui/types is renderer-core's regular
   // dependency, so its 0.0.0 (which resolves on no registry) is pinned to the local tarball via
   // an override. pnpm 11 reads overrides from pnpm-workspace.yaml, NOT the package.json `pnpm`
-  // key — the latter is silently ignored and the offline install fails to resolve 0.0.0.
+  // key — the latter is silently ignored and the install fails to resolve 0.0.0.
   writeFileSync(
     join(tmp, 'package.json'),
     JSON.stringify({
@@ -99,7 +102,12 @@ try {
   );
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
-    'packages: []\n' + 'overrides:\n' + "  '@minitui/types': file:" + typesTgz + '\n',
+    'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
+      'overrides:\n' +
+      "  '@minitui/types': file:" +
+      typesTgz +
+      '\n',
   );
   writeFileSync(
     join(tmp, 'tsconfig.json'),
@@ -162,7 +170,7 @@ try {
       'if (Object.keys(RC).length !== 0)\n' +
       "  throw new Error('renderer-core leaked a runtime export: ' + Object.keys(RC));\n",
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the repo toolchain
   // (catalog-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {

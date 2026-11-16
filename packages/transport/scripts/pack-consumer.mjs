@@ -18,6 +18,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -99,6 +102,7 @@ try {
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
     'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
       'overrides:\n' +
       "  '@minitui/types': file:" +
       typesTgz +
@@ -154,7 +158,7 @@ try {
       "if ({}.polluted !== undefined) throw new Error('Object.prototype polluted');\n" +
       "if (typeof createAppBus !== 'function') throw new Error('ESM import broken');\n",
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the
   // repo toolchain (catalog-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {

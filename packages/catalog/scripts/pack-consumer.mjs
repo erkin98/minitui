@@ -6,7 +6,8 @@
 // just source. Catalog has three internal workspace deps (types, renderer-core,
 // sanitizer) packed alongside and pinned via pnpm overrides — their 0.0.0 versions
 // are on no registry; its external deps (@json-render/core, @json-render/ink, zod)
-// resolve from the offline store. Permanent (run by the root package gate + pre-push).
+// resolve from the store, or the registry under the shared consumer settings when the store
+// lacks them. Permanent (run by the root package gate, pre-push and CI).
 /* global console, process, URL */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -20,6 +21,9 @@ import {
   assertConcreteSemverControl,
   assertRootToolchain,
   assertRootToolchainControl,
+  CONSUMER_INSTALL_ARGS,
+  CONSUMER_INSTALL_STDIO,
+  CONSUMER_WORKSPACE_SETTINGS,
 } from '../../../scripts/pack-contract.mjs';
 
 // die() THROWS (never process.exit) so the finally-block temp-dir cleanup always runs —
@@ -102,12 +106,12 @@ try {
   );
   // The three internal deps pin to the local tarballs. @json-render/ink hard-depends
   // on react/ink/marked with RANGES; a clean-room install would drift to whatever is
-  // latest (a moving, un-cached target that breaks the offline install). Pin those
-  // three volatile transitives to the versions the repo lockfile resolves — the only
-  // ones guaranteed in the offline store — so the gate is deterministic and offline.
+  // latest (a moving target). Pin those three volatile transitives to the versions the
+  // repo lockfile resolves, so the gate is deterministic and normally needs no fetch.
   writeFileSync(
     join(tmp, 'pnpm-workspace.yaml'),
     'packages: []\n' +
+      CONSUMER_WORKSPACE_SETTINGS +
       'overrides:\n' +
       "  '@minitui/types': file:" +
       typesTgz +
@@ -255,7 +259,7 @@ try {
       "try { throwingFallback('IFrame'); } catch (e) { threw = /IFrame/.test(String(e)); }\n" +
       "if (!threw) throw new Error('throwingFallback did not throw naming the type on shipped dist');\n",
   );
-  execFileSync('pnpm', ['install', '--offline'], { cwd: tmp, stdio: 'inherit' });
+  execFileSync('pnpm', CONSUMER_INSTALL_ARGS, { cwd: tmp, stdio: CONSUMER_INSTALL_STDIO });
   // 5. Compile (declaration closure) + run the ESM probe. tsc comes from the repo
   // toolchain (catalog-pinned) run AGAINST the consumer project.
   execFileSync('pnpm', ['exec', 'tsc', '--noEmit', '-p', join(tmp, 'tsconfig.json')], {
