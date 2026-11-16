@@ -68,6 +68,9 @@ jobs:
     env:
       MINITUI_NODE_RUNTIME: node-${{ matrix.node }}
     steps:
+      # Control, not for merge: a macOS-only failure must leave CI ok green.
+      - if: runner.os == 'macOS'
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
