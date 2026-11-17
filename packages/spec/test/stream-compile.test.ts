@@ -115,29 +115,46 @@ describe('compileSpecStream: the last line', () => {
 });
 
 describe('compileSpecStream: the work of one long line', () => {
-  // The cost is judged by how it grows, not by a stopwatch: the same line at full size and at an eighth of
-  // it, sent in four-character chunks, the fastest of five drains at each size. Scanning each chunk once
-  // makes the work grow about eightfold (measured 9.7 to 9.9); scanning the growing buffer again for every
-  // chunk makes it grow far more (measured 147 to 193). A busy machine slows both sizes alike.
-  const drainTime = async (length: number): Promise<number> => {
+  // The cost is judged by how it grows, not by a stopwatch: one line of 200,000 characters against a line
+  // of a sixteenth of it, both sent in four-character chunks. A busy machine does not slow the two alike:
+  // it stretches a long drain more than a short one, and the plain ratio of the fastest of five drains at
+  // a full size and at an eighth read above its bound of 24 for correct work beside 32 busy loops. So the
+  // small line is drained as a batch of 16 runs, which makes both samples about as long, the row takes the
+  // least of three such measurements, and the bound is 64, four times the linear reading of about 16.
+  // Correct work read at most 19.8, quiet and beside 32 and 64 busy loops. Scanning the growing buffer
+  // again for every chunk makes the work grow with the square of the line: it read 147 or more.
+  const SHRINK = 16;
+  const piecesOf = (length: number): string[] => {
     const line = JSON.stringify({ op: 'add', path: '/root', value: 'x'.repeat(length) });
     const pieces: string[] = [];
     for (let i = 0; i < line.length; i += 4) pieces.push(line.slice(i, i + 4));
     pieces.push('\n');
+    return pieces;
+  };
+  // The fastest of five timings of `runs` drains in a row, in ms. Every line is checked after the clock
+  // stops, so a drain that does nothing cannot pass.
+  const batchTime = async (length: number, runs: number): Promise<number> => {
+    const pieces = piecesOf(length);
     let best = Infinity;
-    for (let run = 0; run < 5; run++) {
+    for (let timing = 0; timing < 5; timing++) {
+      const specs: Array<Awaited<ReturnType<typeof compileSpecStream>>> = [];
       const started = performance.now();
-      const spec = await compileSpecStream(chunks(pieces));
+      for (let run = 0; run < runs; run++) specs.push(await compileSpecStream(chunks(pieces)));
       best = Math.min(best, performance.now() - started);
-      expect(spec.root).toHaveLength(length);
+      for (const spec of specs) expect(spec.root).toHaveLength(length);
     }
     return best;
   };
 
   it('drains a long line in time that grows in proportion to its length', async () => {
-    const full = await drainTime(200_000);
-    const eighth = await drainTime(25_000);
-    expect(full / Math.max(eighth, 0.2)).toBeLessThan(24);
+    let least = Infinity;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const full = await batchTime(200_000, 1);
+      // A timer cannot tell below 0.2 ms, so the batch time is floored there.
+      const small = Math.max(await batchTime(200_000 / SHRINK, SHRINK), 0.2) / SHRINK;
+      least = Math.min(least, full / small);
+    }
+    expect(least).toBeLessThan(64);
   });
 });
 
