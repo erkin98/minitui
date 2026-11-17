@@ -1,8 +1,9 @@
 # The gate: the local pre-push chain (build, typecheck, tsc -b, lint, format, syncpack, pack:check) once on
 # the .nvmrc floor, then the test suites on every supported Node and on Ubuntu 22.04, Ubuntu 24.04, Fedora
 # and macOS, so a push to master or a pull request cannot reach a broken tree. macOS is advisory until its
-# suites have been swept for Linux-only paths; its result shows on every run but does not block. ci-ok is
-# the single check that sums up the blocking jobs. The live sandbox lane is e2e.yml.
+# suites have been swept for Linux-only paths; its result shows on every run but does not block, because it
+# is a job of its own that ci-ok does not wait on. ci-ok is the single check that sums up the blocking jobs.
+# The live sandbox lane is e2e.yml.
 # Runner labels are pinned, never -latest: ubuntu-latest moved to 26.04, where the sandbox cannot start.
 # Branch trigger follows the repo convention: on.push targets `master` (the default);
 # feature-branch work gates through a pull_request. (Never key a trigger to `main` —
@@ -51,20 +52,17 @@ jobs:
       - run: pnpm -w run pack:check
 
   test:
-    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})${{ matrix.advisory && ' (advisory)' || '' }}
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.advisory && 45 || 30 }}
-    # The runner context cannot be read here, so the matrix carries the flag.
-    continue-on-error: ${{ matrix.advisory }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, node: 22, advisory: false }
-          - { os: ubuntu-24.04, node: 24, advisory: false }
-          - { os: ubuntu-24.04, node: 26, advisory: false }
-          - { os: ubuntu-22.04, node: 26, advisory: false }
-          - { os: macos-15, node: 26, advisory: true }
+          - { os: ubuntu-24.04, node: 22 }
+          - { os: ubuntu-24.04, node: 24 }
+          - { os: ubuntu-24.04, node: 26 }
+          - { os: ubuntu-22.04, node: 26 }
     env:
       MINITUI_NODE_RUNTIME: node-${{ matrix.node }}
     steps:
@@ -77,6 +75,31 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w run build
+      - run: pnpm -w run test:all
+
+  test-macos:
+    # Advisory, and outside ci-ok's needs on purpose. continue-on-error only masks a failure: a job that no
+    # macOS runner picks up ends cancelled and reports abandoned, which would red an aggregate that waited
+    # on it. Being its own job, no end state of this one can count.
+    name: Test (macos-15, Node 26) (advisory)
+    runs-on: macos-15
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      MINITUI_NODE_RUNTIME: node-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -w run build
@@ -112,7 +135,7 @@ jobs:
 
   ci-ok:
     # The one check to require on master: green only when every blocking job succeeded. A failed, cancelled
-    # or skipped job reds it. The macOS cell's continue-on-error keeps it out of the sum.
+    # or skipped job reds it. test-macos is left out of needs, so it never counts.
     name: CI ok
     if: always()
     needs: [quality, test, test-fedora]
