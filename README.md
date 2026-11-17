@@ -43,7 +43,7 @@ You say what you want: _merge these two videos_, _rename every file by its EXIF 
 
 - **Interpreters and `find`.** The engine cannot model what `python -c` or `find -exec` will do, so it never lifts an ask for them, and the promise rests on the sandbox.
 - **The floor is a list, not a proof.** It names the common secret files, key types and network tools, and it reads the text of a command. Equivalent spellings it does not name are caught only by the sandbox, which is why the sandbox is the control and the floor is a second layer.
-- **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. Linux sessions have been run by hand. On macOS 15 the test suites and the live sandbox suites pass in CI; no session has been run there by hand.
+- **Platforms.** Linux and macOS are the targets. Windows is not supported: the sandbox handle refuses gated execution there before it loads the runtime. Ubuntu 26.04 is not supported yet: its AppArmor profile for bubblewrap (`bwrap-userns-restrict`) leaves the sandbox's inner stage without capabilities, so the sandbox cannot start and minitui refuses every gated action there. Linux sessions have been run by hand. On macOS 15 the test suites and the live sandbox suites pass in CI; no session has been run there by hand.
 - **End to end.** Each guarantee above is tested at its own boundary, and the integration suites run the packages together with stand-ins for the model, the process spawn and the output file. A full session with a real model, the consent box and a merge under a live sandbox has been run by hand on Linux through the built `minitui` command. It has not been run on macOS, and no automated test calls a real model. Below that, the runner and router have merged two clips with audio under the sandbox on Linux, and refused a second merge to the same output, a write outside the merge policy, and a dispatch after an abort.
 
 ### Reporting a vulnerability
@@ -132,7 +132,7 @@ pnpm build
   sudo apt-get install ffmpeg bubblewrap socat ripgrep
   ```
 
-  On Ubuntu 24.04, bubblewrap also needs the AppArmor restriction on unprivileged user namespaces lifted, or an AppArmor profile for it; the [sandbox-runtime README](https://github.com/anthropic-experimental/sandbox-runtime) gives both. On Ubuntu 26.04 lifting the restriction is not enough: bubblewrap starts, but the sandbox's inner stage gets a user namespace without capabilities, and no working setup is documented yet. If the sandbox cannot start, minitui refuses the gated action instead of running it unsandboxed.
+  On Ubuntu 24.04, bubblewrap also needs the AppArmor restriction on unprivileged user namespaces lifted, or an AppArmor profile for it; the [sandbox-runtime README](https://github.com/anthropic-experimental/sandbox-runtime) gives both. On Ubuntu 26.04 lifting the restriction is not enough: bubblewrap starts, but the sandbox's inner stage gets a user namespace without capabilities, and no working setup is documented yet, so 26.04 is not supported yet. The closest upstream report is [sandbox-runtime issue #428](https://github.com/anthropics/sandbox-runtime/issues/428), still open, where a failure on 26.04 is reported in the comments. If the sandbox cannot start, minitui refuses the gated action instead of running it unsandboxed.
 
 - An Anthropic API key, read from `ANTHROPIC_API_KEY`.
 
