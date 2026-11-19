@@ -6,6 +6,7 @@ import { join, relative, resolve } from 'node:path';
 import { createVitest } from 'vitest/node';
 import {
   CAST_DIRECTIVE_ALLOWLIST,
+  EVAL_SRC_GLOBS,
   TEST_FILE_GLOBS,
   TEST_KIT_SRC_GLOBS,
 } from '../config/eslint-policy.js';
@@ -43,8 +44,10 @@ const testFiles = await lintOrDie(TEST_FILE_GLOBS);
 // The test toolkit's source is linted in a call of its own, so its zero-match guard is its own: a glob
 // that stopped matching it cannot hide behind the test files the first call found.
 const testKitSource = await lintOrDie(TEST_KIT_SRC_GLOBS);
-const results = [...testFiles.results, ...testKitSource.results];
-const lintedFiles = new Set([...testFiles.files, ...testKitSource.files]);
+// The eval harness's source likewise, in a call of its own.
+const evalSource = await lintOrDie(EVAL_SRC_GLOBS);
+const results = [...testFiles.results, ...testKitSource.results, ...evalSource.results];
+const lintedFiles = new Set([...testFiles.files, ...testKitSource.files, ...evalSource.files]);
 
 const formatter = await eslint.loadFormatter('stylish');
 const output = await formatter.format(results);

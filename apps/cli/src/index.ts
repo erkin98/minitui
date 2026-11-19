@@ -1,12 +1,5 @@
 import { readFileSync } from 'node:fs';
-import {
-  AgentSession,
-  createAiSdkProvider,
-  createAnthropicModel,
-  EFFORTS,
-  type Effort,
-  type RedactionPolicy,
-} from '@minitui/agent-core';
+import { AgentSession, EFFORTS, type Effort } from '@minitui/agent-core';
 import { videoMergeCatalog } from '@minitui/catalog';
 import { createInkBinding } from '@minitui/renderer-ink';
 import { sanitize } from '@minitui/sanitizer';
@@ -21,6 +14,7 @@ import {
 import { resolveConfig } from './config.js';
 import { buildAppGraph } from './graph.js';
 import type { AppGraphDeps, CliGraph, RunAppGraph } from './graph-types.js';
+import { MESSAGE_CAP, cleaner, createModelRoute, keyRedactionPolicy } from './model-route.js';
 import { runApp } from './run-app.js';
 
 function readVersion(): string {
@@ -58,10 +52,6 @@ options:
 
 a word that starts with a dash inside the intent goes after --, e.g.: minitui -- convert --fast.mp4`;
 
-const CRASH_CAP = 4000;
-const MESSAGE_CAP = 500;
-const HIDDEN = '[redacted-secret]';
-
 /** The pieces of boot the entry uses, as a seam: the real ones by default, real fakes in a test. */
 export interface CliBootApi {
   detectEnv: typeof detectEnv;
@@ -91,29 +81,6 @@ export interface CliDeps {
   readonly boot?: CliBootApi | undefined;
   readonly buildAppGraph?: ((deps: AppGraphDeps) => Promise<CliGraph>) | undefined;
   readonly runApp?: ((args: CliArgs, graph: RunAppGraph) => Promise<number>) | undefined;
-}
-
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/**
- * Everything the program writes outside the app (the log, a crash, a message to the person) goes through
- * here: control characters are removed, and so is the API key, whatever carried it (a provider's error
- * message, a request echoed back in a log record). The key is removed again after the control characters,
- * since taking them out can join the halves of a key that was split by one.
- */
-function cleaner(apiKey: string): {
-  line: (text: string) => string;
-  crash: (text: string) => string;
-  message: (error: unknown) => string;
-} {
-  const hide = (text: string): string => text.replaceAll(apiKey, HIDDEN);
-  const plain = (text: string): string => hide(sanitize(hide(text), { allow: 'none' }));
-  return {
-    line: plain,
-    crash: (text) => plain(text).slice(0, CRASH_CAP),
-    message: (error) =>
-      plain(error instanceof Error ? error.message : String(error)).slice(0, MESSAGE_CAP),
-  };
 }
 
 type Out = (line: string) => void;
@@ -186,17 +153,12 @@ async function runInteractive(
     const modelId = typeof config.model === 'string' ? config.model : DEFAULT_MODEL;
     // One redaction policy for the whole run, given to the provider and the session alike: the key is a
     // secret wherever text is about to go to the model.
-    const redactionPolicy: RedactionPolicy = {
-      extraSecretPatterns: [new RegExp(escapeRegExp(apiKey), 'g')],
-    };
+    const redactionPolicy = keyRedactionPolicy(apiKey);
     const built = await deps.build({
       mode: args.mode,
       accessible: args.accessible,
       binding: createInkBinding(videoMergeCatalog),
-      route: {
-        provider: createAiSdkProvider({ apiKey, diagnostics, redactionPolicy }),
-        model: createAnthropicModel(modelId, { apiKey }),
-      },
+      route: createModelRoute({ apiKey, modelId, diagnostics, redactionPolicy }),
       workingDirectory: deps.cwd,
       makeSession: (wiring) => new AgentSession(wiring),
       diagnostics,

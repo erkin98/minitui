@@ -5,6 +5,7 @@ import importPlugin from 'eslint-plugin-import';
 import { BOUNDARY_ZONES, restrictedPathsRule } from './config/eslint-boundaries.js';
 import {
   policyPlugin,
+  EVAL_SRC_GLOBS,
   SOURCE_EXT,
   TEST_FILE_GLOBS,
   TEST_KIT_SRC_GLOBS,
@@ -574,11 +575,11 @@ export default tseslint.config(
     // only the vitest import arm applies, under its own rule id so the test block below keeps the full
     // rule and is not inheriting a narrower option set.
     files: [`**/*.${SOURCE_EXT}`],
-    ignores: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
+    ignores: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS, ...EVAL_SRC_GLOBS],
     rules: { 'minitui/no-vitest-replacement-import': 'error' },
   },
   {
-    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
+    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS, ...EVAL_SRC_GLOBS],
     rules: {
       'minitui/no-vitest-replacement-api': 'error',
       'no-eval': 'error',
@@ -654,9 +655,9 @@ export default tseslint.config(
     },
   },
   {
-    // A disable directive in the test toolkit's source is a counted, reasoned exception: a stale one is
-    // an error, as on the typed test lane.
-    files: TEST_KIT_SRC_GLOBS,
+    // A disable directive in the test toolkit's source or the eval harness is a counted, reasoned
+    // exception: a stale one is an error, as on the typed test lane.
+    files: [...TEST_KIT_SRC_GLOBS, ...EVAL_SRC_GLOBS],
     linterOptions: { reportUnusedDisableDirectives: 'error' },
   },
   {
@@ -664,7 +665,7 @@ export default tseslint.config(
     // CAST_DIRECTIVE_ALLOWLIST (config/eslint-policy.js), each with a reasoned disable directive.
     // The exec-wall fixtures and the exec source tree keep the selectors of the exec wall, which this
     // block would replace.
-    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS],
+    files: [...TEST_FILE_GLOBS, ...TEST_KIT_SRC_GLOBS, ...EVAL_SRC_GLOBS],
     ignores: ['test/eslint-boundary-fixture/exec-walls/**', 'packages/exec/src/**'],
     rules: {
       'no-restricted-syntax': [

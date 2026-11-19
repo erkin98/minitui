@@ -14,8 +14,9 @@
 // wall-exempt scripts directories. Beyond it, no later change edits this table except the
 // `apps/cli` zone — apps/cli is outside the `packages/*` glob seeded here, so that one zone
 // is appended separately (the only gate for the cli -> not-test-kit/integration-tests edge) —
-// and the test-kit catalog split: the toolkit's own tests may import the catalog, nothing else
-// in that package may.
+// the test-kit catalog split: the toolkit's own tests may import the catalog, nothing else
+// in that package may — and the eval zone: the cli's source and its bin may not import the
+// eval harness under apps/cli/eval, so none of it reaches the shipped bundle.
 //
 // Encoding (verified against eslint-plugin-import 2.31.0 `no-restricted-paths`):
 // from='./packages' bars EVERY internal package; `except` re-permits the package's OWN
@@ -115,6 +116,13 @@ export const BOUNDARY_ZONES = [
     from: ['./packages/test-kit', './test'],
     message:
       'apps/cli may not import the dev-only test-kit or the integration tests, from any file.',
+  },
+  // The eval harness lives inside the app and imports its source, never the reverse: nothing of it may
+  // reach the bundle tsup builds from src/index.ts or the bin that imports that bundle.
+  {
+    target: ['./apps/cli/src', './apps/cli/bin'],
+    from: './apps/cli/eval',
+    message: 'the shipped cli and its bin may not import the eval harness',
   },
   // A package's own files, tests included, may not import the integration suites or their support code:
   // that code pulls in exec, catalog and renderer-ink, past any package's row of the DAG.
