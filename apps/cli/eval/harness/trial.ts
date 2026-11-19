@@ -255,8 +255,22 @@ interface Recorder {
   abort: RunAbort | null;
 }
 
-// Closes attempt n. Returns the abort when a finished step on the SDK loop came without its step record,
-// or with one at another effort than the arm's.
+// What the meter says about attempt n. A run abort it throws ends the whole run: it is kept in the trial's
+// abort slot, so a stream that a cancel swallowed cannot lose it, the attempt is still recorded, with no
+// request counted, and `aborted` tells the caller. Any other error it throws goes up unchanged.
+function endAttempt(rec: Recorder, index: number, usage: Usage | null) {
+  try {
+    const metered = rec.args.hooks?.end(index, usage) ?? { requests: 0, refused: false };
+    return { ...metered, aborted: false };
+  } catch (error) {
+    if (!(error instanceof RunAbort)) throw error;
+    rec.abort ??= error;
+    return { requests: 0, refused: false, aborted: true };
+  }
+}
+
+// Closes attempt n. Returns the abort when the meter threw one, or when a finished step on the SDK loop came
+// without its step record, or with one at another effort than the arm's.
 function closeAttempt(
   rec: Recorder,
   opened: AttemptObservation,
@@ -264,7 +278,7 @@ function closeAttempt(
   stepsBefore: number,
 ) {
   const { index } = opened;
-  const metered = rec.args.hooks?.end(index, seen.usage) ?? { requests: 0, refused: false };
+  const metered = endAttempt(rec, index, seen.usage);
   if (metered.refused) rec.refused = true;
   const steps = rec.args.steps().slice(stepsBefore);
   rec.attempts[index - 1] = {
@@ -277,9 +291,11 @@ function closeAttempt(
     runError: seen.runError,
   };
   const broken = steps.length === 0 || steps.some((step) => step.effort !== rec.args.arm);
-  if (!rec.sdkLoop || !seen.finished || !broken) return null;
-  rec.abort ??= new RunAbort(`attempt ${index}: no model step record at the arm's effort`);
-  return rec.abort;
+  const brokenSeam = rec.sdkLoop && seen.finished && broken;
+  if (brokenSeam) {
+    rec.abort ??= new RunAbort(`attempt ${index}: no model step record at the arm's effort`);
+  }
+  return metered.aborted || brokenSeam ? rec.abort : null;
 }
 
 // Passes the attempt's events through unchanged and closes the attempt when they end, however they end.

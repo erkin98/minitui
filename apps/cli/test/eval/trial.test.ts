@@ -330,6 +330,74 @@ describe('runTrial: a failure of the harness, not of the model', () => {
   });
 });
 
+describe('runTrial: a run abort from the spend hooks', () => {
+  // One abort object, so a row can tell the run's own error from a copy.
+  const abort = new RunAbort('the spend guard tripped');
+  const throwingFrom = (where: 'start' | 'end'): AttemptHooks => ({
+    start: () => {
+      if (where === 'start') throw abort;
+    },
+    end: () => {
+      if (where === 'end') throw abort;
+      return { requests: 1, refused: false };
+    },
+  });
+
+  // The trial's promise and the requests the model has seen: both stay readable when the trial rejects.
+  function startTrial(replies: readonly ScriptedReply[], hooks: AttemptHooks, timeoutMs = 5000) {
+    const requests: ProviderRequest[] = [];
+    const { deps, log } = trialDeps(scriptedProvider(replies, (r) => requests.push(r)));
+    const result = runTrial({
+      intent: INTENT,
+      deps,
+      steps: log.steps,
+      arm: 'high',
+      timeoutMs,
+      now: () => performance.now(),
+      hooks,
+    });
+    return { result, requests };
+  }
+
+  it('thrown by end on a trial the timeout cancels: the trial rejects with that abort, not a timeout', async () => {
+    const { result, requests } = startTrial([{ kind: 'never-ends' }], throwingFrom('end'), 50);
+    await expect(result).rejects.toBe(abort);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('thrown by end on a run that is not cancelled: the run ends there, before its next attempt', async () => {
+    const { result, requests } = startTrial([reply(STRUCTURAL), reply(VALID)], throwingFrom('end'));
+    await expect(result).rejects.toBe(abort);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('thrown by start: the trial rejects with that abort, and the attempt never reaches the model', async () => {
+    const { result, requests } = startTrial([reply(VALID)], throwingFrom('start'));
+    await expect(result).rejects.toBe(abort);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('the control: hooks that throw nothing end the same trials with their own stops, run to the end', async () => {
+    const cancelled = startTrial([{ kind: 'never-ends' }], notingHooks().hooks, 50);
+    expect((await cancelled.result).stop).toBe('timeout');
+    const whole = startTrial([reply(STRUCTURAL), reply(VALID)], notingHooks().hooks);
+    expect((await whole.result).stop).toBe('valid');
+    expect(whole.requests).toHaveLength(2);
+  });
+
+  it('any other error a hook throws is not a run abort: the trial is a harness error', async () => {
+    const broken: AttemptHooks = {
+      start: () => {},
+      end: () => {
+        throw new Error('the meter broke');
+      },
+    };
+    const { observation, harnessWarnings } = await trial([reply(VALID)], { hooks: broken });
+    expect(observation.stop).toBe('harness-error');
+    expect(harnessWarnings).toEqual([{ stage: 'run', message: 'the meter broke' }]);
+  });
+});
+
 describe('runTrial: what the eval leaves alone', () => {
   it('the sandbox handle is inactive and the renderer is never mounted', async () => {
     let mounts = 0;
