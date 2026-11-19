@@ -1,0 +1,4 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column"},"children":["note"]}}
+{"op":"add","path":"/elements/note","value":{"type":"Text","props":{"text":"Ready"}}}
+{"op":"add","path":"/state","value":{}}

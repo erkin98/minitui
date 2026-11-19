@@ -1,0 +1,5 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["size","order"]}}
+{"op":"add","path":"/elements/size","value":{"type":"Select","props":{"label":"Size","options":[{"label":"Small","value":"small"},{"label":"Medium","value":"medium"},{"label":"Large","value":"large"}],"value":{"$bindState":"/size"}}}}
+{"op":"add","path":"/elements/order","value":{"type":"Button","props":{"label":"Order"},"on":{"press":{"action":"setState","params":{"statePath":"/ordered","value":true}}}}}
+{"op":"add","path":"/state","value":{"size":"medium","ordered":false}}

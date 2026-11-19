@@ -1,0 +1,5 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["bar","note"]}}
+{"op":"add","path":"/elements/bar","value":{"type":"ProgressBar","props":{"label":"Upload","progress":{"$state":"/upload"}}}}
+{"op":"add","path":"/elements/note","value":{"type":"Text","props":{"text":"Waiting"}}}
+{"op":"add","path":"/state","value":{"upload":0}}

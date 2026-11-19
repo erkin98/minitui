@@ -1,0 +1,4 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["chapters"]}}
+{"op":"add","path":"/elements/chapters","value":{"type":"OrderList","props":{"items":{"$bindState":"/chapters"}}}}
+{"op":"add","path":"/state","value":{"chapters":["@@CASE_DIR@@/ch1.mp4","@@CASE_DIR@@/ch2.mp4","@@CASE_DIR@@/ch3.mp4"]}}

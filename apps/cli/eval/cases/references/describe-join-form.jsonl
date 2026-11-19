@@ -1,0 +1,7 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["codec","join","progress","status"]}}
+{"op":"add","path":"/elements/codec","value":{"type":"Select","props":{"label":"Codec","options":[{"label":"Copy","value":"copy"},{"label":"H.264","value":"libx264"}],"value":{"$bindState":"/codec"}}}}
+{"op":"add","path":"/elements/join","value":{"type":"Button","props":{"label":"Join"},"on":{"press":{"action":"merge","params":{"inputs":{"$state":"/inputs"},"codec":{"$state":"/codec"},"output":{"$state":"/output"}}}}}}
+{"op":"add","path":"/elements/progress","value":{"type":"ProgressBar","props":{"progress":{"$state":"/merge/progress"}}}}
+{"op":"add","path":"/elements/status","value":{"type":"Text","props":{"text":{"$state":"/merge/status"}}}}
+{"op":"add","path":"/state","value":{"inputs":["@@CASE_DIR@@/one.mp4","@@CASE_DIR@@/two.mp4"],"codec":"copy","output":"@@CASE_DIR@@/both.mp4","merge":{"progress":0,"status":""}}}

@@ -1,0 +1,5 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["count","reset"]}}
+{"op":"add","path":"/elements/count","value":{"type":"Text","props":{"text":{"$template":"Count: ${/count}"}}}}
+{"op":"add","path":"/elements/reset","value":{"type":"Button","props":{"label":"Reset"},"on":{"press":{"action":"setState","params":{"statePath":"/count","value":0}}}}}
+{"op":"add","path":"/state","value":{"count":3}}

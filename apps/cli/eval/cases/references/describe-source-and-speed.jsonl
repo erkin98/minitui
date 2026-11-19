@@ -1,0 +1,5 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["source","speed"]}}
+{"op":"add","path":"/elements/source","value":{"type":"FilePicker","props":{"label":"Source","mode":"file","value":{"$bindState":"/source"}}}}
+{"op":"add","path":"/elements/speed","value":{"type":"Select","props":{"label":"Speed","options":[{"label":"Slow","value":"slow"},{"label":"Normal","value":"normal"},{"label":"Fast","value":"fast"}],"value":{"$bindState":"/speed"}}}}
+{"op":"add","path":"/state","value":{"source":"@@CASE_DIR@@/talk.mp4","speed":"normal"}}
