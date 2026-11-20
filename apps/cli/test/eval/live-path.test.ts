@@ -17,10 +17,13 @@ import type { WidgetCatalogBinding } from '@minitui/renderer-core';
 import { noopDiagnostics } from '@minitui/types';
 import { composeRegenerationPrompt, composeSystemPrompt } from '../../src/generation.js';
 import type { AppGraphDeps, SessionDeps } from '../../src/graph-types.js';
+import { MAX_OUTPUT_TOKENS } from '../../src/graph.js';
 import { DEFAULT_MODEL, cliMain, type CliBootApi } from '../../src/index.js';
 import { cleaner, createModelRoute, keyRedactionPolicy } from '../../src/model-route.js';
 import { fixedCapabilities, scriptedProvider } from '../../eval/harness/scripted.js';
+import { createSpendMeter, trialMeter } from '../../eval/harness/spend.js';
 import { createStepLog, graphDepsFor, runTrial } from '../../eval/harness/trial.js';
+import { anthropicEntry } from '../../eval/providers/anthropic.js';
 import { OUTPUT, recordingDiagnostics } from '../support/fakes.js';
 
 const KEY = 'sk-ant-test-0123456789abcdefghijklmnop';
@@ -68,6 +71,40 @@ const componentsOf = (binding: WidgetCatalogBinding): string[] =>
 
 const patternsOf = (deps: AppGraphDeps): string[][] =>
   (deps.redactionPolicy?.extraSecretPatterns ?? []).map((p) => [p.source, p.flags]);
+
+// An app the catalog refuses, then a valid one: the loop's "invalid, then valid".
+const BOGUS = `${JSON.stringify({ op: 'add', path: '/root', value: 'go' })}\n${JSON.stringify({
+  op: 'add',
+  path: '/elements/go',
+  value: { type: 'Bogus', props: {} },
+})}\n`;
+const VALID = [
+  { op: 'add', path: '/root', value: 'go' },
+  { op: 'add', path: '/elements/go', value: { type: 'Button', props: { label: 'Merge' } } },
+  { op: 'add', path: '/state', value: { output: OUTPUT } },
+]
+  .map((line) => JSON.stringify(line))
+  .join('\n')
+  .concat('\n');
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const fieldOf = (value: unknown, name: string): unknown =>
+  isRecord(value) ? value[name] : undefined;
+// The text of a list of text parts, joined; undefined for anything that is not a list.
+const partsText = (value: unknown): string | undefined =>
+  Array.isArray(value)
+    ? value
+        .map((part) => fieldOf(part, 'text'))
+        .filter((text) => typeof text === 'string')
+        .join('')
+    : undefined;
+const messagesOf = (body: unknown): Array<{ role: unknown; text: string | undefined }> => {
+  const messages = fieldOf(body, 'messages');
+  return Array.isArray(messages)
+    ? messages.map((m) => ({ role: fieldOf(m, 'role'), text: partsText(fieldOf(m, 'content')) }))
+    : [];
+};
 
 describe('the eval and the cli build the same run', () => {
   it('(a) the eval passes every key the cli passes, the route included, and adds only its four', async () => {
@@ -148,25 +185,12 @@ describe('the eval and the cli build the same run', () => {
 
   it('(c) on the direct route the eval sends the requests the cli would', async () => {
     const intent = 'merge two clips';
-    const bogus = `${JSON.stringify({ op: 'add', path: '/root', value: 'go' })}\n${JSON.stringify({
-      op: 'add',
-      path: '/elements/go',
-      value: { type: 'Bogus', props: {} },
-    })}\n`;
-    const valid = [
-      { op: 'add', path: '/root', value: 'go' },
-      { op: 'add', path: '/elements/go', value: { type: 'Button', props: { label: 'Merge' } } },
-      { op: 'add', path: '/state', value: { output: OUTPUT } },
-    ]
-      .map((line) => JSON.stringify(line))
-      .join('\n')
-      .concat('\n');
     const usage = { inputTokens: 1, outputTokens: 1 };
     const requests: ProviderRequest[] = [];
     const provider = scriptedProvider(
       [
-        { kind: 'text', text: bogus, usage },
-        { kind: 'text', text: valid, usage },
+        { kind: 'text', text: BOGUS, usage },
+        { kind: 'text', text: VALID, usage },
       ],
       (request) => requests.push(request),
     );
@@ -199,10 +223,72 @@ describe('the eval and the cli build the same run', () => {
     expect(requests[1]?.messages.at(-1)?.content).toBe(
       composeRegenerationPrompt({
         intent,
-        previousText: bogus,
+        previousText: BOGUS,
         reprompt: observation.attempts[1]?.reprompt ?? '',
       }),
     );
+  });
+
+  it('(e) on the replay route the eval sends the requests a paid run sends', async () => {
+    const intent = 'merge two clips';
+    const usage = { inputTokens: 100, outputTokens: 50 };
+    const bodies: unknown[] = [];
+    const access = anthropicEntry.replay(KEY);
+    const log = createStepLog(noopDiagnostics);
+    // The paid lane's meter, under a cap that holds two worst cases: the trial fits whether the first attempt
+    // finishes with its usage or is cut at its bad line and settles at its worst case.
+    const meter = trialMeter(
+      createSpendMeter({
+        capUsd: 1e12,
+        prices: { input: 1e6, cacheWrite: 1e6, cacheRead: 5e5, output: 2e6 },
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+      }),
+      'e',
+    );
+    const route = access.route({
+      model: DEFAULT_MODEL,
+      meter: meter.wrap,
+      diagnostics: log.port,
+      replies: [
+        { text: BOGUS, modelId: DEFAULT_MODEL, usage },
+        { text: VALID, modelId: DEFAULT_MODEL, usage },
+      ],
+      onRequest: (request) => bodies.push(request.body),
+    });
+    const observation = await runTrial({
+      intent,
+      deps: graphDepsFor({
+        route,
+        workingDirectory: DIR,
+        effort: 'high',
+        diagnostics: log.port,
+        redactionPolicy: access.redactionPolicy,
+        stderr: { write: () => {} },
+        capabilities: fixedCapabilities([]),
+      }),
+      steps: log.steps,
+      arm: 'high',
+      timeoutMs: 10_000,
+      now: () => 0,
+      hooks: meter.hooks,
+    });
+    expect(observation.stop).toBe('valid');
+    expect(bodies).toHaveLength(2);
+    const [first, second] = bodies;
+    expect(Array.isArray(fieldOf(first, 'system'))).toBe(true);
+    expect(partsText(fieldOf(first, 'system'))).toBe(
+      composeSystemPrompt(buildCatalogPrompt(videoMergeCatalog), DIR),
+    );
+    expect(fieldOf(first, 'max_tokens')).toBe(MAX_OUTPUT_TOKENS);
+    expect(messagesOf(first)).toEqual([{ role: 'user', text: intent }]);
+    expect(messagesOf(second).at(-1)).toEqual({
+      role: 'user',
+      text: composeRegenerationPrompt({
+        intent,
+        previousText: BOGUS,
+        reprompt: observation.attempts[1]?.reprompt ?? '',
+      }),
+    });
   });
 });
 
@@ -250,12 +336,21 @@ describe('(d) the eval holds no copy of the cli', () => {
   it('finds no copy in any eval file, and the imports of the graph and the run', () => {
     const files = evalFiles();
     expect(files.map((path) => path.slice(EVAL_DIR.length)).sort()).toEqual(
-      expect.arrayContaining(['harness/scripted.ts', 'harness/trial.ts']),
+      expect.arrayContaining([
+        'harness/scripted.ts',
+        'harness/trial.ts',
+        'providers/anthropic.ts',
+        'providers/index.ts',
+      ]),
     );
     const texts = files.map((path) => [path, readFileSync(path, 'utf8')] as const);
     expect(texts.flatMap(([path, text]) => copiesIn(text).map((c) => `${path}: ${c}`))).toEqual([]);
     const all = texts.map(([, text]) => text).join('\n');
     expect(all).toMatch(/import \{[^}]*\bbuildAppGraph\b[^}]*\} from '\.\.\/\.\.\/src\/graph\.js'/);
     expect(all).toMatch(/import \{[^}]*\brunApp\b[^}]*\} from '\.\.\/\.\.\/src\/run-app\.js'/);
+    const entry = texts.find(([path]) => path === join(EVAL_DIR, 'providers', 'anthropic.ts'));
+    expect(entry?.[1]).toMatch(
+      /import \{[^}]*\bcreateModelRoute\b[^}]*\} from '\.\.\/\.\.\/src\/model-route\.js'/,
+    );
   });
 });
