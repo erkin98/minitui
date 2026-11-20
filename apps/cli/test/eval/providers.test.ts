@@ -365,10 +365,10 @@ describe('the runner and the graders hold no provider-specific code', () => {
       .filter((entry) => entry.isFile())
       .map((entry) => join(entry.parentPath, entry.name));
 
-  it('no file under the harness or the graders names a provider, its package or its key', () => {
-    const files = [...filesUnder('harness'), ...filesUnder('graders')];
+  it('no file under the harness or the graders, and not the entry, names a provider, its package or its key', () => {
+    const files = [...filesUnder('harness'), ...filesUnder('graders'), join(EVAL_DIR, 'main.ts')];
     expect(files.map((path) => path.slice(EVAL_DIR.length))).toEqual(
-      expect.arrayContaining(['harness/trial.ts', 'harness/row.ts']),
+      expect.arrayContaining(['harness/trial.ts', 'harness/row.ts', 'main.ts']),
     );
     const hits = files.flatMap((path) =>
       providerWordsIn(readFileSync(path, 'utf8')).map((word) => `${path}: ${word}`),

@@ -75,7 +75,7 @@ export interface EvalRow {
   readonly spec: JsonValue | null; // JsonValueSchema.parse(spec); the writer removes secrets
   readonly checks: readonly CheckResult[];
   readonly passAll: boolean;
-  readonly cause: CapabilityCause | null; // capability cases only
+  readonly cause: CapabilityCause | null; // capability cases only; null on a non-outcome trial of a case with nothing missing
   readonly usage: Usage; // the sum over attempts of reported usage
   readonly cost: { readonly measuredUsd: number; readonly upperUsd: number }; // measured: attempts that reported usage; upper: the meter's settled charge, the accounted cost the cap counts
   readonly durationMs: number;
