@@ -575,7 +575,7 @@ describe('a trial with no validated spec', () => {
   });
 });
 
-// The draft set, through the real loop: the references, the dry-run replies and the causes.
+// The case set, through the real loop: the references, the dry-run replies and the causes.
 const CASE_FILE = fileURLToPath(new URL('../../eval/cases/generation.v1.jsonl', import.meta.url));
 const SET = loadCaseSet(CASE_FILE, {
   systemPrompt: composeSystemPrompt(buildCatalogPrompt(videoMergeCatalog), '/run/c01'),
@@ -642,7 +642,7 @@ function outputOverFirstInput(patch: string): string {
   });
 }
 
-describe('the draft set through the real validation', () => {
+describe('the case set through the real validation', () => {
   it.each(withReference.map((p) => [p.testCase.id, p] as const))(
     '%s: its reference validates and passes every check; each check fails a spec broken for it',
     async (_id, { testCase, dir }) => {

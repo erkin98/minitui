@@ -342,16 +342,16 @@ describe('renderPatchText', () => {
   });
 });
 
-// The draft set itself: it loads, its make-up holds, and no text measures copying from the prompt.
+// The approved set itself: it loads, its make-up holds, and no text measures copying from the prompt.
 const CASE_FILE = fileURLToPath(new URL('../../eval/cases/generation.v1.jsonl', import.meta.url));
 const realPrompt = composeSystemPrompt(buildCatalogPrompt(videoMergeCatalog), '/run/c01');
 
-describe('the draft case set', () => {
-  it('loads with the real system prompt, marked draft in its first line', () => {
+describe('the approved case set', () => {
+  it('loads with the real system prompt, marked approved in its first line', () => {
     const set = loadCaseSet(CASE_FILE, { systemPrompt: realPrompt });
-    expect(set.status).toBe('draft');
+    expect(set.status).toBe('approved');
     expect(JSON.parse(readFileSync(CASE_FILE, 'utf8').split('\n')[0] ?? '')).toEqual({
-      status: 'draft',
+      status: 'approved',
       caseSetVersion: 1,
     });
     expect(set.cases.length).toBeGreaterThanOrEqual(40);
