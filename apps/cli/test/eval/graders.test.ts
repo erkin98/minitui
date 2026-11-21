@@ -1,85 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { buildCatalogPrompt, videoMergeCatalog } from '@minitui/catalog';
-import { composeValidation, type MiniAppSpec } from '@minitui/spec';
+import type { MiniAppSpec } from '@minitui/spec';
 import { composeSystemPrompt } from '../../src/generation.js';
 import {
   CASE_DIR,
   loadCaseSet,
   renderPatchText,
+  type DescribedElement,
   type GenerationCase,
+  type MergeExpectation,
 } from '../../eval/harness/cases.js';
-import type { CheckResult } from '../../eval/harness/row.js';
 import type { StopKind } from '../../eval/harness/trial.js';
-import { fixedCapabilities } from '../../eval/harness/scripted.js';
-import { CATALOG_CHECKERS, capabilityCause, grade } from '../../eval/graders/index.js';
+import { CATALOG_CHECKERS, capabilityCause } from '../../eval/graders/index.js';
+import {
+  DIR,
+  app,
+  editPatch,
+  entryOf,
+  failingNames,
+  replay,
+  result,
+  run,
+  validated,
+  type Json,
+} from '../support/eval-grading.js';
 
-// Every codec a reference or a health row names: the semantic stage checks the codec against this list.
-// libaom-av1 is named by no case: a working encoder outside every case's list.
-const CODECS = ['h264', 'libx264', 'hevc', 'libx265', 'mpeg4', 'vp9', 'libvpx-vp9', 'libaom-av1'];
 const ESC = String.fromCharCode(27);
-const DIR = '/run/c01';
 
-type Json = string | number | boolean | null | readonly Json[] | { readonly [key: string]: Json };
-
-// The patch lines of an app, paths behind the placeholder, as a reference file holds them.
-function app(elements: Record<string, Json>, state: Record<string, Json>, root = 'main'): string {
-  const lines = [
-    { op: 'add', path: '/root', value: root },
-    ...Object.entries(elements).map(([key, value]) => ({
-      op: 'add',
-      path: `/elements/${key}`,
-      value,
-    })),
-    { op: 'add', path: '/state', value: state },
-  ];
-  return `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`;
-}
-
-async function* once(text: string): AsyncIterable<string> {
-  yield text;
-}
-
-/** The real loop over a reply replayed on every request: the spec, or null, and the passes it made. */
-async function replay(text: string): Promise<{ spec: MiniAppSpec | null; attempts: number }> {
-  let attempts = 1;
-  const result = await composeValidation({
-    stream: once(text),
-    catalog: videoMergeCatalog,
-    capabilities: fixedCapabilities(CODECS),
-    regenerate: () => {
-      attempts += 1;
-      return once(text);
-    },
-  });
-  return { spec: result.ok ? result.spec : null, attempts };
-}
-
-async function validated(text: string, dir = DIR): Promise<MiniAppSpec> {
-  const { spec } = await replay(renderPatchText(text, dir));
-  if (spec === null) throw new Error('the health spec did not validate');
-  return spec;
-}
-
-const run = (
-  testCase: GenerationCase,
-  spec: MiniAppSpec | null,
-  over: { stop?: StopKind; attempts?: number; dir?: string } = {},
-): readonly CheckResult[] =>
-  grade({
-    testCase,
-    stop: over.stop ?? (spec === null ? 'exhausted' : 'valid'),
-    attempts: over.attempts ?? 1,
-    spec,
-    caseDirectory: over.dir ?? DIR,
-    catalog: videoMergeCatalog,
-  });
-
-const result = (checks: readonly CheckResult[], name: string): CheckResult => {
-  const found = checks.find((c) => c.name === name);
-  if (found === undefined) throw new Error(`no check ${name}`);
-  return found;
-};
+// A conditional prop value: json-render shows the branch the condition on `path` picks.
+const cond = (path: string, then: Json, otherwise: Json): Json => ({
+  $cond: { $state: path },
+  $then: then,
+  $else: otherwise,
+});
 
 const merge = (params: Json = MERGE_PARAMS, event = 'press'): Json => ({
   [event]: { action: 'merge', params },
@@ -247,6 +201,45 @@ describe('grader health: the merge checks and the shared ones', () => {
     expect(failing(withState({ output: `/run/c02/out.mp4` }))).toEqual(['output-match']);
   });
 
+  // The app refuses a merge whose output is one of its own inputs (packages/exec/src/exec/ffmpeg.ts), so
+  // output-match does too: against the spec's own resolved inputs of the same merge, never the case's
+  // expected ones, and by file name, so a `./` or `//` spelling of one file is the same file.
+  const mergeCase = (over: Partial<MergeExpectation>): GenerationCase => ({
+    ...MERGE_CASE,
+    expect: { ...MERGE_CASE.expect, merge: { ...MERGE_CASE.expect.merge!, ...over } },
+  });
+  // a path in the case directory: at('a') is a.mp4, at('./a') spells it with a . segment, at('/b') with //
+  const at = (name: string): string => `${CASE_DIR}/${name}.mp4`;
+  const OPEN = mergeCase({ output: null });
+  const NAMES_A = mergeCase({ output: 'a.mp4' });
+  // the spec lists a, b and z; the case asks for a, b and c
+  const LISTED_Z = { inputs: [at('a'), at('b'), at('z')], output: at('z') };
+  const LISTED_C = { ...LISTED_Z, output: at('c') };
+  const OVER_AN_INPUT: ReadonlyArray<
+    readonly [string, GenerationCase, Record<string, Json>, readonly string[]]
+  > = [
+    ['a named output that is itself an input', NAMES_A, { output: at('a') }, ['output-match']],
+    ['the same file spelled with a . segment', NAMES_A, { output: at('./a') }, ['output-match']],
+    ['an open output spelled with //', OPEN, { output: at('/b') }, ['output-match']],
+    ['an open output that is the last input', OPEN, { output: at('c') }, ['output-match']],
+    ['a named output the case does not ask for', MERGE_CASE, { output: at('a') }, ['output-match']],
+    ['an output the spec lists, not asked for', OPEN, LISTED_Z, ['inputs-match', 'output-match']],
+    ['an output asked for, not listed by the spec', OPEN, LISTED_C, ['inputs-match']],
+  ];
+
+  it.each(OVER_AN_INPUT)('output-match: %s', async (_name, testCase, state, expected) => {
+    const checks = run(
+      testCase,
+      await validated(app(mergeElements(), { ...MERGE_STATE, ...state })),
+    );
+    expect(failingNames(checks)).toEqual(expected);
+    // the evidence is fixed text naming both reasons, never a path
+    if (expected.includes('output-match'))
+      expect(result(checks, 'output-match').evidence).toBe(
+        'the merge output is not the asked file in the case directory, or is one of its inputs',
+      );
+  });
+
   it('valid and first-attempt-valid read the stop and the attempts', async () => {
     const spec = await validated(MERGE_GOOD);
     expect(result(run(MERGE_CASE, spec, { attempts: 2 }), 'first-attempt-valid')).toMatchObject({
@@ -339,8 +332,8 @@ const DESCRIBED_CASE: GenerationCase = {
   expect: {
     merge: null,
     described: [
-      { type: 'Select', label: 'speed', options: ['slow', 'fast'], bound: true, pressAction: null },
-      { type: 'Button', label: 'go', options: [], bound: false, pressAction: 'setState' },
+      entryOf('Select', { label: 'speed', options: ['slow', 'fast'], bound: true }),
+      entryOf('Button', { label: 'go', pressAction: 'setState' }),
     ],
     forbidActions: [],
   },
@@ -453,10 +446,7 @@ describe('grader health: the described elements', () => {
       ...DESCRIBED_CASE,
       expect: {
         ...DESCRIBED_CASE.expect,
-        described: [
-          { type: 'Button', label: null, options: [], bound: false, pressAction: null },
-          { type: 'Button', label: 'go', options: [], bound: false, pressAction: 'setState' },
-        ],
+        described: [entryOf('Button'), entryOf('Button', { label: 'go', pressAction: 'setState' })],
       },
     };
     const twoButtons = app(
@@ -477,6 +467,95 @@ describe('grader health: the described elements', () => {
         .filter((c) => !c.pass)
         .map((c) => c.name),
     ).toEqual(['described-1-button']);
+  });
+
+  // showsState: the element's displayed text (its label prop, else its text prop) reads state when it
+  // renders: a state or item marker, a template with a ${...} hole, or a $cond whose chosen branch does;
+  // never a fixed string.
+  const asksText = entryOf('Text', { showsState: true });
+  const describing = (...described: DescribedElement[]): GenerationCase => ({
+    ...DESCRIBED_CASE,
+    expect: { merge: null, described, forbidActions: [] },
+  });
+  // an app of one Text for each text given, in that order
+  const textApp = (...texts: Json[]): string =>
+    app(
+      {
+        main: { type: 'Box', props: {}, children: texts.map((_, i) => `t${i}`) },
+        ...Object.fromEntries(texts.map((text, i) => [`t${i}`, { type: 'Text', props: { text } }])),
+      },
+      { count: 3 },
+    );
+
+  // a Text in a repeat over /items, where an $item or $bindItem marker belongs
+  const repeatApp = (text: Json): string =>
+    app(
+      {
+        main: { type: 'Box', props: {}, children: ['list'] },
+        list: { type: 'Box', props: {}, repeat: { statePath: '/items' }, children: ['t0'] },
+        t0: { type: 'Text', props: { text } },
+      },
+      { items: [{ name: 'a' }, { name: 'b' }] },
+    );
+  const read = { $state: '/count' };
+
+  it.each([
+    ['a state marker', { $state: '/count' }, []],
+    // pointerOf, and so the label reading above it, takes the two-way marker as a state read too
+    ['a two-way state marker', { $bindState: '/count' }, []],
+    ['a template naming a pointer', { $template: 'Count: ${/count}' }, []],
+    ['a fixed string', 'Count', ['described-1-text']],
+    ['a template naming no pointer', { $template: 'Count' }, ['described-1-text']],
+    // json-render reads a bare ${name} from state like ${/name}; a ${} with no name is no hole, plain text
+    ['a template naming a bare field', { $template: 'Count: ${count}' }, []],
+    ['a template with an empty hole', { $template: 'Count: ${}' }, ['described-1-text']],
+    // a $cond shows the branch it picks: a branch that reads state shows state, two fixed strings do not,
+    // whatever the condition reads
+    [
+      'a $cond with a template branch',
+      cond('/count', { $template: 'Count: ${/count}' }, 'none yet'),
+      [],
+    ],
+    ['a $cond with a state marker in $else', cond('/count', 'some', read), []],
+    ['a $cond nested in a branch', cond('/count', cond('/count', 'three', read), 'none'), []],
+    ['a $cond with two fixed branches', cond('/count', 'some', 'none'), ['described-1-text']],
+    // json-render reads a $cond only when it also has $then and $else; an incomplete one is a plain object
+    ['an incomplete $cond', { $cond: read, $then: read }, ['described-1-text']],
+  ])('showsState on a Text: %s', async (_name, text, expected) => {
+    const spec = await validated(textApp(text));
+    expect(failingNames(run(describing(asksText), spec))).toEqual(expected);
+  });
+
+  it.each([
+    ['an $item marker', { $item: 'name' }, []],
+    ['a $bindItem marker', { $bindItem: 'name' }, []],
+    ['an $index marker, a number and not state', { $index: true }, ['described-1-text']],
+  ])('showsState on a Text in a repeat: %s', async (_name, text, expected) => {
+    const spec = await validated(repeatApp(text));
+    expect(failingNames(run(describing(asksText), spec))).toEqual(expected);
+  });
+
+  it('showsState reads the label prop when the element has one', async () => {
+    const asking = describing(
+      entryOf('Select', {
+        label: 'speed',
+        options: ['slow', 'fast'],
+        bound: true,
+        showsState: true,
+      }),
+    );
+    // the label comes from state in one app and is the fixed string "Speed" in the other
+    const failing = async (text: string) => failingNames(run(asking, await validated(text)));
+    expect(await failing(DESCRIBED_GOOD_OTHER)).toEqual([]);
+    expect(await failing(DESCRIBED_GOOD)).toEqual(['described-1-select']);
+  });
+
+  it('showsState counts in the weight: an entry that asks for state is matched before a looser one', async () => {
+    // the Text that shows state comes first among the elements, and the loose entry is listed first: only
+    // matching the heavier entry first leaves the fixed Text to the loose one
+    const spec = await validated(textApp({ $state: '/count' }, 'Hello'));
+    const testCase = describing(entryOf('Text'), asksText);
+    expect(failingNames(run(testCase, spec))).toEqual([]);
   });
 });
 
@@ -542,6 +621,27 @@ function breakFor(name: string, spec: MiniAppSpec, testCase: GenerationCase): Mi
   return { ...spec, elements, state };
 }
 
+// A reference with the text of every Text element replaced by `text`.
+function withText(patch: string, text: unknown): string {
+  return editPatch(patch, (line) => {
+    const { type, props } = line.value;
+    if (!line.path.startsWith('/elements/') || type !== 'Text' || typeof props !== 'object') {
+      return line;
+    }
+    return { ...line, value: { ...line.value, props: { ...props, text } } };
+  });
+}
+
+// A reference whose state writes the merge output over its first input: what the app refuses to run.
+function outputOverFirstInput(patch: string): string {
+  return editPatch(patch, (line) => {
+    if (line.path !== '/state') return line;
+    const first: unknown = Array.isArray(line.value.inputs) ? line.value.inputs[0] : undefined;
+    if (typeof first !== 'string') throw new Error('the reference state has no first input');
+    return { ...line, value: { ...line.value, output: first } };
+  });
+}
+
 describe('the draft set through the real validation', () => {
   it.each(withReference.map((p) => [p.testCase.id, p] as const))(
     '%s: its reference validates and passes every check; each check fails a spec broken for it',
@@ -577,6 +677,61 @@ describe('the draft set through the real validation', () => {
       expect(capabilityCause(testCase, videoMergeCatalog, passAll)).toBe(dry.cause);
     },
   );
+
+  // Only a case that leaves the merge output open fails output-match because of the clash: one that names
+  // its output fails through the wrong name with or without it (the synthetic rows above cover that).
+  const openOutput = positioned.filter(
+    ({ testCase }) => testCase.expect.merge?.output === null && testCase.reference !== null,
+  );
+
+  it('the merge rows below cover every case that leaves the merge output open', () => {
+    expect(openOutput).toHaveLength(
+      SET.cases.filter((c) => c.expect.merge?.output === null).length,
+    );
+    expect(openOutput.map(({ testCase }) => testCase.id)).toContain('merge-pick-order-two');
+  });
+
+  it.each(openOutput.map((p) => [p.testCase.id, p] as const))(
+    '%s: its reference with the merge output set to its first input fails output-match and nothing else',
+    async (_id, { testCase, dir }) => {
+      const spec = await validated(outputOverFirstInput(patchOf(testCase.reference ?? '')), dir);
+      expect(failingNames(run(testCase, spec, { dir }))).toEqual(['output-match']);
+    },
+  );
+
+  const caseAt = (id: string) => {
+    const found = positioned.find(({ testCase }) => testCase.id === id);
+    if (found === undefined) throw new Error(`the set holds no ${id}`);
+    return found;
+  };
+
+  // The two references whose Text must show state: a fixed string in its place fails that entry's check.
+  it.each([
+    ['describe-counter-reset', 'Count', 'described-1-text'],
+    ['cap-pick-folder', 'Picked', 'described-2-text'],
+  ])(
+    '%s: its Text with the fixed string "%s" fails %s and nothing else',
+    async (id, text, name) => {
+      const { testCase, dir } = caseAt(id);
+      const spec = await validated(withText(patchOf(testCase.reference ?? ''), text), dir);
+      expect(failingNames(run(testCase, spec, { dir }))).toEqual([name]);
+    },
+  );
+
+  // A $cond is read for the branch it picks: with a template branch cap-pick-folder still shows state,
+  // with two fixed strings it does not.
+  it.each([
+    [
+      'a template branch',
+      cond('/folder', { $template: 'Picked: ${/folder}' }, 'Nothing picked yet'),
+      [],
+    ],
+    ['two fixed branches', cond('/folder', 'Picked', 'Nothing picked yet'), ['described-2-text']],
+  ])('cap-pick-folder: its Text as a $cond with %s', async (_name, text, expected) => {
+    const { testCase, dir } = caseAt('cap-pick-folder');
+    const spec = await validated(withText(patchOf(testCase.reference ?? ''), text), dir);
+    expect(failingNames(run(testCase, spec, { dir }))).toEqual(expected);
+  });
 
   it('every case names a catalog with a checker', () => {
     for (const { testCase } of positioned) expect(CATALOG_CHECKERS[testCase.catalog]).toBeDefined();

@@ -112,15 +112,36 @@ function readEvalInputs(): EvalInputs {
   );
 }
 
-// What the cli's bundler (esbuild 0.27.7 under tsup 8.5.1) writes for a control character inside a string
-// literal, measured: never the raw byte for the ones below, so a text that carries them is also looked for
-// as written. NUL is \0 (\x00 before a digit); backspace, line feed, vertical tab, form feed and carriage
-// return are \b \n \v \f \r; BEL, ESC, DEL and the C1 range are \x and two uppercase hex digits; the two
-// line separators, U+2028 and U+2029, are u-escapes. Every other control character is written as it is.
-// A printer also escapes a backslash, re-quotes around a double quote or a backtick, and escapes a
-// non-ASCII character: none of that is modelled, so unmodelledIn stops the scan when a hostile text holds
-// one. Not covered: a line feed in a minified build (it comes out in a template literal).
-const CONTROLS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+// What the cli's bundler (esbuild 0.27.7 under tsup 8.5.1, target node22, no minify or charset option)
+// writes for a text inside a string literal. Measured with the installed esbuild over every code point from
+// U+0000 to U+10FFFF except the surrogates, each in literals that make the printer pick each quote in turn;
+// over every sequence of up to six of a double quote, a single quote, a backtick, ${, a backslash, a line
+// feed, a carriage return and a letter; and over 11.4 million literals that put every kind of character
+// before and after a text (at its start and its end, as two-character texts, next to a core that picks each
+// quote, and </script, <!--, --> and the like split at every place). The rule:
+// - The quote is the one needing the fewest escapes (a double quote counts against a double-quoted literal,
+//   a single quote against a single-quoted one, a backtick or a ${ against a backtick one; a tie goes to the
+//   double quote, then the single, then the backtick), and a source template literal stays a backtick
+//   literal. The quote comes from the whole literal, not from the text it holds, so there is one spelling
+//   per quote and evalLeaks looks for each.
+// - A backslash is written as two, and the quote of the literal is escaped with a backslash; the other two
+//   quotes are raw. A ${ is escaped as \${ in a backtick literal only.
+// - A line feed is \n, but raw in a backtick literal; a carriage return is \r. NUL is \0 (\x00 before a
+//   digit); backspace, vertical tab and form feed are \b \v \f; BEL and ESC are \x07 and \x1B; every other
+//   control character below DEL is written as it is.
+// - From DEL up the output is ASCII, in upper-case hex: \x and two digits up to U+00FF (DEL and the C1
+//   range), a u-escape with four digits up to U+FFFF (the line separators, U+FEFF, U+202E) and a u-escape
+//   with braces beyond (U+1F600).
+// - Two of these read the character after the text, which can belong to the literal and not to the text: NUL
+//   before a digit, and $ before a { in a backtick literal. evalLeaks looks for a text spelled with each
+//   ending it may meet (FOLLOWING). Nothing else before or after a text changes how it is written.
+// Not modelled: a lone surrogate. Its spelling is not measured, so unmodelledIn stops the scan when a
+// hostile text holds one. Not measured either: a build target below ES2015, which cannot build this source.
+// No spelling finds a text that is not whole in the bundle: esbuild joins "a" + "b" of constants (measured),
+// but not a template with a ${"b"} substitution, a join or a concat.
+const QUOTES = ['"', "'", '`'] as const;
+type Quote = (typeof QUOTES)[number];
+
 const SHORT_ESCAPES = new Map([
   [0x08, 'b'],
   [0x0a, 'n'],
@@ -129,27 +150,36 @@ const SHORT_ESCAPES = new Map([
   [0x0d, 'r'],
 ]);
 
-function bundlerSpelling(text: string): string {
-  return text.replace(new RegExp(CONTROLS, 'gu'), (char, offset: number) => {
+const isSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdfff;
+const upperHex = (code: number): string => code.toString(16).toUpperCase();
+
+// A control character, DEL or anything outside ASCII, as the printer writes it in every quote.
+function escaped(code: number, next: string): string {
+  const short = SHORT_ESCAPES.get(code);
+  if (short !== undefined) return `\\${short}`;
+  if (code === 0) return /\d/.test(next) ? '\\x00' : '\\0';
+  if (code === 0x07 || code === 0x1b) return `\\x${upperHex(code).padStart(2, '0')}`;
+  if (code < 0x7f) return String.fromCodePoint(code);
+  if (code <= 0xff) return `\\x${upperHex(code)}`;
+  return code <= 0xffff ? `\\u${upperHex(code).padStart(4, '0')}` : `\\u{${upperHex(code)}}`;
+}
+
+function bundlerSpelling(text: string, quote: Quote): string {
+  return text.replace(/[^\x20-\x7e]|[\\"'`]|\$(?=\{)/gu, (char, offset: number) => {
     const code = char.codePointAt(0) ?? 0;
-    const short = SHORT_ESCAPES.get(code);
-    if (short !== undefined) return `\\${short}`;
-    if (code === 0) return /\d/.test(text.charAt(offset + 1)) ? '\\x00' : '\\0';
-    if (code === 0x2028 || code === 0x2029) return `\\u${code.toString(16)}`;
-    const hex = code.toString(16).toUpperCase().padStart(2, '0');
-    return code === 0x07 || code === 0x1b || code >= 0x7f ? `\\x${hex}` : char;
+    if (isSurrogate(code)) return char;
+    if (char === '\\' || char === quote) return `\\${char}`;
+    if (char === '$') return quote === '`' ? '\\$' : char;
+    if (code === 0x0a && quote === '`') return char;
+    return code >= 0x20 && code < 0x7f ? char : escaped(code, text.charAt(offset + 1));
   });
 }
 
-// The characters of each hostile text that the spelling does not model, as `case id: U+code point`: a
-// double quote, a backslash and a backtick (a printer re-quotes or escapes around them), and anything
-// outside printable ASCII except the control characters above. A text holding one could be unfindable in a
-// bundle with every row green, so the scan stops until the bundler's spelling of it is measured.
-const PRINTER_ESCAPED = [0x22, 0x5c, 0x60];
-
+// The characters of each hostile text whose spelling is not measured, as `case id: U+code point`: a lone
+// surrogate. A text holding one could be unfindable in a bundle with every row green, so the scan stops
+// until the bundler's spelling of it is measured and modelled.
 function isModelled(char: string): boolean {
-  const code = char.codePointAt(0) ?? 0;
-  return (code >= 0x20 && code <= 0x7e && !PRINTER_ESCAPED.includes(code)) || CONTROLS.test(char);
+  return !isSurrogate(char.codePointAt(0) ?? 0);
 }
 
 function unmodelledIn(hostile: readonly HostileCase[]): string[] {
@@ -162,21 +192,89 @@ function unmodelledIn(hostile: readonly HostileCase[]): string[] {
   });
 }
 
+// What may follow a text in the literal that holds it, as far as its spelling goes: nothing that matters, a
+// digit (a NUL before it is written as an x escape) or a brace (a $ before it is escaped in a backtick
+// literal). The printer reads those from the whole literal, which can go on after the text.
+const FOLLOWING = ['', '0', '{'] as const;
+
+// Every way a text can be written in a bundle: in each quote, and for each kind of character that may follow.
+function writtenForms(text: string): string[] {
+  const forms = QUOTES.flatMap((quote) =>
+    FOLLOWING.map((next) => {
+      const written = bundlerSpelling(`${text}${next}`, quote);
+      return written.slice(0, written.length - next.length);
+    }),
+  );
+  return [...new Set(forms)].filter((form) => form !== text);
+}
+
 // One matcher for the package rows and the controls: which eval material a bundle holds, by label. A text
-// is looked for as it is and, when it carries control characters, as the bundler writes it.
+// is looked for as it is and in every way the bundler may have written it.
 function evalLeaks(bundle: string, { sentinel, hostile }: EvalInputs): string[] {
-  const hit = (label: string, needle: string): string[] => (bundle.includes(needle) ? [label] : []);
+  const hit = (label: string, ...needles: string[]): string[] =>
+    needles.some((needle) => bundle.includes(needle)) ? [label] : [];
   return [
     ...hit(`sentinel ${sentinel}`, sentinel),
-    ...hostile.flatMap(({ id, text }) => {
-      const written = bundlerSpelling(text);
-      return [
-        ...hit(`hostile case ${id}`, text),
-        ...(written === text ? [] : hit(`hostile case ${id}${AS_WRITTEN}`, written)),
-      ];
-    }),
+    ...hostile.flatMap(({ id, text }) => [
+      ...hit(`hostile case ${id}`, text),
+      ...hit(`hostile case ${id}${AS_WRITTEN}`, ...writtenForms(text)),
+    ]),
   ];
 }
+
+// esbuild 0.27.7's output for a string literal holding the character between a and b, as measured: the
+// text between the quotes of a double-quoted literal.
+const MEASURED_CODES: ReadonlyArray<readonly [number, string]> = [
+  [0x00, '\\0'],
+  [0x07, '\\x07'],
+  [0x08, '\\b'],
+  [0x0a, '\\n'],
+  [0x0b, '\\v'],
+  [0x0c, '\\f'],
+  [0x0d, '\\r'],
+  [0x1b, '\\x1B'],
+  [0x5c, '\\\\'],
+  [0x7f, '\\x7F'],
+  [0x80, '\\x80'],
+  [0x9a, '\\x9A'],
+  [0xa0, '\\xA0'],
+  [0xe9, '\\xE9'],
+  [0xff, '\\xFF'],
+  [0x100, '\\u0100'],
+  [0x2028, '\\u2028'],
+  [0x2029, '\\u2029'],
+  [0x202e, '\\u202E'],
+  [0xfeff, '\\uFEFF'],
+  [0xffff, '\\uFFFF'],
+  [0x1f600, '\\u{1F600}'],
+  [0x10000, '\\u{10000}'],
+  [0x10ffff, '\\u{10FFFF}'],
+];
+
+// The whole literal esbuild 0.27.7 printed for a text, quotes included, as measured: the quote it picked
+// (the one needing the fewest escapes) and what is between the quotes.
+const MEASURED_LITERALS: ReadonlyArray<readonly [string, string]> = [
+  ['a"b', "'a\"b'"],
+  ["a'b", '"a\'b"'],
+  ['a\\b', '"a\\\\b"'],
+  ['a`b', '"a`b"'],
+  ['a${b}c', '"a${b}c"'],
+  // both quotes: the backtick needs no escape
+  ['a"b\'c', '`a"b\'c`'],
+  ['a"b"c\'d', '`a"b"c\'d`'],
+  // all three once: a tie goes to the double quote
+  ['a"b\'c`d', '"a\\"b\'c`d"'],
+  // a backtick literal escapes a backtick and a ${
+  ['a"b"c"d\'e\'f${g}', '`a"b"c"d\'e\'f\\${g}`'],
+  ['a"b"c"d\'e\'f\'g`h', '`a"b"c"d\'e\'f\'g\\`h`'],
+  // a backslash is doubled, and the quote the literal is written in is escaped
+  ['a\\"b', "'a\\\\\"b'"],
+  ["a\\'b", '"a\\\\\'b"'],
+  // a line feed is \n, but raw in a backtick literal; a carriage return is \r in both
+  ['a\nb', '"a\\nb"'],
+  ['a"b"c\'d\'e\nf', '`a"b"c\'d\'e\nf`'],
+  ['a"b"c\'d\'e\r\nf', '`a"b"c\'d\'e\\r\nf`'],
+];
 
 describe('shipped bundle leak gate', () => {
   it.each(PACKAGES)('%s has a built bundle to scan', (pkg) => {
@@ -243,41 +341,45 @@ describe('shipped bundle leak gate', () => {
   it('the eval scan flags every hostile text as it is and as the bundler writes it', () => {
     const inputs = readEvalInputs();
     for (const { id, text } of inputs.hostile) {
-      const written = bundlerSpelling(text);
       expect(evalLeaks(`const t = "${text}";`, inputs), `${id} as it is`).toEqual([
         `hostile case ${id}`,
       ]);
-      expect(evalLeaks(`const t = "${written}";`, inputs), `${id} as written`).toEqual([
-        written === text ? `hostile case ${id}` : `hostile case ${id}${AS_WRITTEN}`,
-      ]);
+      for (const quote of QUOTES) {
+        const written = bundlerSpelling(text, quote);
+        expect(
+          evalLeaks(`const t = ${quote}${written}${quote};`, inputs),
+          `${id} as written in ${quote}`,
+        ).toEqual([written === text ? `hostile case ${id}` : `hostile case ${id}${AS_WRITTEN}`]);
+      }
     }
   });
 
   it('the bundler spelling is what the bundler wrote', () => {
-    // esbuild 0.27.7's output for a string literal holding the character, as measured
-    const measured: ReadonlyArray<readonly [number, string]> = [
-      [0x00, '\\0'],
-      [0x07, '\\x07'],
-      [0x08, '\\b'],
-      [0x0a, '\\n'],
-      [0x0b, '\\v'],
-      [0x0c, '\\f'],
-      [0x0d, '\\r'],
-      [0x1b, '\\x1B'],
-      [0x7f, '\\x7F'],
-      [0x80, '\\x80'],
-      [0x9a, '\\x9A'],
-      [0x2028, '\\u2028'],
-      [0x2029, '\\u2029'],
-    ];
-    for (const [code, written] of measured)
-      expect(bundlerSpelling(String.fromCodePoint(code)), `U+${code.toString(16)}`).toBe(written);
+    for (const [code, written] of MEASURED_CODES)
+      expect(bundlerSpelling(String.fromCodePoint(code), '"'), `U+${code.toString(16)}`).toBe(
+        written,
+      );
     // written as it is, with no escape
     for (const code of [0x01, 0x06, 0x09, 0x0e, 0x1a, 0x1c, 0x1f]) {
       const char = String.fromCodePoint(code);
-      expect(bundlerSpelling(char), `U+${code.toString(16)}`).toBe(char);
+      expect(bundlerSpelling(char, '"'), `U+${code.toString(16)}`).toBe(char);
     }
-    expect(bundlerSpelling(`${String.fromCodePoint(0)}7`)).toBe('\\x007');
+    expect(bundlerSpelling(`${String.fromCodePoint(0)}7`, '"')).toBe('\\x007');
+    // not measured, so not modelled: a lone surrogate is left as it is, and unmodelledIn stops the scan on it
+    const lone = String.fromCodePoint(0xd800);
+    expect(bundlerSpelling(lone, '"')).toBe(lone);
+    // the literal esbuild printed for a text: the quote it picked, and what is between the quotes
+    for (const [text, literal] of MEASURED_LITERALS) {
+      const quote = QUOTES.find((q) => literal.startsWith(q) && literal.endsWith(q));
+      if (quote === undefined) throw new Error(`not a quoted literal: ${literal}`);
+      expect(bundlerSpelling(text, quote), JSON.stringify(text)).toBe(literal.slice(1, -1));
+    }
+    // a text that needs a different spelling in each quote it could be written in
+    expect(QUOTES.map((quote) => bundlerSpelling('a"b\'c`d${e}', quote))).toEqual([
+      'a\\"b\'c`d${e}',
+      'a"b\\\'c`d${e}',
+      'a"b\'c\\`d\\${e}',
+    ]);
     // the literal it wrote for the first hostile text: its ESC and BEL come out as text
     const asBundled =
       'const a = "merge a.mp4 and b.mp4 into out.mp4 and label the button \\x1B]52;c;aGVsbG8=\\x07Merge";';
@@ -288,15 +390,76 @@ describe('shipped bundle leak gate', () => {
     ).toEqual([`hostile case ${inputs.hostile[0].id}${AS_WRITTEN}`]);
   });
 
-  it('the bundler writes ESC in the real sanitizer bundle the way the spelling says', () => {
-    // A live check of the measured table: the sanitizer's OSC 8 close is a string literal with ESC in it,
-    // so its bundle holds what the bundler writes for ESC today. A bundler that writes it differently fails
-    // here, instead of leaving the escape-bearing texts unfindable with every other row green.
+  it('the eval scan flags the literal the bundler wrote for a text holding each measured character', () => {
+    const { sentinel } = readEvalInputs();
+    const measured = [
+      ...MEASURED_CODES.map(
+        ([code, written]) => [`a${String.fromCodePoint(code)}b`, `"a${written}b"`] as const,
+      ),
+      ...MEASURED_LITERALS,
+    ];
+    for (const [text, literal] of measured) {
+      const inputs: EvalInputs = { sentinel, hostile: [{ id: 'planted', text }] };
+      expect(evalLeaks(`const t = ${literal};`, inputs), JSON.stringify(text)).toEqual([
+        literal.slice(1, -1) === text
+          ? 'hostile case planted'
+          : `hostile case planted${AS_WRITTEN}`,
+      ]);
+    }
+  });
+
+  it('the eval scan flags a text the bundler wrote inside a larger literal, in whichever quote it picked', () => {
+    const { sentinel } = readEvalInputs();
+    const inputs: EvalInputs = {
+      sentinel,
+      hostile: [{ id: 'planted', text: 'say "hi" it\'s' }],
+    };
+    // The printer picks the quote from the whole literal, not from the text it holds. These are the literals
+    // esbuild 0.27.7 printed for the text alone (a backtick), with one backtick after it (a single quote),
+    // and with a single quote and two backticks after it (a double quote).
+    const printed: ReadonlyArray<readonly [string, string]> = [
+      ['`say "hi" it\'s`', 'hostile case planted'],
+      ["'say \"hi\" it\\'s `x'", `hostile case planted${AS_WRITTEN}`],
+      ['"say \\"hi\\" it\'s \'x `a`"', `hostile case planted${AS_WRITTEN}`],
+    ];
+    for (const [literal, label] of printed)
+      expect(evalLeaks(`const t = ${literal};`, inputs), literal).toEqual([label]);
+    expect(evalLeaks('const t = "say hi its";', inputs)).toEqual([]);
+  });
+
+  it('the eval scan flags a text at the edge of a larger literal, whatever follows it in the literal', () => {
+    const { sentinel } = readEvalInputs();
+    const nul = String.fromCodePoint(0);
+    // The printer decides two spellings from the character after the text, which may belong to the literal and
+    // not to the text: NUL is written as an x escape before a digit, and a dollar sign is escaped before a
+    // brace in a backtick literal. These are the literals esbuild 0.27.7 printed for a text with each ending,
+    // the literal going on with the character that changes the spelling and then with one that does not.
+    const printed: ReadonlyArray<readonly [text: string, literal: string]> = [
+      [`x${nul}`, '"x\\x001"'],
+      [`x${nul}`, '"x\\0y"'],
+      ['q"q"q\'q\'q$', '`q"q"q\'q\'q\\${z}`'],
+      ['q"q"q\'q\'q$', '`q"q"q\'q\'q$z`'],
+    ];
+    for (const [text, literal] of printed) {
+      const inputs: EvalInputs = { sentinel, hostile: [{ id: 'planted', text }] };
+      const label = literal.includes(text)
+        ? 'hostile case planted'
+        : `hostile case planted${AS_WRITTEN}`;
+      expect(evalLeaks(`const t = ${literal};`, inputs), literal).toEqual([label]);
+    }
+  });
+
+  it('the bundler writes ESC and a backslash in the real sanitizer bundle the way the spelling says', () => {
+    // A live check of the measured table: the sanitizer's OSC 8 close is a string literal holding ESC and a
+    // backslash, so its bundle holds what the bundler writes for them today. A bundler that writes either
+    // differently fails here, instead of leaving the texts that hold them unfindable with every other row
+    // green. The whole literal is looked for, quotes included, so the closing backslash cannot match by
+    // being the start of an escape.
     const bundle = readDist('sanitizer');
     const esc = String.fromCodePoint(0x1b);
     expect(
-      bundle.includes(bundlerSpelling(`${esc}]8;;`)),
-      'the sanitizer bundle does not hold the OSC 8 close as the spelling writes it: measure the bundler again, or point this row at another ESC literal',
+      bundle.includes(`"${bundlerSpelling(`${esc}]8;;${esc}\\`, '"')}"`),
+      'the sanitizer bundle does not hold the OSC 8 close as the spelling writes it: measure the bundler again, or point this row at another literal with ESC and a backslash in it',
     ).toBe(true);
     expect(
       bundle.includes(esc),
@@ -313,25 +476,34 @@ describe('shipped bundle leak gate', () => {
 
   it('a hostile text holding a character the bundler spelling does not model is reported', () => {
     const around = (...codes: number[]): string => `a ${String.fromCodePoint(...codes)} b`;
-    const printable = Array.from({ length: 0x5f }, (_, index) => 0x20 + index).filter(
-      (code) => !PRINTER_ESCAPED.includes(code),
-    );
+    const printable = Array.from({ length: 0x5f }, (_, index) => 0x20 + index);
     const planted: HostileCase[] = [
-      { id: 'backslash', text: around(0x5c) },
-      { id: 'quote', text: around(0x22) },
-      { id: 'backtick', text: around(0x60) },
-      { id: 'bidi', text: around(0x202e) },
-      { id: 'astral', text: around(0x1f600) },
-      // everything the spelling does model: printable ASCII and the control characters it measured
-      { id: 'modelled', text: around(...printable, 0x1b, 0x07, 0x0a, 0x09, 0x7f, 0x85, 0x2028) },
+      // a lone surrogate: its spelling is not measured
+      { id: 'high-surrogate', text: around(0xd800) },
+      { id: 'low-surrogate', text: around(0xdc00) },
+      // everything the spelling does model: every printable ASCII character (the quotes, a backslash, a
+      // backtick), the controls, DEL, the C1 range, the line separators, a non-ASCII BMP character and an
+      // astral one, given both as one code point and as its surrogate pair
+      {
+        id: 'modelled',
+        text: around(
+          ...printable,
+          0x1b,
+          0x07,
+          0x0a,
+          0x09,
+          0x7f,
+          0x85,
+          0xe9,
+          0x2028,
+          0x202e,
+          0x1f600,
+          0xd83d,
+          0xde00,
+        ),
+      },
     ];
-    expect(unmodelledIn(planted)).toEqual([
-      'backslash: U+005C',
-      'quote: U+0022',
-      'backtick: U+0060',
-      'bidi: U+202E',
-      'astral: U+1F600',
-    ]);
+    expect(unmodelledIn(planted)).toEqual(['high-surrogate: U+D800', 'low-surrogate: U+DC00']);
   });
 
   it('the eval scan reads case files at any depth under the cases directory', () => {

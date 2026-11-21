@@ -49,7 +49,12 @@ export function videoMergeChecks(input: GradeInput): readonly CheckResult[] {
   });
   const outputMatch = each((p) => {
     const name = nameIn(dir, read(p, 'output'));
-    return name !== null && (merge.output === null || name === merge.output);
+    if (name === null || (merge.output !== null && name !== merge.output)) return false;
+    // The app refuses a merge whose output is one of its own inputs (packages/exec/src/exec/ffmpeg.ts).
+    // Read here against the inputs of this same merge, by file name, so a `./` or `//` spelling of one
+    // file is still that file.
+    const inputs = read(p, 'inputs');
+    return !(Array.isArray(inputs) && inputs.some((path: unknown) => nameIn(dir, path) === name));
   });
   const codecAcceptable = each((p) => {
     const codec = read(p, 'codec');
@@ -81,7 +86,7 @@ export function videoMergeChecks(input: GradeInput): readonly CheckResult[] {
     }),
     checked('output-match', outputMatch, {
       pass: 'the merge output is the asked file in the case directory',
-      fail: 'the merge output is not the asked file in the case directory',
+      fail: 'the merge output is not the asked file in the case directory, or is one of its inputs',
     }),
     checked('codec-acceptable', codecAcceptable, {
       pass: 'the merge codec is one the case accepts',

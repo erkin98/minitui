@@ -143,7 +143,16 @@ describe('the case loader', () => {
             ...BASE,
             expect: {
               ...BASE.expect,
-              described: [{ type: '', label: null, options: [], bound: false, pressAction: null }],
+              described: [
+                {
+                  type: '',
+                  label: null,
+                  options: [],
+                  bound: false,
+                  pressAction: null,
+                  showsState: false,
+                },
+              ],
             },
           },
         ]),
@@ -158,12 +167,35 @@ describe('the case loader', () => {
             expect: {
               ...BASE.expect,
               described: [
-                { type: 'Slider', label: null, options: [], bound: false, pressAction: null },
+                {
+                  type: 'Slider',
+                  label: null,
+                  options: [],
+                  bound: false,
+                  pressAction: null,
+                  showsState: false,
+                },
               ],
             },
           },
         ]),
       /described/,
+    ],
+    [
+      'a described entry that does not say whether it shows state',
+      () =>
+        parse([
+          {
+            ...BASE,
+            expect: {
+              ...BASE.expect,
+              described: [
+                { type: 'Button', label: null, options: [], bound: false, pressAction: null },
+              ],
+            },
+          },
+        ]),
+      /showsState/,
     ],
     [
       'a requires entry naming nothing',
@@ -352,6 +384,22 @@ describe('the draft case set', () => {
     expect(count((c) => c.tags.includes('hostile'))).toBe(6);
     expect(count((c) => c.needsModelWrittenCode)).toBe(2);
     expect(cases[0]?.tags).toContain('hand-run');
+  });
+
+  it('asks for state on exactly two described entries: the Text of describe-counter-reset and of cap-pick-folder', () => {
+    const { cases } = loadCaseSet(CASE_FILE, { systemPrompt: realPrompt });
+    const asking = cases.flatMap((c) =>
+      c.expect.described.flatMap((entry, i) =>
+        entry.showsState ? [`${c.id} #${i + 1} ${entry.type}`] : [],
+      ),
+    );
+    expect(asking).toEqual(['describe-counter-reset #1 Text', 'cap-pick-folder #2 Text']);
+  });
+
+  it('puts merge-three-copy-reel in the test split and merge-xyz-bare in the dev split, as the owner decided', () => {
+    const { cases } = loadCaseSet(CASE_FILE, { systemPrompt: realPrompt });
+    const splitOf = (id: string) => cases.find((c) => c.id === id)?.split;
+    expect([splitOf('merge-three-copy-reel'), splitOf('merge-xyz-bare')]).toEqual(['test', 'dev']);
   });
 
   it('holds no raw control character: escapes are written as JSON escapes', () => {

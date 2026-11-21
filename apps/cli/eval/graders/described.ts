@@ -13,12 +13,36 @@ const weight = (entry: DescribedElement): number =>
   (entry.label === null ? 0 : 1) +
   entry.options.length +
   (entry.bound ? 1 : 0) +
-  (entry.pressAction === null ? 0 : 1);
+  (entry.pressAction === null ? 0 : 1) +
+  (entry.showsState ? 1 : 0);
+
+// The prop that holds what a person reads on the element, as written in the spec.
+const textProp = (element: SpecElement): unknown => element.props.label ?? element.props.text;
 
 // What a person reads as the element's label: its label prop, or a Text's own text.
 function labelOf(element: SpecElement, state: Record<string, unknown>): string | undefined {
-  const label = resolveValue(element.props.label ?? element.props.text, state);
+  const label = resolveValue(textProp(element), state);
   return typeof label === 'string' ? label : undefined;
+}
+
+// Whether the renderer reads state to resolve a prop value (@json-render/core 0.19.0, dist/index.mjs,
+// resolvePropValue): a `$state` or `$bindState` marker (lines 276-278, 286-288); an `$item` or `$bindItem`
+// marker, since a repeat item is read from state (279-282, 289-293); a `$template` with a `${...}` hole,
+// bare or absolute (317-333; its pattern, line 319, needs a name between the braces, so an empty `${}`
+// stays plain text); or a complete `$cond` (253-255) whose chosen branch does (294-297). A `$cond` shows
+// that branch, so two fixed strings do not, whatever the condition reads. `$index` is a number and not
+// state (283-285), and the catalog refuses `$computed` (packages/catalog/src/validate/semantic.ts:64-73).
+function showsState(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (pointerOf(value) !== undefined) return true;
+  if (typeof value.$item === 'string' || typeof value.$bindItem === 'string') return true;
+  if (typeof value.$template === 'string') return /\$\{[^}]+\}/.test(value.$template);
+  return (
+    '$cond' in value &&
+    '$then' in value &&
+    '$else' in value &&
+    (showsState(value.$then) || showsState(value.$else))
+  );
 }
 
 function optionValues(element: SpecElement, state: Record<string, unknown>): readonly unknown[] {
@@ -40,6 +64,7 @@ function matches(
   if (!entry.options.every((value) => offered.includes(value))) return false;
   const bound = [element.props.value, element.props.items].some((v) => pointerOf(v) !== undefined);
   if (entry.bound && !bound) return false;
+  if (entry.showsState && !showsState(textProp(element))) return false;
   return entry.pressAction === null || presses.has(`${key}\n${entry.pressAction}`);
 }
 

@@ -23,6 +23,7 @@ export interface DescribedElement {
   readonly options: readonly string[]; // values a Select must offer; empty when none were described
   readonly bound: boolean; // its value or items are bound to state
   readonly pressAction: string | null; // the action its press runs
+  readonly showsState: boolean; // its displayed text reads state: a state or item marker, a template with a ${...} hole, or a $cond whose chosen branch does; never a fixed string
 }
 
 export interface GenerationCase {
@@ -125,6 +126,7 @@ const CaseSchema = z
               options: z.array(named),
               bound: z.boolean(),
               pressAction: named.nullable(),
+              showsState: z.boolean(),
             })
             .strict(),
         ),
