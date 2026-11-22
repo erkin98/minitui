@@ -7,12 +7,14 @@ import {
   EXCLUDED_SHARE_LIMIT,
   NON_INFERIORITY_MARGIN,
   bootstrapInterval,
+  cheaperOf,
   compareArms,
   connorSize,
   mcnemarExact,
   tCritical,
   tInterval,
   wilson,
+  type ArmCost,
 } from '../../eval/harness/stats.js';
 import type { StopKind } from '../../eval/harness/trial.js';
 
@@ -134,7 +136,13 @@ function row(
   caseId: string,
   arm: Effort,
   trial: number,
-  over: { pass?: boolean; stop?: StopKind; usd?: number; noUsage?: boolean } = {},
+  over: {
+    pass?: boolean;
+    stop?: StopKind;
+    usd?: number;
+    upperUsd?: number;
+    noUsage?: boolean;
+  } = {},
 ): EvalRow {
   const pass = over.pass ?? true;
   return {
@@ -168,19 +176,23 @@ function row(
     passAll: pass,
     cause: null,
     usage: { inputTokens: 10, outputTokens: 10 },
-    cost: { measuredUsd: over.usd ?? 1, upperUsd: over.usd ?? 1 },
+    cost: { measuredUsd: over.usd ?? 1, upperUsd: over.upperUsd ?? over.usd ?? 1 },
     durationMs: 10,
   };
 }
 
 // Case c<n>, both arms, three trials each; `medium` and `high` give the number of trials that pass.
+// `cost` is each arm's measured cost per trial, and `accounted` its settled charge, the same when not given.
 function pairedCase(
   n: number,
   passes: { readonly medium: number; readonly high: number },
   cost: { readonly medium: number; readonly high: number } = { medium: 1, high: 1 },
+  accounted: { readonly medium: number; readonly high: number } = cost,
 ): EvalRow[] {
   return (['medium', 'high'] as const).flatMap((arm) =>
-    [1, 2, 3].map((t) => row(`c${n}`, arm, t, { pass: t <= passes[arm], usd: cost[arm] })),
+    [1, 2, 3].map((t) =>
+      row(`c${n}`, arm, t, { pass: t <= passes[arm], usd: cost[arm], upperUsd: accounted[arm] }),
+    ),
   );
 }
 
@@ -316,10 +328,98 @@ describe('compareArms: the decision rule', () => {
     expect(compareArms(equalPasses(5), 3)?.saturated).toBe(false);
   });
 
-  it('the decision constants are the ones proposed for approval', () => {
+  it('the decision constants are the ones the owner approved', () => {
     expect([NON_INFERIORITY_MARGIN, COST_REDUCTION_THRESHOLD, EXCLUDED_SHARE_LIMIT]).toEqual([
       0.1, 0.2, 0.1,
     ]);
+  });
+});
+
+describe('compareArms: condition 2 holds on both cost measures', () => {
+  // Thirty cases that pass every trial in both arms, so condition 1 holds and the cost alone decides.
+  // High costs 1 on both measures; medium costs what each argument says.
+  const at = (measured: number, accounted: number) =>
+    compareArms(
+      range(30).flatMap((n) =>
+        pairedCase(
+          n,
+          { medium: 3, high: 3 },
+          { medium: measured, high: 1 },
+          { medium: accounted, high: 1 },
+        ),
+      ),
+      3,
+    );
+
+  it('25% cheaper measured but only 10% cheaper accounted: not cheaper, keep the default', () => {
+    const result = at(0.75, 0.9);
+    expect(result?.nonInferior).toBe(true);
+    expect([result?.cost.cheaper, result?.recommendation]).toEqual([false, 'keep-default']);
+  });
+
+  it('25% cheaper accounted but only 10% cheaper measured: not cheaper either', () => {
+    const result = at(0.9, 0.75);
+    expect(result?.nonInferior).toBe(true);
+    expect([result?.cost.cheaper, result?.recommendation]).toEqual([false, 'keep-default']);
+  });
+
+  it('25% cheaper on both: cheaper, send medium', () => {
+    const result = at(0.75, 0.75);
+    expect([result?.cost.cheaper, result?.recommendation]).toEqual([true, 'send-medium']);
+  });
+
+  it('20% below is enough on each measure; 19% below on either is not', () => {
+    const edge = 1 - COST_REDUCTION_THRESHOLD;
+    expect(at(edge, edge)?.cost.cheaper).toBe(true);
+    expect(at(edge, 0.81)?.cost.cheaper).toBe(false);
+    expect(at(0.81, edge)?.cost.cheaper).toBe(false);
+  });
+
+  it('the accounted mean is the settled charge over every outcome trial, the measured one only the reported ones', () => {
+    // one medium trial reported no usage and settled at its worst case: measured leaves it out (0.5 against
+    // 1, cheaper), accounted keeps it ((8 × 0.5 + 100) / 9 = 11.6 against 1, dearer): the arm that breaks
+    // more is not cheaper
+    const rows = range(3).flatMap((n) =>
+      pairedCase(n, { medium: 3, high: 3 }, { medium: 0.5, high: 1 }),
+    );
+    const withHole = rows.map((r) =>
+      r.caseId === 'c1' && r.arm === 'effort-medium' && r.trial === 1
+        ? row('c1', 'medium', 1, { usd: 0, upperUsd: 100, noUsage: true })
+        : r,
+    );
+    const result = compareArms(withHole, 3);
+    expect(result?.cost.medium.measuredMean).toBe(0.5);
+    expect(result?.cost.medium.accountedMean).toBeCloseTo((8 * 0.5 + 100) / 9, 10);
+    expect([result?.cost.cheaper, result?.recommendation]).toEqual([false, 'keep-default']);
+  });
+});
+
+describe('cheaperOf: a measure with nothing to compare', () => {
+  const cost = (measuredMean: number | null, accountedMean: number | null): ArmCost => ({
+    trials: 3,
+    reported: 3,
+    measuredMean,
+    accountedMean,
+    dropped: {},
+  });
+
+  it('both means 25% below: true; the control that a clear pair is not null', () => {
+    expect(cheaperOf(cost(0.75, 0.75), cost(1, 1))).toBe(true);
+    expect(cheaperOf(cost(0.9, 0.75), cost(1, 1))).toBe(false);
+  });
+
+  it.each([
+    ['medium accounted mean null', cost(0.5, null), cost(1, 1)],
+    ['high accounted mean null', cost(0.5, 0.5), cost(1, null)],
+    ['medium measured mean null', cost(null, 0.5), cost(1, 1)],
+    ['high measured mean null', cost(0.5, 0.5), cost(null, 1)],
+    ['high measured mean at zero', cost(0, 0.5), cost(0, 1)],
+    ['high accounted mean at zero', cost(0.5, 0), cost(1, 0)],
+    // the other measure says no, and a missing one still decides nothing: null, not false
+    ['accounted null while measured says no', cost(0.9, null), cost(1, 1)],
+    ['measured null while accounted says no', cost(null, 0.9), cost(1, 1)],
+  ])('%s: null', (_name, medium, high) => {
+    expect(cheaperOf(medium, high)).toBeNull();
   });
 });
 
@@ -477,6 +577,55 @@ describe('the report', () => {
     expect(text).not.toContain('not applied');
     expect(text).toContain('1 of 10 regression cases left the paired comparison');
     expect(text).toMatch(/Recommendation: (send medium|keep the model’s own default)/);
+  });
+
+  describe('condition 2', () => {
+    // the lines of the condition: its verdict, then one line for each cost measure, then one for each arm
+    const linesOf = (text: string): string[] => {
+      const start = text.indexOf('- Condition 2');
+      return text.slice(start, text.indexOf('\n- Flagged', start)).split('\n');
+    };
+    const casesAt = (cost: { medium: number; high: number }, accounted = cost) =>
+      range(10).flatMap((n) => pairedCase(n, { medium: 3, high: 3 }, cost, accounted));
+
+    it('names both cost measures and both means, one line for each; the accounted mean is printed once', () => {
+      // medium is 25% cheaper measured and 10% cheaper accounted: the condition fails on the second measure
+      const lines = linesOf(
+        renderReport(casesAt({ medium: 0.75, high: 1 }, { medium: 0.9, high: 1 }), META),
+      );
+      expect(lines).toEqual([
+        '- Condition 2, cheaper: medium at least 20.0% below high on both cost measures: no.',
+        '  - mean measured cost per outcome trial whose every attempt reported usage: medium $0.750000 against high $1.000000.',
+        '  - mean accounted cost per outcome trial, the settled charge of the meter over every outcome trial: medium $0.900000 against high $1.000000.',
+        '  - medium: 30 of 30 outcome trials kept; dropped by reason: none',
+        '  - high: 30 of 30 outcome trials kept; dropped by reason: none',
+      ]);
+    });
+
+    it('an arm line says how much of the arm the filter dropped, by reason', () => {
+      // one medium trial reported no usage: 1 of the arm's 30 outcome trials, 3.3%
+      const rows = casesAt({ medium: 0.75, high: 1 }).map((r) =>
+        r.caseId === 'c1' && r.arm === 'effort-medium' && r.trial === 1
+          ? row('c1', 'medium', 1, { usd: 0, upperUsd: 1, noUsage: true })
+          : r,
+      );
+      expect(linesOf(renderReport(rows, META)).slice(3)).toEqual([
+        '  - medium: 29 of 30 outcome trials kept; dropped by reason: consumer-closed 3.3%',
+        '  - high: 30 of 30 outcome trials kept; dropped by reason: none',
+      ]);
+    });
+
+    it('holds on both measures: yes; at zero cost on both arms, as in a dry run: n/a', () => {
+      expect(linesOf(renderReport(casesAt({ medium: 0.75, high: 1 }), META))[0]).toBe(
+        '- Condition 2, cheaper: medium at least 20.0% below high on both cost measures: yes.',
+      );
+      const dry = linesOf(renderReport(casesAt({ medium: 0, high: 0 }), META));
+      expect(dry.slice(0, 3)).toEqual([
+        '- Condition 2, cheaper: medium at least 20.0% below high on both cost measures: n/a.',
+        '  - mean measured cost per outcome trial whose every attempt reported usage: medium $0.000000 against high $0.000000.',
+        '  - mean accounted cost per outcome trial, the settled charge of the meter over every outcome trial: medium $0.000000 against high $0.000000.',
+      ]);
+    });
   });
 
   it('holds every section, and the failed trials sorted by attempts, then tokens', () => {

@@ -144,7 +144,7 @@ function costLine(name: string, cost: ArmCost): string {
   const reasons = Object.entries(cost.dropped).map(
     ([reason, n]) => `${reason} ${pct(n / cost.trials)}`,
   );
-  return `${name}: ${cost.reported} of ${cost.trials} outcome trials kept; dropped by reason: ${reasons.length === 0 ? 'none' : reasons.join(', ')}; accounted cost per outcome trial ${usd(cost.accountedMean)}`;
+  return `${name}: ${cost.reported} of ${cost.trials} outcome trials kept; dropped by reason: ${reasons.length === 0 ? 'none' : reasons.join(', ')}`;
 }
 
 function recommendationLine(c: Comparison): string {
@@ -175,7 +175,9 @@ function comparison(rows: readonly EvalRow[], k: number): string {
   const lines = [
     `- ${c.excluded.length} of ${c.regressionCases} regression cases left the paired comparison (fewer than ${k} outcome trials in an arm)${c.excluded.length > 0 ? `: ${c.excluded.join(', ')}` : ''}.`,
     `- Condition 1, non-inferior: high minus medium per-case pass-all ${est(c.diff)} (t, n - 1 degrees of freedom); bootstrap, beside it and never deciding, ${est(c.bootstrap)}; upper end below ${pct(NON_INFERIORITY_MARGIN)}: ${yesNo(c.nonInferior)}.`,
-    `- Condition 2, cheaper: mean measured cost per outcome trial whose every attempt reported usage, medium ${usd(c.cost.medium.measuredMean)} against high ${usd(c.cost.high.measuredMean)}; at least ${pct(COST_REDUCTION_THRESHOLD)} below: ${yesNo(c.cost.cheaper)}.`,
+    `- Condition 2, cheaper: medium at least ${pct(COST_REDUCTION_THRESHOLD)} below high on both cost measures: ${yesNo(c.cost.cheaper)}.`,
+    `  - mean measured cost per outcome trial whose every attempt reported usage: medium ${usd(c.cost.medium.measuredMean)} against high ${usd(c.cost.high.measuredMean)}.`,
+    `  - mean accounted cost per outcome trial, the settled charge of the meter over every outcome trial: medium ${usd(c.cost.medium.accountedMean)} against high ${usd(c.cost.high.accountedMean)}.`,
     `  - ${costLine('medium', c.cost.medium)}`,
     `  - ${costLine('high', c.cost.high)}`,
     `- Flagged (every high trial passes, every medium trial fails): ${c.flagged.length === 0 ? 'none' : c.flagged.join(', ')}.`,

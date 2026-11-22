@@ -1,4 +1,4 @@
-import { toWireSpec, type MiniAppSpec } from '@minitui/spec';
+import { getByPath, toWireSpec, type MiniAppSpec } from '@minitui/spec';
 import type { SpecElement } from '@minitui/types';
 import type { DescribedElement } from '../harness/cases.js';
 import type { CheckResult } from '../harness/row.js';
@@ -19,30 +19,78 @@ const weight = (entry: DescribedElement): number =>
 // The prop that holds what a person reads on the element, as written in the spec.
 const textProp = (element: SpecElement): unknown => element.props.label ?? element.props.text;
 
-// What a person reads as the element's label: its label prop, or a Text's own text.
-function labelOf(element: SpecElement, state: Record<string, unknown>): string | undefined {
-  const label = resolveValue(textProp(element), state);
-  return typeof label === 'string' ? label : undefined;
+// json-render resolves a prop value by the first marker it finds, in this order (@json-render/core 0.19.0,
+// dist/index.mjs, resolvePropValue): `$state` (lines 276-278), `$item` (279-282), `$index` (283-285),
+// `$bindState` (286-288), `$bindItem` (289-293), a complete `$cond` (294-297), `$computed` (298-316; the
+// catalog refuses it, packages/catalog/src/validate/semantic.ts:64-73), then `$template` (317-333). The two
+// readers below keep that order, so a value that carries several markers is read as the first one and what
+// sits beside it is never read.
+
+// A conditional to json-render: `$cond` with both of its branches (isCondExpression, lines 253-255). With
+// a branch missing it is a plain object.
+const isCond = (value: Readonly<Record<string, unknown>>): boolean =>
+  '$cond' in value && '$then' in value && '$else' in value;
+
+// A template as json-render fills it (resolvePropValue, lines 317-333): each `${...}` hole (the pattern,
+// line 319, needs a name between the braces) reads the state at its path, an absolute path as written
+// (321-324) and a bare one as `/name` (329-330), and a value that is missing reads as an empty string. Both
+// paths go to getByPath as written: it reads a path with or without its leading slash (parseJsonPointer,
+// chunk-AFLK3Q4T.mjs 34-37). The repeat item that a bare hole reads first inside a repeat (325-328) is not
+// mirrored: no item is known here.
+function fillTemplate(template: string, state: Record<string, unknown>): string {
+  return template.replace(/\$\{([^}]+)\}/g, (_hole, path: string) => {
+    const read = getByPath(state, path);
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- mirrors json-render's String(); an object reads [object Object]
+    return read === null || read === undefined ? '' : String(read);
+  });
 }
 
-// Whether the renderer reads state to resolve a prop value (@json-render/core 0.19.0, dist/index.mjs,
-// resolvePropValue): a `$state` or `$bindState` marker (lines 276-278, 286-288); an `$item` or `$bindItem`
-// marker, since a repeat item is read from state (279-282, 289-293); a `$template` with a `${...}` hole,
-// bare or absolute (317-333; its pattern, line 319, needs a name between the braces, so an empty `${}`
-// stays plain text); or a complete `$cond` (253-255) whose chosen branch does (294-297). A `$cond` shows
-// that branch, so two fixed strings do not, whatever the condition reads. `$index` is a number and not
-// state (283-285), and the catalog refuses `$computed` (packages/catalog/src/validate/semantic.ts:64-73).
+// What a `$state` or `$bindState` marker reads: the state at its pointer, a text only when that is a string.
+function stateTexts(pointer: string, state: Record<string, unknown>): readonly string[] {
+  const read = getByPath(state, pointer);
+  return typeof read === 'string' ? [read] : [];
+}
+
+// Every text a person could read for a prop value, in the order above. A string is itself. A `$state` or
+// `$bindState` marker reads the state. An `$item`, `$index` or `$bindItem` marker reads the repeat the
+// element is in, which the grader does not know, so it has no text. A complete `$cond` shows the branch it
+// picks when it renders, so either branch may be what is read. A `$template` is its text with the holes
+// filled. Anything else is no label.
+function textsOf(value: unknown, state: Record<string, unknown>): readonly string[] {
+  if (typeof value === 'string') return [value];
+  if (!isRecord(value)) return [];
+  if (typeof value.$state === 'string') return stateTexts(value.$state, state);
+  if (typeof value.$item === 'string' || value.$index === true) return [];
+  if (typeof value.$bindState === 'string') return stateTexts(value.$bindState, state);
+  if (typeof value.$bindItem === 'string') return [];
+  if (isCond(value)) return [...textsOf(value.$then, state), ...textsOf(value.$else, state)];
+  return typeof value.$template === 'string' ? [fillTemplate(value.$template, state)] : [];
+}
+
+// Whether what a person reads as the element's label (its label prop, or a Text's own text) holds the
+// entry's label part, in any case. An entry with no label part asks nothing.
+function readsLabel(
+  element: SpecElement,
+  entry: DescribedElement,
+  state: Record<string, unknown>,
+): boolean {
+  if (entry.label === null) return true;
+  const part = entry.label.toLowerCase();
+  return textsOf(textProp(element), state).some((text) => text.toLowerCase().includes(part));
+}
+
+// Whether the renderer reads state to resolve a prop value, in the order above: a `$state`, `$item`,
+// `$bindState` or `$bindItem` marker does (a repeat item is read from state); `$index` is a position, a
+// number and not state; a complete `$cond` does when its chosen branch does, so two fixed strings do not,
+// whatever the condition reads; a `$template` does when it has a `${...}` hole, bare or absolute (its
+// pattern, line 319, needs a name between the braces, so an empty `${}` stays plain text).
 function showsState(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (pointerOf(value) !== undefined) return true;
-  if (typeof value.$item === 'string' || typeof value.$bindItem === 'string') return true;
-  if (typeof value.$template === 'string') return /\$\{[^}]+\}/.test(value.$template);
-  return (
-    '$cond' in value &&
-    '$then' in value &&
-    '$else' in value &&
-    (showsState(value.$then) || showsState(value.$else))
-  );
+  if (typeof value.$state === 'string' || typeof value.$item === 'string') return true;
+  if (value.$index === true) return false;
+  if (typeof value.$bindState === 'string' || typeof value.$bindItem === 'string') return true;
+  if (isCond(value)) return showsState(value.$then) || showsState(value.$else);
+  return typeof value.$template === 'string' && /\$\{[^}]+\}/.test(value.$template);
 }
 
 function optionValues(element: SpecElement, state: Record<string, unknown>): readonly unknown[] {
@@ -58,8 +106,7 @@ function matches(
   key: string,
 ): boolean {
   if (element.type !== entry.type) return false;
-  const label = labelOf(element, spec.state)?.toLowerCase();
-  if (entry.label !== null && !(label ?? '').includes(entry.label.toLowerCase())) return false;
+  if (!readsLabel(element, entry, spec.state)) return false;
   const offered = optionValues(element, spec.state);
   if (!entry.options.every((value) => offered.includes(value))) return false;
   const bound = [element.props.value, element.props.items].some((v) => pointerOf(v) !== undefined);

@@ -1,10 +1,10 @@
 import type { AttemptRecord, EvalRow } from './row.js';
 import { NON_OUTCOME_STOPS } from './trial.js';
 
-// The decision constants of the effort comparison, proposed for the owner's approval: each is one line here.
+// The decision constants of the effort comparison, approved by the owner on 2026-11-22: each is one line here.
 /** Condition 1: the upper end of the paired interval of (high - medium) must be below this. */
 export const NON_INFERIORITY_MARGIN = 0.1;
-/** Condition 2: medium's mean measured cost must be at least this share below high's. */
+/** Condition 2: medium's mean cost must be at least this share below high's, on both cost measures. */
 export const COST_REDUCTION_THRESHOLD = 0.2;
 /** Past this share of regression cases out of the paired comparison, the rule is not applied. */
 export const EXCLUDED_SHARE_LIMIT = 0.1;
@@ -170,7 +170,7 @@ export interface Comparison {
   readonly cost: {
     readonly medium: ArmCost;
     readonly high: ArmCost;
-    readonly cheaper: boolean | null;
+    readonly cheaper: boolean | null; // at least the threshold below high on both measures; null when not comparable
   };
   readonly flagged: readonly string[]; // every high trial passes and every medium trial fails
   readonly mcnemar: { readonly highOnly: number; readonly mediumOnly: number; readonly p: number };
@@ -183,11 +183,21 @@ const MEDIUM = 'effort-medium';
 const HIGH = 'effort-high';
 export const BOOTSTRAP_SEED = 56;
 
-function cheaperOf(medium: ArmCost, high: ArmCost): boolean | null {
-  if (medium.measuredMean === null || high.measuredMean === null || high.measuredMean === 0) {
-    return null;
-  }
-  return medium.measuredMean <= (1 - COST_REDUCTION_THRESHOLD) * high.measuredMean;
+// Whether medium's mean is far enough below high's; null when either is missing or high's is zero.
+const cheaperBy = (medium: number | null, high: number | null): boolean | null =>
+  medium === null || high === null || high === 0
+    ? null
+    : medium <= (1 - COST_REDUCTION_THRESHOLD) * high;
+
+// Condition 2 holds only on both cost measures. Each alone leans one way: the measured mean leaves out the
+// trials with a cut attempt, which are the costliest, so it favours the arm that breaks more; the accounted
+// mean prices a cut attempt at its worst case, so it goes the other way. Requiring both can never favour
+// medium. A measure that cannot be compared makes the whole condition null, whatever the other says.
+// Exported so a test can reach the state compareArms cannot: a null accounted mean beside a measured one.
+export function cheaperOf(medium: ArmCost, high: ArmCost): boolean | null {
+  const measured = cheaperBy(medium.measuredMean, high.measuredMean);
+  const accounted = cheaperBy(medium.accountedMean, high.accountedMean);
+  return measured === null || accounted === null ? null : measured && accounted;
 }
 
 function recommend(applied: boolean, nonInferior: boolean | null, cheaper: boolean | null) {

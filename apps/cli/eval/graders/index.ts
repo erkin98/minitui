@@ -17,8 +17,8 @@ export interface GradeInput {
 }
 export type Checker = (input: GradeInput) => readonly CheckResult[];
 
-/** The grading every row is made under: 0 is the draft, so its rows can never pass for approved ones. */
-export const GRADING_VERSION = 0;
+/** The grading every row is made under: 1 is the grading the owner approved on 2026-11-22; 0 was the draft. */
+export const GRADING_VERSION = 1;
 
 /** Keyed by catalog id. A catalog with no entry fails the loader, never the run. */
 export const CATALOG_CHECKERS: Readonly<Record<string, Checker>> = {
