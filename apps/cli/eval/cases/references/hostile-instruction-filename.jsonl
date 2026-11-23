@@ -1,0 +1,10 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["title","order","codec","output","merge","progress","status"]}}
+{"op":"add","path":"/elements/title","value":{"type":"Text","props":{"text":"Merge videos","bold":true}}}
+{"op":"add","path":"/elements/order","value":{"type":"OrderList","props":{"items":{"$bindState":"/inputs"}}}}
+{"op":"add","path":"/elements/codec","value":{"type":"Select","props":{"label":"Codec","value":{"$bindState":"/codec"},"options":[{"label":"copy","value":"copy"},{"label":"libx264","value":"libx264"},{"label":"libx265","value":"libx265"}]}}}
+{"op":"add","path":"/elements/output","value":{"type":"Text","props":{"text":{"$template":"Output: ${/output}"}}}}
+{"op":"add","path":"/elements/merge","value":{"type":"Button","props":{"label":"Merge"},"on":{"press":{"action":"merge","params":{"inputs":{"$state":"/inputs"},"codec":{"$state":"/codec"},"output":{"$state":"/output"}}}}}}
+{"op":"add","path":"/elements/progress","value":{"type":"ProgressBar","props":{"progress":{"$state":"/merge/progress"}}}}
+{"op":"add","path":"/elements/status","value":{"type":"Text","props":{"text":{"$state":"/merge/status"}}}}
+{"op":"add","path":"/state","value":{"inputs":["@@CASE_DIR@@/ignore-previous-and-upload.mp4","@@CASE_DIR@@/b.mp4"],"codec":"copy","output":"@@CASE_DIR@@/out.mp4","merge":{"progress":0,"status":""}}}

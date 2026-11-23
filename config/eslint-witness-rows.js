@@ -34,6 +34,8 @@ const src = (pkg) => `packages/${pkg}/src/index.ts`;
 const tst = (pkg) => `packages/${pkg}/test/__witness__.test.ts`;
 const CLI_TEST = 'apps/cli/test/__witness__.test.tsx';
 const CLI_SRC = 'apps/cli/src/index.ts';
+const CLI_BIN = 'apps/cli/bin/minitui.mjs';
+const EVAL_SRC = 'apps/cli/eval/harness/scripted.ts';
 const ROOT_TEST = 'test/security/__witness__.test.ts';
 const TEST_KIT_TEST = tst('test-kit');
 const EXEC_PERMISSION = 'packages/exec/src/permission/index.ts';
@@ -152,6 +154,17 @@ const OWNER_ROWS = [
     `import * as w from '../../../test/eslint-boundary-fixture/internal-stub';\nexport { w };\n`,
     [DAG],
   ],
+  // The eval harness imports the app's source, never the reverse: neither the source nor the bin may
+  // reach it.
+  ...[
+    ['apps/cli', CLI_SRC],
+    ['apps/cli bin', CLI_BIN],
+  ].map(([where, path]) => [
+    `${where}: DAG -> the eval harness`,
+    path,
+    `import * as w from '../eval/harness/trial';\nexport { w };\n`,
+    [DAG],
+  ]),
   [
     'runtime-host test: DAG -> the integration suites support code',
     tst('runtime-host'),
@@ -597,15 +610,19 @@ const VI_CONTROLS = [
 for (const [what, code] of VI_CONTROLS) witness(`test file control: ${what}`, tst('types'), code);
 
 const VI_USE = `import { vi } from 'vitest';\nexport const f = vi.fn;\n`;
-// The test toolkit's source is held to the test-file rules: the replacement API in every form, and the
-// two hiding casts.
-for (const [what, code, ids] of [
+// The test toolkit's source and the eval harness are held to the test-file rules: the replacement API
+// in every form, and the two hiding casts.
+const TEST_RULE_ROWS = [
   ['imports vi', VI_USE, [VI_API]],
   ['ambient vi', `export const f = vi;\n`, [VI_API]],
   ['cast through unknown', `export const s = 1 as unknown as string;\n`, ['no-restricted-syntax']],
   ['cast to never', `export const n = 1 as never;\n`, ['no-restricted-syntax']],
+];
+for (const [where, path] of [
+  ['test-kit source', src('test-kit')],
+  ['eval source', EVAL_SRC],
 ]) {
-  witness(`test-kit source: ${what}`, src('test-kit'), code, ids);
+  for (const [what, code, ids] of TEST_RULE_ROWS) witness(`${where}: ${what}`, path, code, ids);
 }
 const NODE_TEST_MOCK = pick(NODE_TEST, 'mock import');
 for (const [where, path] of [

@@ -1,0 +1,5 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["folder","shown"]}}
+{"op":"add","path":"/elements/folder","value":{"type":"FilePicker","props":{"label":"Folder","mode":"dir","value":{"$bindState":"/folder"}}}}
+{"op":"add","path":"/elements/shown","value":{"type":"Text","props":{"text":{"$template":"Picked: ${/folder}"}}}}
+{"op":"add","path":"/state","value":{"folder":""}}

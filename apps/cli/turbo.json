@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/lefthook.yml",
+        "$TURBO_ROOT$/.github/workflows/**",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/test/turbo.json"
+      ]
+    }
+  }
+}

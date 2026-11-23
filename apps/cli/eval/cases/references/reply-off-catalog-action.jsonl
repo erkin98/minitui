@@ -1,0 +1,4 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column"},"children":["run"]}}
+{"op":"add","path":"/elements/run","value":{"type":"Button","props":{"label":"Run"},"on":{"press":{"action":"runTool","params":{}}}}}
+{"op":"add","path":"/state","value":{}}

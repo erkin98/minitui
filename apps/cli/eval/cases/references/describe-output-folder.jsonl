@@ -1,0 +1,4 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["folder"]}}
+{"op":"add","path":"/elements/folder","value":{"type":"FilePicker","props":{"label":"Output folder","mode":"dir","value":{"$bindState":"/folder"}}}}
+{"op":"add","path":"/state","value":{"folder":""}}

@@ -4,7 +4,12 @@
   "tasks": {
     "test": {
       "dependsOn": ["^build", "@minitui/cli#build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/lefthook.yml"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/lefthook.yml",
+        "$TURBO_ROOT$/apps/cli/eval/harness/row.ts",
+        "$TURBO_ROOT$/apps/cli/eval/cases/**"
+      ]
     }
   }
 }

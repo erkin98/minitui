@@ -1,0 +1,4 @@
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Box","props":{"flexDirection":"column","gap":1},"children":["quality"]}}
+{"op":"add","path":"/elements/quality","value":{"type":"Select","props":{"label":"Quality","options":[{"label":"Low","value":"low"},{"label":"Medium","value":"medium"},{"label":"High","value":"high"}],"value":{"$bindState":"/quality"}}}}
+{"op":"add","path":"/state","value":{"quality":"medium"}}

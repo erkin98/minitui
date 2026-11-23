@@ -26,6 +26,7 @@
     "eslint": "catalog:",
     "ink-testing-library": "catalog:",
     "tsup": "catalog:",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
@@ -39,8 +40,9 @@
   "scripts": {
     "build": "tsup",
     "lint": "eslint .",
+    "model-eval": "tsx eval/main.ts",
     "test": "vitest run",
-    "typecheck": "tsc -b && tsc -p tsconfig.test.json"
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json && tsc -p eval/tsconfig.json"
   },
   "type": "module"
 }
