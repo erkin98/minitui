@@ -381,6 +381,9 @@ function startRun(
     arms: flags.arms,
     trials: flags.trials,
     concurrency: flags.concurrency,
+    regressionCases: selected
+      .filter(({ testCase }) => testCase.suite === 'regression')
+      .map(({ testCase }) => testCase.id),
   };
   const run = {
     harness: EVAL_HARNESS_ID,

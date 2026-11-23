@@ -160,9 +160,10 @@ function armCost(rows: readonly EvalRow[]): ArmCost {
 }
 
 export interface Comparison {
-  readonly regressionCases: number;
+  readonly regressionCases: number; // the regression cases the run selected, whether or not they ran
   readonly paired: readonly string[];
-  readonly excluded: readonly string[]; // fewer than k outcome trials in either arm
+  readonly excluded: readonly string[]; // fewer than k outcome trials in either arm, or no row at all
+  readonly neverRan: readonly string[]; // of the excluded, the cases with no row at all
   readonly applied: boolean; // the excluded share is within EXCLUDED_SHARE_LIMIT
   readonly diff: Estimate | null; // paired t interval of the per-case (high - medium) pass-all rate
   readonly bootstrap: Estimate | null; // beside it, never deciding
@@ -207,17 +208,31 @@ function recommend(applied: boolean, nonInferior: boolean | null, cheaper: boole
 
 /**
  * The effort comparison over the regression rows of one run: explicit medium against explicit high, the
- * case as the unit, k outcome trials per case and arm. Null when the run lacks either arm.
+ * case as the unit, k outcome trials per case and arm. The cases are the run's selected regression cases
+ * (`regressionIds`, in selection order), not the ones its rows hold: a run the spend cap stops early would
+ * shrink its own denominator. A selected case with fewer than k outcome trials in an arm, or with no row
+ * at all, leaves the comparison. Null when the run lacks either arm; throws on a row of a case that was
+ * not selected.
  */
-export function compareArms(rows: readonly EvalRow[], k: number): Comparison | null {
+export function compareArms(
+  rows: readonly EvalRow[],
+  k: number,
+  regressionIds: readonly string[],
+): Comparison | null {
   const regression = rows.filter((r) => r.suite === 'regression');
+  const ran = caseIdsOf(regression);
+  const stray = ran.filter((id) => !regressionIds.includes(id));
+  if (stray.length > 0) {
+    throw new Error(`rows of regression cases the run did not select: ${stray.join(', ')}`);
+  }
   const arms = new Set(regression.map((r) => r.arm));
   if (!arms.has(MEDIUM) || !arms.has(HIGH)) return null;
-  const ids = caseIdsOf(regression);
   const of = (id: string, arm: string) => outcomesOf(regression, id, arm);
-  const paired = ids.filter((id) => of(id, MEDIUM).length >= k && of(id, HIGH).length >= k);
-  const excluded = ids.filter((id) => !paired.includes(id));
-  const applied = excluded.length / ids.length <= EXCLUDED_SHARE_LIMIT;
+  const paired = regressionIds.filter(
+    (id) => of(id, MEDIUM).length >= k && of(id, HIGH).length >= k,
+  );
+  const excluded = regressionIds.filter((id) => !paired.includes(id));
+  const applied = excluded.length / regressionIds.length <= EXCLUDED_SHARE_LIMIT;
   const diffs = paired.map((id) => passRate(of(id, HIGH)) - passRate(of(id, MEDIUM)));
   const diff = tInterval(diffs);
   const nonInferior = diff === null ? null : diff.high < NON_INFERIORITY_MARGIN;
@@ -230,9 +245,10 @@ export function compareArms(rows: readonly EvalRow[], k: number): Comparison | n
   const mediumOnly = paired.filter((id) => all(id, MEDIUM) && !all(id, HIGH)).length;
   const meanRate = (arm: string) => mean(paired.map((id) => passRate(of(id, arm))));
   return {
-    regressionCases: ids.length,
+    regressionCases: regressionIds.length,
     paired,
     excluded,
+    neverRan: excluded.filter((id) => !ran.includes(id)),
     applied,
     diff,
     bootstrap: bootstrapInterval(diffs, BOOTSTRAP_SEED),

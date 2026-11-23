@@ -198,6 +198,13 @@ function pairedCase(
 
 const range = (count: number): number[] => Array.from({ length: count }, (_, i) => i + 1);
 
+// The ids of the first `count` cases, c1 on: the cases a run selected, which the comparison is given.
+const ids = (count: number): string[] => range(count).map((n) => `c${n}`);
+
+// Case c<n>, both arms, but one trial short in the high arm: it has fewer than three outcome trials.
+const excludedOne = (n: number) =>
+  pairedCase(n, { medium: 3, high: 3 }).filter((r) => !(r.arm === 'effort-high' && r.trial === 3));
+
 describe('compareArms: who is in the comparison', () => {
   it('a case with one non-outcome trial leaves the comparison, and is named', () => {
     const rows = [
@@ -206,7 +213,7 @@ describe('compareArms: who is in the comparison', () => {
         r.arm === 'effort-medium' && r.trial === 2 ? { ...r, stop: 'provider-error' as const } : r,
       ),
     ];
-    const result = compareArms(rows, 3);
+    const result = compareArms(rows, 3, ids(10));
     expect(result?.regressionCases).toBe(10);
     expect(result?.paired).toEqual(range(9).map((n) => `c${n}`));
     expect(result?.excluded).toEqual(['c10']);
@@ -220,7 +227,7 @@ describe('compareArms: who is in the comparison', () => {
         ? { ...r, stop: 'turn-deadline' as const, passAll: false }
         : r,
     );
-    const result = compareArms([...rows, ...pairedCase(2, { medium: 3, high: 3 })], 3);
+    const result = compareArms([...rows, ...pairedCase(2, { medium: 3, high: 3 })], 3, ids(2));
     expect(result?.excluded).toEqual([]);
     expect(result?.paired).toEqual(['c1', 'c2']);
     // c1: high 2 of 3 against medium 3 of 3, so -1/3; c2: 0; the mean of the two is -1/6
@@ -228,26 +235,66 @@ describe('compareArms: who is in the comparison', () => {
   });
 
   it('more than a tenth of the cases out: not applied; at a tenth exactly it is applied', () => {
-    const excludedOne = (n: number) =>
-      pairedCase(n, { medium: 3, high: 3 }).filter(
-        (r) => !(r.arm === 'effort-high' && r.trial === 3),
-      );
     const nine = range(8).flatMap((n) => pairedCase(n, { medium: 3, high: 3 }));
-    const two = compareArms([...nine, ...excludedOne(9), ...excludedOne(10)], 3);
+    const two = compareArms([...nine, ...excludedOne(9), ...excludedOne(10)], 3, ids(10));
     expect(two?.excluded).toEqual(['c9', 'c10']);
     expect([two?.applied, two?.recommendation]).toEqual([false, 'not-applied']);
     // the control: one fewer excluded case and the rule is applied
     const one = compareArms(
       [...nine, ...pairedCase(9, { medium: 3, high: 3 }), ...excludedOne(10)],
       3,
+      ids(10),
     );
     expect(one?.applied).toBe(true);
     expect(one?.recommendation).not.toBe('not-applied');
   });
 
+  it('a selected case with no row at all is excluded, and counts in the share', () => {
+    // the shape of the capped baseline: 30 cases selected, the run stopped with 8 of them never started,
+    // and 2 of the 22 that did run short of a trial
+    const rows = [
+      ...range(20).flatMap((n) => pairedCase(n, { medium: 3, high: 3 })),
+      ...excludedOne(21),
+      ...excludedOne(22),
+    ];
+    const result = compareArms(rows, 3, ids(30));
+    expect(result?.regressionCases).toBe(30);
+    expect(result?.paired).toEqual(ids(20));
+    // the 2 short cases, then the 8 that never ran, in the order they were selected
+    expect(result?.excluded).toEqual(ids(30).slice(20));
+    expect(result?.neverRan).toEqual(ids(30).slice(22));
+    expect([result?.applied, result?.recommendation]).toEqual([false, 'not-applied']);
+    // the control: given only the 22 cases the rows hold, 2 of 22 is within a tenth and the rule is applied
+    const fromRows = compareArms(rows, 3, ids(22));
+    expect([fromRows?.excluded, fromRows?.neverRan]).toEqual([['c21', 'c22'], []]);
+    expect(fromRows?.applied).toBe(true);
+  });
+
+  it('a case with a spend-cap row did run: excluded, but not counted as never run', () => {
+    const cut = excludedOne(3).map((r) =>
+      r.arm === 'effort-high' ? { ...r, stop: 'spend-cap' as const, passAll: false } : r,
+    );
+    const rows = [
+      ...pairedCase(1, { medium: 3, high: 3 }),
+      ...pairedCase(2, { medium: 3, high: 3 }),
+    ];
+    const result = compareArms([...rows, ...cut], 3, ids(4));
+    expect([result?.excluded, result?.neverRan]).toEqual([['c3', 'c4'], ['c4']]);
+  });
+
+  it('a row of a case that was not selected is refused, never counted', () => {
+    const rows = range(3).flatMap((n) => pairedCase(n, { medium: 3, high: 3 }));
+    expect(() => compareArms(rows, 3, ids(2))).toThrow(/c3/);
+    // refused even where the run has one arm, so no comparison is made
+    const highOnly = pairedCase(1, { medium: 3, high: 3 }).filter((r) => r.arm === 'effort-high');
+    expect(() => compareArms(highOnly, 3, [])).toThrow(/c1/);
+    // the control: with c3 selected the same rows are all counted
+    expect(compareArms(rows, 3, ids(3))?.paired).toEqual(ids(3));
+  });
+
   it('needs both arms: a run of one arm has no comparison', () => {
     const highOnly = pairedCase(1, { medium: 3, high: 3 }).filter((r) => r.arm === 'effort-high');
-    expect(compareArms(highOnly, 3)).toBeNull();
+    expect(compareArms(highOnly, 3, ids(1))).toBeNull();
   });
 
   it('reads only the regression cases', () => {
@@ -255,7 +302,11 @@ describe('compareArms: who is in the comparison', () => {
       ...r,
       suite: 'capability' as const,
     }));
-    const result = compareArms([...pairedCase(1, { medium: 3, high: 3 }), ...capability], 3);
+    const result = compareArms(
+      [...pairedCase(1, { medium: 3, high: 3 }), ...capability],
+      3,
+      ids(1),
+    );
     expect([result?.regressionCases, result?.paired, result?.flagged]).toEqual([1, ['c1'], []]);
   });
 });
@@ -267,7 +318,7 @@ describe('compareArms: the decision rule', () => {
     );
 
   it('non-inferior and cheaper: send medium', () => {
-    const result = compareArms(equalPasses(30), 3);
+    const result = compareArms(equalPasses(30), 3, ids(30));
     expect(result?.nonInferior).toBe(true);
     expect(result?.cost.cheaper).toBe(true);
     expect(result?.recommendation).toBe('send-medium');
@@ -280,6 +331,7 @@ describe('compareArms: the decision rule', () => {
       compareArms(
         range(30).flatMap((n) => pairedCase(n, { medium: 3, high: 3 }, { medium, high: 1 })),
         3,
+        ids(30),
       );
     expect(at(1 - COST_REDUCTION_THRESHOLD)?.cost.cheaper).toBe(true);
     expect(at(0.81)?.cost.cheaper).toBe(false);
@@ -296,7 +348,7 @@ describe('compareArms: the decision rule', () => {
         ? { ...row('c1', 'medium', 1, { usd: 100, noUsage: true }) }
         : r,
     );
-    const result = compareArms(withHole, 3);
+    const result = compareArms(withHole, 3, ids(3));
     expect(result?.cost.medium.measuredMean).toBe(0.5);
     expect(result?.cost.medium.reported).toBe(8);
     expect(result?.cost.medium.dropped).toEqual({ 'consumer-closed': 1 });
@@ -310,7 +362,7 @@ describe('compareArms: the decision rule', () => {
         high: 1,
       }),
     );
-    const result = compareArms(rows, 3);
+    const result = compareArms(rows, 3, ids(30));
     expect(result?.nonInferior).toBe(false);
     expect(result?.recommendation).toBe('keep-default');
     expect(result?.flagged).toEqual(range(10).map((n) => `c${n}`));
@@ -323,9 +375,10 @@ describe('compareArms: the decision rule', () => {
       compareArms(
         range(5).flatMap((n) => pairedCase(n, { medium: 3, high: 3 })),
         3,
+        ids(5),
       )?.saturated,
     ).toBe(true);
-    expect(compareArms(equalPasses(5), 3)?.saturated).toBe(false);
+    expect(compareArms(equalPasses(5), 3, ids(5))?.saturated).toBe(false);
   });
 
   it('the decision constants are the ones the owner approved', () => {
@@ -349,6 +402,7 @@ describe('compareArms: condition 2 holds on both cost measures', () => {
         ),
       ),
       3,
+      ids(30),
     );
 
   it('25% cheaper measured but only 10% cheaper accounted: not cheaper, keep the default', () => {
@@ -387,7 +441,7 @@ describe('compareArms: condition 2 holds on both cost measures', () => {
         ? row('c1', 'medium', 1, { usd: 0, upperUsd: 100, noUsage: true })
         : r,
     );
-    const result = compareArms(withHole, 3);
+    const result = compareArms(withHole, 3, ids(3));
     expect(result?.cost.medium.measuredMean).toBe(0.5);
     expect(result?.cost.medium.accountedMean).toBeCloseTo((8 * 0.5 + 100) / 9, 10);
     expect([result?.cost.cheaper, result?.recommendation]).toEqual([false, 'keep-default']);
@@ -481,6 +535,7 @@ describe('the report: its figures, on a set worked out by hand', () => {
     arms: ['medium', 'high'],
     trials: 3,
     concurrency: 1,
+    regressionCases: ids(10),
   });
   const section = (heading: string): string => {
     const start = text.indexOf(heading);
@@ -545,6 +600,7 @@ describe('the report', () => {
     arms: ['medium', 'high'],
     trials: 3,
     concurrency: 1,
+    regressionCases: ids(10),
   };
   const dropTrial = (rows: EvalRow[], caseId: string) =>
     rows.map((r) =>
@@ -564,6 +620,8 @@ describe('the report', () => {
     const text = renderReport(rows, META);
     expect(text).toContain('not applied');
     expect(text).toContain('2 of 10 regression cases left the paired comparison');
+    // every selected case ran, so the line has no clause about cases that never ran
+    expect(text).not.toContain('never ran');
   });
 
   it('the control: one excluded case of ten, and the rule is applied', () => {
@@ -576,7 +634,25 @@ describe('the report', () => {
     );
     expect(text).not.toContain('not applied');
     expect(text).toContain('1 of 10 regression cases left the paired comparison');
+    expect(text).not.toContain('never ran');
     expect(text).toMatch(/Recommendation: (send medium|keep the model’s own default)/);
+  });
+
+  it('a run stopped with 8 of its 30 selected cases never started: 10 of 30 left, the rule not applied', () => {
+    // the capped baseline: rows for 22 cases, 2 of them a trial short; before, the line read 2 of 22
+    const rows = [
+      ...range(20).flatMap((n) => pairedCase(n, { medium: 3, high: 3 })),
+      ...excludedOne(21),
+      ...excludedOne(22),
+    ];
+    const text = renderReport(rows, { ...META, regressionCases: ids(30) });
+    const line = text.split('\n').find((l) => l.includes('regression cases left the paired'));
+    expect(line).toBe(
+      `- 10 of 30 regression cases left the paired comparison (fewer than 3 outcome trials in an arm): ${ids(30).slice(20).join(', ')}; 8 of them never ran.`,
+    );
+    expect(text).toContain(
+      '- Recommendation: not applied: 10 of 30 regression cases (more than 10.0%) left the paired comparison.',
+    );
   });
 
   describe('condition 2', () => {

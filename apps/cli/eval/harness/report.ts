@@ -31,6 +31,7 @@ export interface ReportMeta {
   readonly arms: readonly Effort[];
   readonly trials: number; // k
   readonly concurrency: number;
+  readonly regressionCases: readonly string[]; // the regression cases the run selected, in selection order
 }
 
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
@@ -167,13 +168,21 @@ function connorLine(psi: number | null): string {
   return `- Discordant share ψ = ${psi.toFixed(3)}; Connor size at this ψ (alpha 0.05, power 0.8): δ 0.10 needs ${size(0.1)} cases, δ 0.20 needs ${size(0.2)}.`;
 }
 
-function comparison(rows: readonly EvalRow[], k: number): string {
-  const c = compareArms(rows, k);
+// The ids of the cases that left the paired comparison, and how many of them have no row at all.
+function excludedTail(c: Comparison): string {
+  if (c.excluded.length === 0) return '';
+  const never = c.neverRan.length === 0 ? '' : `; ${c.neverRan.length} of them never ran`;
+  return `: ${c.excluded.join(', ')}${never}`;
+}
+
+function comparison(rows: readonly EvalRow[], meta: ReportMeta): string {
+  const k = meta.trials;
+  const c = compareArms(rows, k, meta.regressionCases);
   if (c === null) {
     return '## The comparison\n\nNo comparison: the run has not both effort-medium and effort-high.';
   }
   const lines = [
-    `- ${c.excluded.length} of ${c.regressionCases} regression cases left the paired comparison (fewer than ${k} outcome trials in an arm)${c.excluded.length > 0 ? `: ${c.excluded.join(', ')}` : ''}.`,
+    `- ${c.excluded.length} of ${c.regressionCases} regression cases left the paired comparison (fewer than ${k} outcome trials in an arm)${excludedTail(c)}.`,
     `- Condition 1, non-inferior: high minus medium per-case pass-all ${est(c.diff)} (t, n - 1 degrees of freedom); bootstrap, beside it and never deciding, ${est(c.bootstrap)}; upper end below ${pct(NON_INFERIORITY_MARGIN)}: ${yesNo(c.nonInferior)}.`,
     `- Condition 2, cheaper: medium at least ${pct(COST_REDUCTION_THRESHOLD)} below high on both cost measures: ${yesNo(c.cost.cheaper)}.`,
     `  - mean measured cost per outcome trial whose every attempt reported usage: medium ${usd(c.cost.medium.measuredMean)} against high ${usd(c.cost.high.measuredMean)}.`,
@@ -341,7 +350,7 @@ export function renderReport(rows: readonly EvalRow[], meta: ReportMeta): string
   return `${[
     header(meta),
     headline(rows, meta),
-    comparison(rows, meta.trials),
+    comparison(rows, meta),
     perCase(rows, meta),
     transitions(rows),
     coverage(rows),

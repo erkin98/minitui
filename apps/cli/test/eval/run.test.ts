@@ -26,6 +26,7 @@ import {
   filesIn,
   recordingReplay,
   rowsIn,
+  spendingReplay,
   tempDirs,
   testDeps,
   writeCaseSet,
@@ -174,6 +175,10 @@ describe('a dry run of a three-case set', () => {
     const report = readFileSync(join(run.runDir, 'report.md'), 'utf8');
     expect(report).toContain(`# Model-output eval: run ${RUN_ID}`);
     expect(report).toContain('## Failed trials');
+    // the comparison counts the one regression case of the three selected, not the capability cases
+    expect(report).toContain(
+      '- 0 of 1 regression cases left the paired comparison (fewer than 1 outcome trials in an arm).',
+    );
     expect(out[0]).toMatch(new RegExp(`^run ${RUN_ID}: dry lane, 3 cases`));
     expect(out.filter((line) => /^\d+\/6 /.test(line))).toHaveLength(6);
     expect(out.at(-1)).toBe(`report: ${join(run.runDir, 'report.md')}`);
@@ -274,6 +279,55 @@ describe('the replay lane under its cap', () => {
     expect(first?.priceTable).toEqual({ date: '2026-11-20', key: `anthropic:${MODEL}` });
     // one token each way at $2 and $10 per million
     expect(first?.cost.measuredUsd).toBeCloseTo(0.000012, 12);
+  });
+
+  describe('a cap that stops the run partway', () => {
+    // Each trial reports 60,000 output tokens, so it settles at about $0.60 whatever the size of its
+    // request. A request's worst case is 64,000 output tokens at $10 per million and its body at $4 per
+    // million: about $0.72 for the 19 KB bodies here, and under $1.10 for any body up to 115 KB. A $1.70 cap
+    // holds the first case's two trials (the second after $0.60 is spent) and refuses the next request
+    // after $1.20.
+    const SPENDING = spendingReplay({ inputTokens: 1, outputTokens: 60_000 });
+    const THREE = ['merge-hand-run', 'merge-trip-days', 'merge-xyz-bare'].map(committedCase);
+    const comparisonLine = (runDir: string): string | undefined =>
+      readFileSync(join(runDir, 'report.md'), 'utf8')
+        .split('\n')
+        .find((line) => line.includes('regression cases left the paired comparison'));
+
+    it('the case it cut and the case it never reached are both excluded, and the rule is not applied', async () => {
+      const run = setup(THREE);
+      const code = await evalMain(
+        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '1', '--cap-usd', '1.7'),
+        testDeps({ providers: SPENDING }).deps,
+      );
+      expect(code).toBe(0);
+      // the first case ran both arms, the second ended on the cap, the third has no row at all
+      expect(rowsIn(run.runDir).map((r) => [r.caseId, r.arm, r.stop])).toEqual([
+        ['merge-hand-run', 'effort-high', 'valid'],
+        ['merge-hand-run', 'effort-medium', 'valid'],
+        ['merge-trip-days', 'effort-medium', 'spend-cap'],
+      ]);
+      expect(comparisonLine(run.runDir)).toBe(
+        '- 2 of 3 regression cases left the paired comparison (fewer than 1 outcome trials in an arm): merge-trip-days, merge-xyz-bare; 1 of them never ran.',
+      );
+      expect(readFileSync(join(run.runDir, 'report.md'), 'utf8')).toContain(
+        '- Recommendation: not applied: 2 of 3 regression cases (more than 10.0%) left the paired comparison.',
+      );
+    });
+
+    it('the control: under a cap that holds every trial, all three cases are paired and the rule is applied', async () => {
+      const run = setup(THREE);
+      const code = await evalMain(
+        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '1', '--cap-usd', '5'),
+        testDeps({ providers: SPENDING }).deps,
+      );
+      expect(code).toBe(0);
+      expect(rowsIn(run.runDir)).toHaveLength(6);
+      expect(comparisonLine(run.runDir)).toBe(
+        '- 0 of 3 regression cases left the paired comparison (fewer than 1 outcome trials in an arm).',
+      );
+      expect(readFileSync(join(run.runDir, 'report.md'), 'utf8')).not.toContain('not applied');
+    });
   });
 });
 

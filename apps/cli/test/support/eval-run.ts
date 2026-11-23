@@ -8,7 +8,7 @@ import type { EvalRow } from '../../eval/harness/row.js';
 import { fixedCapabilities } from '../../eval/harness/scripted.js';
 import type { EvalDeps } from '../../eval/main.js';
 import { anthropicEntry } from '../../eval/providers/anthropic.js';
-import type { ProviderEntry } from '../../eval/providers/index.js';
+import type { ProviderEntry, ReplayReply } from '../../eval/providers/index.js';
 
 // What the eval entry's tests share: case sets built from the committed ones, the entry's seams with
 // fixed values, and provider entries that are real implementations of the port over a fetch with no network.
@@ -160,6 +160,27 @@ export function answeringReplay(text: string): Readonly<Record<string, ProviderE
         ...access,
         route: (args) =>
           access.route({ ...args, replies: args.replies.map((reply) => ({ ...reply, text })) }),
+      };
+    },
+  };
+  return { anthropic: entry };
+}
+
+/**
+ * The replay entry, every route reporting `usage` in place of one token each way, so a trial settles at a
+ * charge of the test's choosing and the spend cap stops a run after a known number of trials.
+ */
+export function spendingReplay(
+  usage: ReplayReply['usage'],
+): Readonly<Record<string, ProviderEntry>> {
+  const entry: ProviderEntry = {
+    ...anthropicEntry,
+    replay: (key) => {
+      const access = anthropicEntry.replay(key);
+      return {
+        ...access,
+        route: (args) =>
+          access.route({ ...args, replies: args.replies.map((reply) => ({ ...reply, usage })) }),
       };
     },
   };
