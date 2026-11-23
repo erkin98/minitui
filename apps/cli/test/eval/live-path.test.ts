@@ -23,6 +23,7 @@ import { cleaner, createModelRoute, keyRedactionPolicy } from '../../src/model-r
 import { fixedCapabilities, scriptedProvider } from '../../eval/harness/scripted.js';
 import { createSpendMeter, trialMeter } from '../../eval/harness/spend.js';
 import { createStepLog, graphDepsFor, runTrial } from '../../eval/harness/trial.js';
+import { systemPromptFor } from '../../eval/main.js';
 import { anthropicEntry } from '../../eval/providers/anthropic.js';
 import { OUTPUT, recordingDiagnostics } from '../support/fakes.js';
 
@@ -226,6 +227,38 @@ describe('the eval and the cli build the same run', () => {
         previousText: BOGUS,
         reprompt: observation.attempts[1]?.reprompt ?? '',
       }),
+    );
+  });
+
+  it('(f) the prompt the case loader checks case text against is the one the graph composes, apart from the directory', async () => {
+    const log = createStepLog(noopDiagnostics);
+    const observation = await runTrial({
+      intent: 'merge two clips',
+      deps: graphDepsFor({
+        route: {
+          provider: scriptedProvider([
+            { kind: 'text', text: VALID, usage: { inputTokens: 1, outputTokens: 1 } },
+          ]),
+          model: 'scripted-model',
+        },
+        workingDirectory: DIR,
+        effort: 'medium',
+        diagnostics: log.port,
+        redactionPolicy: keyRedactionPolicy(KEY),
+        stderr: { write: () => {} },
+        capabilities: fixedCapabilities([]),
+      }),
+      steps: log.steps,
+      arm: 'medium',
+      timeoutMs: 5000,
+      now: () => performance.now(),
+      hooks: null,
+    });
+    expect(observation.systemPrompt).toContain(DIR);
+    expect(systemPromptFor(DIR)).toBe(observation.systemPrompt);
+    // the directory is the only difference, whichever one the loader is given
+    expect(systemPromptFor('/another/dir')).toBe(
+      observation.systemPrompt.replaceAll(DIR, '/another/dir'),
     );
   });
 

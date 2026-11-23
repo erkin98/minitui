@@ -102,7 +102,9 @@ const CaseSchema = z
     split: z.enum(['dev', 'test']),
     catalog: named,
     input: z.object({ kind: z.enum(['intent', 'description']), text: named }).strict(),
-    files: z.array(fileName),
+    files: z
+      .array(fileName)
+      .refine((names) => new Set(names).size === names.length, 'a file name is listed twice'),
     tags: z.array(named),
     requires: z.object({ components: z.array(named), actions: z.array(named) }).strict(),
     needsModelWrittenCode: z.boolean(),
@@ -225,15 +227,32 @@ function checkCase(c: GenerationCase, ctx: LoadContext, patches: Map<string, str
 const zodMessage = (error: z.ZodError): string =>
   error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
 
+interface FileLine {
+  readonly text: string;
+  readonly number: number; // 1-based in the file, blank lines counted
+}
+
+// A line as JSON, or a refusal naming `where` and the line's number: the text of the line is never quoted.
+function jsonOf(line: FileLine, where: string): unknown {
+  try {
+    return JSON.parse(line.text);
+  } catch {
+    throw new Error(`${where}: line ${line.number} is not valid JSON`);
+  }
+}
+
 /** The case set: its header line, then one case per line, each checked against every refusal rule. */
 export function parseCaseSet(text: string, ctx: LoadContext): CaseSet {
-  const [headerLine = '', ...caseLines] = text.split('\n').filter((line) => line.trim() !== '');
-  const header = HeaderSchema.safeParse(JSON.parse(headerLine));
+  const [headerLine = { text: '', number: 1 }, ...caseLines] = text
+    .split('\n')
+    .map((line, index): FileLine => ({ text: line, number: index + 1 }))
+    .filter((line) => line.text.trim() !== '');
+  const header = HeaderSchema.safeParse(jsonOf(headerLine, 'the case set header'));
   if (!header.success) throw new Error(`the case set header: ${zodMessage(header.error)}`);
   const patches = new Map<string, string>();
   const ids = new Set<string>();
   const cases = caseLines.map((line, index): GenerationCase => {
-    const parsed = CaseSchema.safeParse(JSON.parse(line));
+    const parsed = CaseSchema.safeParse(jsonOf(line, `case ${index + 1}`));
     if (!parsed.success) throw new Error(`case ${index + 1}: ${zodMessage(parsed.error)}`);
     const c = parsed.data;
     try {
@@ -258,22 +277,12 @@ export function loadCaseSet(file: string, ctx: Pick<LoadContext, 'systemPrompt'>
   });
 }
 
-function replaceInLeaves(value: unknown, directory: string): unknown {
-  if (typeof value === 'string') return value.replaceAll(CASE_DIR, directory);
-  if (Array.isArray(value)) return value.map((item) => replaceInLeaves(item, directory));
-  if (typeof value !== 'object' || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, replaceInLeaves(item, directory)]),
-  );
-}
-
 /**
- * A reference or reply for one trial: each patch line parsed, the placeholder replaced inside string
- * leaves only, and the line written again, so no character of the directory's name can break a line.
+ * A reference or reply for one trial: the case directory written as the content of a JSON string wherever
+ * the placeholder stands, so no character of its name can break a line. The replacement is a function, so
+ * a `$&` or a `$'` in the directory is written as it is, never read as a pattern. The runner and the tests
+ * render through this one function.
  */
 export function renderPatchText(text: string, caseDirectory: string): string {
-  const lines = parseLines(text).map((line) =>
-    JSON.stringify(replaceInLeaves(line, caseDirectory)),
-  );
-  return `${lines.join('\n')}\n`;
+  return text.replaceAll(CASE_DIR, () => JSON.stringify(caseDirectory).slice(1, -1));
 }

@@ -8,6 +8,8 @@ export const NON_INFERIORITY_MARGIN = 0.1;
 export const COST_REDUCTION_THRESHOLD = 0.2;
 /** Past this share of regression cases out of the paired comparison, the rule is not applied. */
 export const EXCLUDED_SHARE_LIMIT = 0.1;
+/** The rule was written for the whole regression suite at this many trials a case, or more. */
+export const PRE_REGISTERED_MIN_TRIALS = 3;
 
 const Z95 = 1.96;
 
@@ -66,8 +68,13 @@ const T_95: readonly number[] = [
   1.986, 1.986, 1.986, 1.986, 1.985, 1.985, 1.985, 1.984, 1.984, 1.984,
 ];
 
-/** The two-sided 95% t value. No case set here is larger than the table, so a larger one throws. */
+/**
+ * The two-sided 95% t value. Past the table's 100 degrees of freedom it is the normal value, 1.96: the
+ * t value there is 1.984 and falls toward it, so an interval over a larger case set is under 1.3% narrower
+ * than the exact one, and the report is still written.
+ */
 export function tCritical(df: number): number {
+  if (Number.isInteger(df) && df > T_95.length) return Z95;
   const value = Number.isInteger(df) ? T_95[df - 1] : undefined;
   if (value === undefined) {
     throw new Error(`no 95% t value for ${df} degrees of freedom: the table holds 1 to 100`);
@@ -161,10 +168,12 @@ function armCost(rows: readonly EvalRow[]): ArmCost {
 
 export interface Comparison {
   readonly regressionCases: number; // the regression cases the run selected, whether or not they ran
+  readonly loadedRegressionCases: number; // the regression cases of the loaded case set, selected or not
+  readonly preRegisteredSize: boolean; // the run selected all of them, at PRE_REGISTERED_MIN_TRIALS trials or more
   readonly paired: readonly string[];
   readonly excluded: readonly string[]; // fewer than k outcome trials in either arm, or no row at all
   readonly neverRan: readonly string[]; // of the excluded, the cases with no row at all
-  readonly applied: boolean; // the excluded share is within EXCLUDED_SHARE_LIMIT
+  readonly applied: boolean; // the excluded share is within EXCLUDED_SHARE_LIMIT: the recommendation also needs the size
   readonly diff: Estimate | null; // paired t interval of the per-case (high - medium) pass-all rate
   readonly bootstrap: Estimate | null; // beside it, never deciding
   readonly nonInferior: boolean | null;
@@ -175,7 +184,7 @@ export interface Comparison {
   };
   readonly flagged: readonly string[]; // every high trial passes and every medium trial fails
   readonly mcnemar: { readonly highOnly: number; readonly mediumOnly: number; readonly p: number };
-  readonly psi: number | null; // the discordant share of pass^3 over the paired cases
+  readonly psi: number | null; // the discordant share of pass^k over the paired cases
   readonly saturated: boolean; // both arms' mean per-case pass-all at 95% or more
   readonly recommendation: 'send-medium' | 'keep-default' | 'not-applied';
 }
@@ -212,12 +221,15 @@ function recommend(applied: boolean, nonInferior: boolean | null, cheaper: boole
  * (`regressionIds`, in selection order), not the ones its rows hold: a run the spend cap stops early would
  * shrink its own denominator. A selected case with fewer than k outcome trials in an arm, or with no row
  * at all, leaves the comparison. Null when the run lacks either arm; throws on a row of a case that was
- * not selected.
+ * not selected. The rule recommends only for the run it was written for: every one of the
+ * `loadedRegressionCases` regression cases of the loaded set selected, at PRE_REGISTERED_MIN_TRIALS trials a
+ * case or more. A smaller or shorter run gets every figure below as a description and is `not-applied`.
  */
 export function compareArms(
   rows: readonly EvalRow[],
   k: number,
   regressionIds: readonly string[],
+  loadedRegressionCases: number,
 ): Comparison | null {
   const regression = rows.filter((r) => r.suite === 'regression');
   const ran = caseIdsOf(regression);
@@ -233,6 +245,8 @@ export function compareArms(
   );
   const excluded = regressionIds.filter((id) => !paired.includes(id));
   const applied = excluded.length / regressionIds.length <= EXCLUDED_SHARE_LIMIT;
+  const preRegisteredSize =
+    regressionIds.length === loadedRegressionCases && k >= PRE_REGISTERED_MIN_TRIALS;
   const diffs = paired.map((id) => passRate(of(id, HIGH)) - passRate(of(id, MEDIUM)));
   const diff = tInterval(diffs);
   const nonInferior = diff === null ? null : diff.high < NON_INFERIORITY_MARGIN;
@@ -246,6 +260,8 @@ export function compareArms(
   const meanRate = (arm: string) => mean(paired.map((id) => passRate(of(id, arm))));
   return {
     regressionCases: regressionIds.length,
+    loadedRegressionCases,
+    preRegisteredSize,
     paired,
     excluded,
     neverRan: excluded.filter((id) => !ran.includes(id)),
@@ -258,6 +274,6 @@ export function compareArms(
     mcnemar: { highOnly, mediumOnly, p: mcnemarExact(highOnly, mediumOnly) },
     psi: paired.length === 0 ? null : (highOnly + mediumOnly) / paired.length,
     saturated: paired.length > 0 && meanRate(MEDIUM) >= 0.95 && meanRate(HIGH) >= 0.95,
-    recommendation: recommend(applied, nonInferior, cheaper),
+    recommendation: recommend(applied && preRegisteredSize, nonInferior, cheaper),
   };
 }

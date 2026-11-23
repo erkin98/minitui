@@ -5,7 +5,7 @@ import type { DiagnosticsPort } from '@minitui/types';
 import { MAX_GEN_ATTEMPTS } from '../../src/generation.js';
 import { GRADING_VERSION, capabilityCause, grade } from '../graders/index.js';
 import type { KeyedAccess, Meter, ReplayRouteArgs, TrialRouteArgs } from '../providers/index.js';
-import { CASE_DIR, type CaseSet, type GenerationCase } from './cases.js';
+import { renderPatchText, type CaseSet, type GenerationCase } from './cases.js';
 import type { RunRoot } from './fixtures.js';
 import {
   toRow,
@@ -167,14 +167,12 @@ export function rowFor(observation: TrialObservation, args: RowArgs): EvalRow {
   }
 }
 
-// The reply text of a trial: the case's reference, or its dry-run reply, with the case directory written as
-// the content of a JSON string wherever the placeholder stands.
+// The reply text of a trial: the case's reference, or its dry-run reply, with the case directory written in.
 export function replyFor(caseSet: CaseSet, testCase: GenerationCase, dir: string): string {
   const file = testCase.reference ?? testCase.dryRun?.reply;
   const text = file === undefined ? undefined : caseSet.patches.get(file);
   if (text === undefined) throw new Error(`the case set holds no reply for ${testCase.id}`);
-  // a function, so a `$&` or `$'` in the directory is written as it is, never read as a pattern
-  return text.replaceAll(CASE_DIR, () => JSON.stringify(dir).slice(1, -1));
+  return renderPatchText(text, dir);
 }
 
 type Selected = RunPlan['selected'][number];

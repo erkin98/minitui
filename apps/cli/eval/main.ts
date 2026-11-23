@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { EFFORTS, type Effort } from '@minitui/agent-core';
@@ -8,14 +8,14 @@ import { buildCatalogPrompt, videoMergeCatalog } from '@minitui/catalog';
 import { createCapabilityProvider } from '@minitui/exec';
 import type { CapabilityProvider } from '@minitui/spec';
 import type { DiagnosticsPort } from '@minitui/types';
-import { createFileDiagnostics, openLogFile } from '../src/boot.js';
+import { createFileDiagnostics, openLogFile, realProcess, type ProcessPort } from '../src/boot.js';
 import { composeSystemPrompt } from '../src/generation.js';
 import { MAX_OUTPUT_TOKENS } from '../src/graph.js';
 import { cleaner, keyRedactionPolicy, type Cleaner } from '../src/model-route.js';
 import { GRADING_VERSION } from './graders/index.js';
 import { loadCaseSet, type CaseSet } from './harness/cases.js';
 import { createRunRoot, type RunRoot } from './harness/fixtures.js';
-import { renderReport, type ReportMeta } from './harness/report.js';
+import { plural, renderReport, type ReportMeta } from './harness/report.js';
 import { EVAL_HARNESS_ID, type Lane } from './harness/row.js';
 import {
   dryLane,
@@ -30,6 +30,7 @@ import {
   createSpendMeter,
   loadPriceTable,
   type Prices,
+  type SpendMeter,
 } from './harness/spend.js';
 import { PROVIDERS, type ProviderEntry } from './providers/index.js';
 
@@ -240,6 +241,11 @@ interface Opened {
 
 const usd = (value: number): string => `$${value.toFixed(4)}`;
 
+// What the meter holds when a metered run ends or stops, to set beside the provider's bill: the aborted
+// trial leaves no row, but its attempt is in the total.
+const spendLine = (meter: SpendMeter, trials: number): string =>
+  `spend: ${usd(meter.committedUsd)} committed, ${usd(meter.heldUsd)} held, cap ${usd(meter.capUsd)}; ${plural(trials, 'trial')} written`;
+
 // What a paid run still lacks; checked before any provider entry is called.
 function paidMissing(flags: Flags, env: Seams['env']): string[] {
   const unset = (value: string | undefined) => value === undefined || value === '';
@@ -326,8 +332,15 @@ function openLane(flags: Flags, seams: Seams): Opened | { readonly fatal: string
 const runIdOf = (start: Date, hex: string): string =>
   `${start.toISOString().slice(0, 19).replace(/[-:]/g, '')}Z-${hex}`;
 
+/**
+ * The prompt the case loader checks case text against. `buildAppGraph` (src/graph.ts) composes the prompt
+ * the trials send with the same call, for the trial's directory: change the two together.
+ */
+export const systemPromptFor = (directory: string): string =>
+  composeSystemPrompt(buildCatalogPrompt(videoMergeCatalog), directory);
+
 function casesFor(flags: Flags, root: RunRoot): CaseSet {
-  const systemPrompt = composeSystemPrompt(buildCatalogPrompt(videoMergeCatalog), root.dirFor(1));
+  const systemPrompt = systemPromptFor(root.dirFor(1));
   try {
     return loadCaseSet(flags.cases, { systemPrompt });
   } catch (error) {
@@ -384,6 +397,7 @@ function startRun(
     regressionCases: selected
       .filter(({ testCase }) => testCase.suite === 'regression')
       .map(({ testCase }) => testCase.id),
+    loadedRegressionCases: caseSet.cases.filter((c) => c.suite === 'regression').length,
   };
   const run = {
     harness: EVAL_HARNESS_ID,
@@ -436,13 +450,16 @@ async function runWith(flags: Flags, opened: Opened, seams: Seams): Promise<numb
       graphDiagnostics: seams.graphDiagnostics,
       progress: say,
     }).finally(() => log.close());
+    // both exits say what the meter saw, before anything that can still throw
+    if (setup.meter !== null) say(spendLine(setup.meter, rows.length));
     if (halt !== null) {
       seams.stderr(clean.line(`model-eval: the run stopped: ${clean.message(halt.error)}`));
       return 1;
     }
     writeFileSync(join(runDir, 'report.md'), renderReport(rows, meta));
-    if (setup.meter?.refused === true)
-      say(`the spend cap refused a request: ${rows.length} trials ran`);
+    if (setup.meter?.refused === true) {
+      say(`the spend cap refused a request: ${plural(rows.length, 'trial')} ran`);
+    }
     say(`report: ${join(runDir, 'report.md')}`);
     return 0;
   } finally {
@@ -480,7 +497,42 @@ export async function evalMain(argv: readonly string[], deps: EvalDeps = {}): Pr
   }
 }
 
-const entry = process.argv[1];
-if (entry !== undefined && resolve(entry) === fileURLToPath(import.meta.url)) {
+/**
+ * Whether the program being run is this module. `entry` is the path the process was started with, which
+ * can go through a symlink: both sides are compared as real paths, so a start through one still runs. A
+ * path with nothing at it is no entry.
+ */
+export function isEntryModule(entry: string | undefined, moduleUrl: string): boolean {
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+const CRASH_LINE = 'model-eval: stopped by an unexpected error';
+
+/**
+ * Answers a crash that evalMain's own catch cannot see (an uncaught throw, a rejection in a detached
+ * callback): one fixed line through the placeholder key's cleaner, then exit 1. Nothing the crash holds is
+ * printed, so no cleaner has a key to miss in it, the lane's own included.
+ */
+export function guardCrashes(proc: ProcessPort, write: (line: string) => void): void {
+  const clean = cleaner(PLACEHOLDER_KEY);
+  proc.onCrash(() => {
+    try {
+      write(clean.line(CRASH_LINE));
+    } catch {
+      // stderr may be closed too: the exit below still happens
+    }
+    proc.exit(1);
+  });
+}
+
+if (isEntryModule(process.argv[1], import.meta.url)) {
+  guardCrashes(realProcess, (line) => {
+    process.stderr.write(`${line}\n`);
+  });
   process.exitCode = await evalMain(process.argv.slice(2));
 }

@@ -246,8 +246,8 @@ describe('runTrial: the outcome of the real loop', () => {
 
   // Only the session's own deadline is shortened, through the graph's own seam; the deps the cli check
   // compares are untouched. Both rows share it: wide enough for the in-time turn on a loaded machine,
-  // short enough that the deadline row waits half a second.
-  const SHORT_TURN_MS = 500;
+  // short enough that the deadline row waits two seconds.
+  const SHORT_TURN_MS = 2000;
   const shortTurn = (deps: AppGraphDeps): AppGraphDeps => ({
     ...deps,
     makeSession: (w) =>

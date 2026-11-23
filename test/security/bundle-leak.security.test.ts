@@ -122,8 +122,8 @@ function readEvalInputs(): EvalInputs {
 // - The quote is the one needing the fewest escapes (a double quote counts against a double-quoted literal,
 //   a single quote against a single-quoted one, a backtick or a ${ against a backtick one; a tie goes to the
 //   double quote, then the single, then the backtick), and a source template literal stays a backtick
-//   literal. The quote comes from the whole literal, not from the text it holds, so there is one spelling
-//   per quote and evalLeaks looks for each.
+//   literal. The quote comes from the whole literal, not from the text it holds, so a text has up to three
+//   spellings per quote (one for each ending in FOLLOWING below) and evalLeaks looks for each.
 // - A backslash is written as two, and the quote of the literal is escaped with a backslash; the other two
 //   quotes are raw. A ${ is escaped as \${ in a backtick literal only.
 // - A line feed is \n, but raw in a backtick literal; a carriage return is \r. NUL is \0 (\x00 before a

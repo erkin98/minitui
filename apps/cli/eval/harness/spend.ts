@@ -182,8 +182,10 @@ export function createSpendMeter(args: {
   readonly maxOutputTokens: number; // MAX_OUTPUT_TOKENS, imported from the cli
 }): SpendMeter {
   const { capUsd, prices, maxOutputTokens } = args;
-  // The meter's own inputs are the caller's code, not user input, so one out of range is a bug. A rate of
-  // zero would make every worst case zero and switch the cap off, so the rates face the loader's own test.
+  // The meter's own inputs are the caller's code, not user input, so one out of range is a bug. The rates
+  // face the loader's own test, so the two never disagree about a table. Only input, cacheWrite and output
+  // are in a worst case (the larger of the first two prices the input tokens), so a zero there can make the
+  // bound too small; cacheRead is in none, and is refused for parity with the loader.
   for (const [name, value] of [
     ['capUsd', capUsd],
     ['maxOutputTokens', maxOutputTokens],

@@ -177,11 +177,13 @@ describe('a dry run of a three-case set', () => {
     expect(report).toContain('## Failed trials');
     // the comparison counts the one regression case of the three selected, not the capability cases
     expect(report).toContain(
-      '- 0 of 1 regression cases left the paired comparison (fewer than 1 outcome trials in an arm).',
+      '- 0 of 1 regression cases left the paired comparison (fewer than 1 outcome trial in an arm).',
     );
     expect(out[0]).toMatch(new RegExp(`^run ${RUN_ID}: dry lane, 3 cases`));
     expect(out.filter((line) => /^\d+\/6 /.test(line))).toHaveLength(6);
     expect(out.at(-1)).toBe(`report: ${join(run.runDir, 'report.md')}`);
+    // no meter on the dry lane, so no total to print
+    expect(out.filter((line) => line.startsWith('spend:'))).toEqual([]);
   });
 });
 
@@ -258,7 +260,7 @@ describe('the replay lane under its cap', () => {
     expect(replay.requests()).toBe(0);
     const rows = rowsIn(run.runDir);
     expect(rows.map((r) => [r.caseId, r.stop])).toEqual([['merge-hand-run', 'spend-cap']]);
-    expect(out).toContain('the spend cap refused a request: 1 trials ran');
+    expect(out).toContain('the spend cap refused a request: 1 trial ran');
   });
 
   it('the control: under the default cap both trials run and reach the replaying fetch', async () => {
@@ -284,9 +286,9 @@ describe('the replay lane under its cap', () => {
   describe('a cap that stops the run partway', () => {
     // Each trial reports 60,000 output tokens, so it settles at about $0.60 whatever the size of its
     // request. A request's worst case is 64,000 output tokens at $10 per million and its body at $4 per
-    // million: about $0.72 for the 19 KB bodies here, and under $1.10 for any body up to 115 KB. A $1.70 cap
-    // holds the first case's two trials (the second after $0.60 is spent) and refuses the next request
-    // after $1.20.
+    // million: about $0.72 for the 19 KB bodies here, and under $1.10 for any body up to 115 KB. A $4 cap
+    // holds the first case's six trials (three in each arm, the sixth after $3.00 is spent) and refuses the
+    // next request after $3.60.
     const SPENDING = spendingReplay({ inputTokens: 1, outputTokens: 60_000 });
     const THREE = ['merge-hand-run', 'merge-trip-days', 'merge-xyz-bare'].map(committedCase);
     const comparisonLine = (runDir: string): string | undefined =>
@@ -296,37 +298,52 @@ describe('the replay lane under its cap', () => {
 
     it('the case it cut and the case it never reached are both excluded, and the rule is not applied', async () => {
       const run = setup(THREE);
+      const { deps, out } = testDeps({ providers: SPENDING });
       const code = await evalMain(
-        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '1', '--cap-usd', '1.7'),
-        testDeps({ providers: SPENDING }).deps,
+        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '3', '--cap-usd', '4'),
+        deps,
       );
       expect(code).toBe(0);
-      // the first case ran both arms, the second ended on the cap, the third has no row at all
-      expect(rowsIn(run.runDir).map((r) => [r.caseId, r.arm, r.stop])).toEqual([
-        ['merge-hand-run', 'effort-high', 'valid'],
-        ['merge-hand-run', 'effort-medium', 'valid'],
-        ['merge-trip-days', 'effort-medium', 'spend-cap'],
+      // the first case ran three trials in both arms, the second ended on the cap, the third has no row
+      expect(rowsIn(run.runDir).map((r) => [r.caseId, r.arm, r.trial, r.stop])).toEqual([
+        ['merge-hand-run', 'effort-high', 1, 'valid'],
+        ['merge-hand-run', 'effort-medium', 1, 'valid'],
+        ['merge-hand-run', 'effort-medium', 2, 'valid'],
+        ['merge-hand-run', 'effort-high', 2, 'valid'],
+        ['merge-hand-run', 'effort-high', 3, 'valid'],
+        ['merge-hand-run', 'effort-medium', 3, 'valid'],
+        ['merge-trip-days', 'effort-medium', 1, 'spend-cap'],
       ]);
       expect(comparisonLine(run.runDir)).toBe(
-        '- 2 of 3 regression cases left the paired comparison (fewer than 1 outcome trials in an arm): merge-trip-days, merge-xyz-bare; 1 of them never ran.',
+        '- 2 of 3 regression cases left the paired comparison (fewer than 3 outcome trials in an arm): merge-trip-days, merge-xyz-bare; 1 of them never ran.',
       );
       expect(readFileSync(join(run.runDir, 'report.md'), 'utf8')).toContain(
         '- Recommendation: not applied: 2 of 3 regression cases (more than 10.0%) left the paired comparison.',
       );
+      // the meter's own total: six settled trials, and the seventh refused before it held anything
+      expect(out.filter((line) => line.startsWith('spend:'))).toEqual([
+        'spend: $3.6000 committed, $0.0000 held, cap $4.0000; 7 trials written',
+      ]);
     });
 
     it('the control: under a cap that holds every trial, all three cases are paired and the rule is applied', async () => {
       const run = setup(THREE);
+      const { deps, out } = testDeps({ providers: SPENDING });
       const code = await evalMain(
-        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '1', '--cap-usd', '5'),
-        testDeps({ providers: SPENDING }).deps,
+        replayArgs(run.path, run.out, '--arms', 'medium,high', '--trials', '3', '--cap-usd', '12'),
+        deps,
       );
       expect(code).toBe(0);
-      expect(rowsIn(run.runDir)).toHaveLength(6);
+      expect(rowsIn(run.runDir)).toHaveLength(18);
       expect(comparisonLine(run.runDir)).toBe(
-        '- 0 of 3 regression cases left the paired comparison (fewer than 1 outcome trials in an arm).',
+        '- 0 of 3 regression cases left the paired comparison (fewer than 3 outcome trials in an arm).',
       );
       expect(readFileSync(join(run.runDir, 'report.md'), 'utf8')).not.toContain('not applied');
+      // eighteen settled trials at $0.600004; the total is printed before the last line, which names the report
+      expect(out.at(-2)).toBe(
+        'spend: $10.8001 committed, $0.0000 held, cap $12.0000; 18 trials written',
+      );
+      expect(out.at(-1)).toBe(`report: ${join(run.runDir, 'report.md')}`);
     });
   });
 });
@@ -356,6 +373,35 @@ describe('a run abort', () => {
     );
     // no report for a run that did not end
     expect(filesIn(run.runDir)).not.toContain('report.md');
+  });
+
+  it('the meter’s own total is printed when the run stops: after one settled attempt, and after two', async () => {
+    // every attempt reports 60,000 output tokens and settles at about $0.60, so the total says how many
+    // the meter saw; the trial that aborts leaves no row, but its attempt is in the total
+    const stopFrom = async (firstDropped: number) => {
+      const run = setup(TWO);
+      let trials = 0;
+      const { deps, out } = testDeps({
+        providers: spendingReplay({ inputTokens: 1, outputTokens: 60_000 }),
+        graphDiagnostics: (port) => {
+          trials += 1;
+          return trials < firstDropped ? port : droppingStepRecord(port);
+        },
+      });
+      const code = await evalMain(
+        replayArgs(run.path, run.out, '--arms', 'medium', '--trials', '1', '--cap-usd', '5'),
+        deps,
+      );
+      return { code, spend: out.filter((line) => line.startsWith('spend:')) };
+    };
+    expect(await stopFrom(1)).toEqual({
+      code: 1,
+      spend: ['spend: $0.6000 committed, $0.0000 held, cap $5.0000; 0 trials written'],
+    });
+    expect(await stopFrom(2)).toEqual({
+      code: 1,
+      spend: ['spend: $1.2000 committed, $0.0000 held, cap $5.0000; 1 trial written'],
+    });
   });
 
   it('the control: the record kept, both trials complete', async () => {

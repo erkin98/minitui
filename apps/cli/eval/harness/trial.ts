@@ -427,18 +427,12 @@ export async function runTrial(args: TrialArgs): Promise<TrialObservation> {
     spec: null,
     abort: null,
   };
-  const statusUpdates: Array<{ attempt: number; tokens?: number | undefined }> = [];
   const observed: RunAppGraph = {
     ...graph,
     host: recordingHost((spec) => {
       rec.spec = spec;
     }),
-    mountStatus: () => ({
-      update: (status) => {
-        statusUpdates.push(status);
-      },
-      unmount: () => {},
-    }),
+    mountStatus: () => ({ update: () => {}, unmount: () => {} }),
     agentPort: { run: (input) => openAttempt(rec, () => graph.agentPort.run(input)) },
     validate: observeValidation(rec, graph.validate),
   };

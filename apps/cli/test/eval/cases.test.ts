@@ -115,6 +115,11 @@ describe('the case loader', () => {
     ['a file name with a backslash', () => parse([{ ...BASE, files: ['a\\b.mp4'] }]), /file name/],
     ['a file name with ..', () => parse([{ ...BASE, files: ['..', 'b.mp4'] }]), /file name/],
     [
+      'a file name listed twice',
+      () => parse([{ ...BASE, files: ['a.mp4', 'b.mp4', 'a.mp4'] }]),
+      /^case 1: files: a file name is listed twice$/,
+    ],
+    [
       'a file name with a control character',
       () => parse([{ ...BASE, files: [`a${String.fromCharCode(27)}.mp4`] }]),
       /file name/,
@@ -263,6 +268,31 @@ describe('the case loader', () => {
     expect(load).toThrow(message);
   });
 
+  describe('a line of the case file that is not JSON', () => {
+    const load = (text: string) =>
+      parseCaseSet(text, { systemPrompt: PROMPT, readReference: () => MERGE_REFERENCE });
+    const SECOND = line({ ...BASE, id: 'merge-two-again' });
+
+    it('the header: refused with its line number, and no text of the line', () => {
+      expect(() => load('{"status":\n')).toThrow(/^the case set header: line 1 is not valid JSON$/);
+    });
+
+    it('a case after a blank line: refused with the file’s own line number and its place among the cases', () => {
+      // line 1 the header, 2 blank, 3 the first case, 4 blank, 5 broken
+      const text = `${line(HEADER)}\n\n${line(BASE)}\n\n{"id":\n`;
+      expect(() => load(text)).toThrow(/^case 2: line 5 is not valid JSON$/);
+    });
+
+    it('a file with no lines has no header: line 1', () => {
+      expect(() => load('')).toThrow(/^the case set header: line 1 is not valid JSON$/);
+    });
+
+    it('the control: the same file with the broken line mended loads, blank lines and all', () => {
+      const text = `${line(HEADER)}\n\n${line(BASE)}\n\n${SECOND}\n`;
+      expect(load(text).cases.map((c) => c.id)).toEqual(['merge-two', 'merge-two-again']);
+    });
+  });
+
   it('takes no JSON pointer for an absolute path', () => {
     const pointers = patch(
       { op: 'add', path: '/root', value: 'list' },
@@ -305,11 +335,11 @@ describe('the case loader', () => {
 });
 
 describe('renderPatchText', () => {
-  it('replaces the placeholder inside string leaves only', () => {
+  it('replaces the placeholder wherever a string holds it, and leaves a non-string as it was', () => {
     const text = patch({
       op: 'add',
       path: '/state',
-      value: { [CASE_DIR]: `${CASE_DIR}/a.mp4`, n: 3, list: [CASE_DIR] },
+      value: { file: `${CASE_DIR}/a.mp4`, n: 3, list: [CASE_DIR], ok: true },
     });
     const [rendered] = renderPatchText(text, '/run/c01')
       .trimEnd()
@@ -318,8 +348,36 @@ describe('renderPatchText', () => {
     expect(rendered).toEqual({
       op: 'add',
       path: '/state',
-      value: { [CASE_DIR]: '/run/c01/a.mp4', n: 3, list: ['/run/c01'] },
+      value: { file: '/run/c01/a.mp4', n: 3, list: ['/run/c01'], ok: true },
     });
+  });
+
+  it.each([
+    ['$&', '/run/$&/c01'],
+    ['$`', '/run/$`/c01'],
+    ["$'", "/run/$'/c01"],
+    ['$1 and $$', '/run/$1/$$/c01'],
+  ])(
+    'a directory holding %s is written as it is, never read as a replacement pattern',
+    (_what, dir) => {
+      const [first] = renderPatchText(
+        patch({ op: 'add', path: '/state', value: { inputs: [`${CASE_DIR}/a.mp4`] } }),
+        dir,
+      )
+        .trimEnd()
+        .split('\n')
+        .map((l) => JSON.parse(l));
+      expect(first).toEqual({ op: 'add', path: '/state', value: { inputs: [`${dir}/a.mp4`] } });
+    },
+  );
+
+  it('a case value holding $& beside the placeholder is copied as it is', () => {
+    const value = { label: `$& ${CASE_DIR}/a.mp4 $'` };
+    const [first] = renderPatchText(patch({ op: 'add', path: '/state', value }), '/run/c01')
+      .trimEnd()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(first).toEqual({ op: 'add', path: '/state', value: { label: "$& /run/c01/a.mp4 $'" } });
   });
 
   it('keeps every line whole when the directory holds a quote, a backslash or a newline', () => {

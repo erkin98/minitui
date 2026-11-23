@@ -52,6 +52,8 @@ export async function buildAppGraph(deps: AppGraphDeps): Promise<AppGraph> {
     createSandbox: deps.createSandbox,
     capabilities: deps.capabilities,
   });
+  // The eval's case loader (eval/main.ts, systemPromptFor) composes the same prompt to check case text
+  // against it: change the two together.
   const systemPrompt = composeSystemPrompt(
     buildCatalogPrompt(videoMergeCatalog),
     deps.workingDirectory,
