@@ -293,3 +293,24 @@ describe('gapHidesWord', () => {
     expect(gapHidesWord([], '')).toBe(false);
   });
 });
+
+describe('gapHidesWord next to a redirect', () => {
+  const at = (startIndex: number, endIndex: number, type: string) => ({
+    startIndex,
+    endIndex,
+    type,
+  });
+  it('allows an empty gap or spaces next to a redirect', () => {
+    expect(gapHidesWord([at(0, 7, 'command'), at(7, 11, 'file_redirect')], 'echo hi>out')).toBe(
+      false,
+    );
+    expect(
+      gapHidesWord([at(0, 3, 'variable_assignment'), at(4, 8, 'file_redirect')], 'X=1 >out'),
+    ).toBe(false);
+  });
+  it('refuses an escaped space next to a redirect', () => {
+    expect(
+      gapHidesWord([at(0, 7, 'command'), at(9, 19, 'file_redirect')], 'sudo -p \\ >/dev/null'),
+    ).toBe(true);
+  });
+});

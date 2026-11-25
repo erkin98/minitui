@@ -43,6 +43,28 @@ export function argumentNodes(root: SyntaxNode): SyntaxNode[] {
   return argumentLists(root).flat();
 }
 
+// The spacing lists of the tree: what the shell separates by blanks, in source order, redirects
+// included as entries. Each command's children (its redirects among them), each redirected statement's
+// body and trailing redirects, and each redirect's destinations. The gap check runs over these, so an
+// escaped space just before a redirect is seen (`sudo -p \ >/dev/null rm -rf ~`), and a leading
+// redirect between an assignment and the command name is an entry, not hidden text (`X=1 >out ls`).
+export function spacingLists(root: SyntaxNode): SyntaxNode[][] {
+  const lists: SyntaxNode[][] = [];
+  const visit = (node: SyntaxNode): void => {
+    if (isSubstitution(node)) return;
+    if (node.type === 'command') lists.push(childrenOf(node));
+    else if (node.type === 'redirected_statement') lists.push(namedChildrenOf(node));
+    else if (node.type === REDIRECT_KIND) {
+      lists.push(
+        node.childrenForFieldName('destination').filter((c): c is SyntaxNode => c !== null),
+      );
+    }
+    for (const child of namedChildrenOf(node)) visit(child);
+  };
+  visit(root);
+  return lists;
+}
+
 // Whether two consecutive entries of one list touch: no byte between them. The shell reads two touching
 // pieces as one word; the grammar can hand them over as two arguments (`'r'\m`, `~/.ss[\h]/x`), and the
 // floor would then decide on words the shell never runs. A `concatenation` is one entry, so the grammar's
@@ -65,9 +87,11 @@ export function touchingWords(
 // Whether the source text between two consecutive entries of one list holds anything but spaces and tabs.
 // The grammar takes an escaped space or tab (`\ `) as whitespace and gives it no node, though the shell
 // passes it as a word: `sudo -p \  rm -rf ~` runs `rm -rf ~` with a one-space prompt, while the argv
-// would read `sudo -p rm -rf ~`. An empty gap (the touching case) is refused here too. Node indexes are
-// positions in the JS string the tree was parsed from, so the gap is a plain slice of it.
+// would read `sudo -p rm -rf ~`. Between two words the gap needs at least one blank, so an empty gap (the
+// touching case) is refused here too; next to a redirect it may be empty (`echo hi>out`, `<in>out cmd`).
+// Node indexes are positions in the JS string the tree was parsed from, so the gap is a plain slice of it.
 const PLAIN_GAP = /^[ \t]+$/;
+const REDIRECT_GAP = /^[ \t]*$/;
 
 export function gapHidesWord(
   spans: readonly {
@@ -81,16 +105,21 @@ export function gapHidesWord(
     const prev = spans[i - 1];
     const next = spans[i];
     if (prev === undefined || next === undefined) continue;
-    if (!PLAIN_GAP.test(source.slice(prev.endIndex, next.startIndex))) return true;
+    const besideRedirect = prev.type === REDIRECT_KIND || next.type === REDIRECT_KIND;
+    const gap = source.slice(prev.endIndex, next.startIndex);
+    if (!(besideRedirect ? REDIRECT_GAP : PLAIN_GAP).test(gap)) return true;
   }
   return false;
 }
 
-// Whether any argument list of the tree holds two entries that touch, or that have anything but spaces and
-// tabs between them: either way the floor would read other words than the shell runs, so the command is
-// refused. `source` is the text the tree was parsed from.
+// Whether two words of one argument list touch, or any spacing list holds a gap with anything but spaces
+// and tabs: either way the floor would read other words than the shell runs, so the command is refused.
+// `source` is the text the tree was parsed from.
 export function hasHiddenWords(root: SyntaxNode, source: string): boolean {
-  return argumentLists(root).some((list) => touchingWords(list) || gapHidesWord(list, source));
+  return (
+    argumentLists(root).some(touchingWords) ||
+    spacingLists(root).some((list) => gapHidesWord(list, source))
+  );
 }
 
 // The nodes the collector failed to account for: an argument-position node owned by no root or by

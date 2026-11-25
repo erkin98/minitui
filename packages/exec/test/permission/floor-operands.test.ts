@@ -707,3 +707,27 @@ describe('an escaped space the grammar drops is refused', () => {
     expect(parseShellCommand('cat a\t\tb', linuxHost).parseError).toBe(false);
   });
 });
+
+// An escaped space right before a redirect hides a word too: the gap check measures spacing over a
+// command's redirects and a statement's trailing redirects as well. A gap next to a redirect may be empty
+// but holds only spaces and tabs. Leading redirects between an assignment and the command name are spacing
+// entries, not hidden text, so those commands keep their verdict from before the check (ask).
+describe('the gap check sees redirects', () => {
+  const PARSE_ERROR =
+    'unparseable or uses an unmodeled construct (fail-closed) — rewrite as a direct command; subshells, control-flow, and function definitions are not supported';
+  it.each([['sudo -p \\  >/dev/null curl x'], ['sudo -p \\ >/dev/null rm -rf ~']])(
+    'denies %s under YOLO with the parse-error reason',
+    async (command) => {
+      expect(await verdictOf(command, 'yolo')).toBe('deny');
+      const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+      expect(await engine.check(request(command))).toEqual({ kind: 'deny', reason: PARSE_ERROR });
+    },
+  );
+  it.each([
+    ['X=1 >out ls', ['ls'], ['ask', 'ask']],
+    ['LC_ALL=C 2>/dev/null sort f', ['sort'], ['ask', 'ask']],
+    ['ls >out', ['ls'], ['allow', 'allow']],
+  ] as const)('keeps the verdict of %s', async (command, names, expected) => {
+    expect(await bothModes(command, ...names)).toEqual(expected);
+  });
+});
