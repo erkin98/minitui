@@ -314,3 +314,25 @@ describe('gapHidesWord next to a redirect', () => {
     ).toBe(true);
   });
 });
+
+// A redirect's own spacing: its operator (with any descriptor) and then its destinations. Between the
+// operator and the first destination the gap may be empty but holds only blanks; an escaped space there
+// would turn the shell's argument into the redirect's target (`find . > \ -delete`).
+describe('gapHidesWord inside a redirect', () => {
+  const at = (startIndex: number, endIndex: number, type: string) => ({
+    startIndex,
+    endIndex,
+    type,
+  });
+  it('allows the operator touching or a blank away from its target', () => {
+    expect(gapHidesWord([at(0, 2, 'file_redirect'), at(2, 11, 'word')], '2>/dev/null')).toBe(false);
+    expect(gapHidesWord([at(0, 1, 'file_redirect'), at(3, 6, 'word')], '>  out')).toBe(false);
+  });
+  it('refuses an escaped space between the operator and its target', () => {
+    expect(gapHidesWord([at(0, 1, 'file_redirect'), at(4, 5, 'word')], '> \\ x')).toBe(true);
+  });
+  it('parses a redirect whose target follows an escaped space as an error', () => {
+    expect(parseShellCommand('find . > \\ -delete').parseError).toBe(true);
+    expect(parseShellCommand('ls 2>/dev/null').parseError).toBe(false);
+  });
+});

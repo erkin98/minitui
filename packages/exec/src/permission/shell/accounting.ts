@@ -43,22 +43,40 @@ export function argumentNodes(root: SyntaxNode): SyntaxNode[] {
   return argumentLists(root).flat();
 }
 
+// One entry of a spacing list: a node, or the opening of a redirect (its descriptor and operator).
+interface Span {
+  readonly startIndex: number;
+  readonly endIndex: number;
+  readonly type: string;
+}
+
+// A redirect's own spacing list: its opening (descriptor and operator, as one entry typed as a redirect,
+// so the gap after it may be empty) and then its destinations. An escaped space between the operator and
+// the first destination would otherwise turn the shell's argument into the redirect's target
+// (`find . > \ -delete` runs `find . -delete` with output to a file named by the escaped space).
+function redirectSpacing(node: SyntaxNode): Span[] {
+  const destinations = node
+    .childrenForFieldName('destination')
+    .filter((c): c is SyntaxNode => c !== null);
+  const first = destinations[0];
+  const openEnd = childrenOf(node)
+    .filter((child) => first === undefined || child.endIndex <= first.startIndex)
+    .reduce((end, child) => Math.max(end, child.endIndex), node.startIndex);
+  return [{ startIndex: node.startIndex, endIndex: openEnd, type: REDIRECT_KIND }, ...destinations];
+}
+
 // The spacing lists of the tree: what the shell separates by blanks, in source order, redirects
 // included as entries. Each command's children (its redirects among them), each redirected statement's
-// body and trailing redirects, and each redirect's destinations. The gap check runs over these, so an
+// body and trailing redirects, and each redirect's opening and destinations. The gap check runs over these, so an
 // escaped space just before a redirect is seen (`sudo -p \ >/dev/null rm -rf ~`), and a leading
 // redirect between an assignment and the command name is an entry, not hidden text (`X=1 >out ls`).
-export function spacingLists(root: SyntaxNode): SyntaxNode[][] {
-  const lists: SyntaxNode[][] = [];
+export function spacingLists(root: SyntaxNode): Span[][] {
+  const lists: Span[][] = [];
   const visit = (node: SyntaxNode): void => {
     if (isSubstitution(node)) return;
     if (node.type === 'command') lists.push(childrenOf(node));
     else if (node.type === 'redirected_statement') lists.push(namedChildrenOf(node));
-    else if (node.type === REDIRECT_KIND) {
-      lists.push(
-        node.childrenForFieldName('destination').filter((c): c is SyntaxNode => c !== null),
-      );
-    }
+    else if (node.type === REDIRECT_KIND) lists.push(redirectSpacing(node));
     for (const child of namedChildrenOf(node)) visit(child);
   };
   visit(root);

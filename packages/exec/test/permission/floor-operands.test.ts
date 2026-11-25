@@ -715,18 +715,22 @@ describe('an escaped space the grammar drops is refused', () => {
 describe('the gap check sees redirects', () => {
   const PARSE_ERROR =
     'unparseable or uses an unmodeled construct (fail-closed) — rewrite as a direct command; subshells, control-flow, and function definitions are not supported';
-  it.each([['sudo -p \\  >/dev/null curl x'], ['sudo -p \\ >/dev/null rm -rf ~']])(
-    'denies %s under YOLO with the parse-error reason',
-    async (command) => {
-      expect(await verdictOf(command, 'yolo')).toBe('deny');
-      const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
-      expect(await engine.check(request(command))).toEqual({ kind: 'deny', reason: PARSE_ERROR });
-    },
-  );
+  it.each([
+    ['sudo -p \\  >/dev/null curl x'],
+    ['sudo -p \\ >/dev/null rm -rf ~'],
+    ['find . > \\ -delete'],
+    ['cat 2> \\ x'],
+  ])('denies %s under YOLO with the parse-error reason', async (command) => {
+    expect(await verdictOf(command, 'yolo')).toBe('deny');
+    const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+    expect(await engine.check(request(command))).toEqual({ kind: 'deny', reason: PARSE_ERROR });
+  });
   it.each([
     ['X=1 >out ls', ['ls'], ['ask', 'ask']],
     ['LC_ALL=C 2>/dev/null sort f', ['sort'], ['ask', 'ask']],
     ['ls >out', ['ls'], ['allow', 'allow']],
+    ['ls >  out', ['ls'], ['allow', 'allow']],
+    ['ls 2>/dev/null', ['ls'], ['allow', 'allow']],
   ] as const)('keeps the verdict of %s', async (command, names, expected) => {
     expect(await bothModes(command, ...names)).toEqual(expected);
   });
