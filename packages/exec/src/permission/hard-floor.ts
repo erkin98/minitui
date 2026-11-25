@@ -43,6 +43,7 @@ const EGRESS = new Set([
   'socat',
   'openssl',
   'ftp',
+  'tftp',
   'rsh',
 ]);
 

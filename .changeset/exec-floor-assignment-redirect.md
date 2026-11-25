@@ -1,0 +1,5 @@
+---
+'@minitui/exec': patch
+---
+
+The hard floor now reads the value of an assignment on a redirect that has no command, so `X=~/.ssh/id_rsa; > $X` and `T=/dev/tcp/host/80; > $T` are denied in every approval mode, as a direct `> ~/.ssh/id_rsa` already was. The shell extractor refuses a command (a parse error, denied in every mode) when two words of one command or one redirect touch, when anything but spaces and tabs separates them (an escaped space the grammar drops), when a command holds a lone `$`, `==` or `=~` among its words, or when an assignment value or a bare redirect target spans lines; in each case the words the floor would check are not the words the shell runs. Under a changed root (`chroot NEWROOT`, `sudo -R`/`--chroot`, `unshare -R`/`--root`) every `rm` operand, absolute or relative, makes the command ask in every mode, because each path names a place inside the new root; a changed working directory keeps the earlier rule (relative operands only). `tftp` joins the egress names that are denied by name. One command that asked before is now denied: `cat ~/.ss[\h]/known_hosts`. No export changes.

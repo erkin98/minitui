@@ -114,9 +114,12 @@ interface Unwrapped {
   readonly peeled: readonly PeeledWrapper[];
   // an assignment word the peel skipped (`env PATH=/tmp/evil ffmpeg`): it changes what the inner command runs
   readonly skippedAssignment: boolean;
-  // a wrapper's own option gave the wrapped command another working directory or another root, so a
-  // relative operand of that command names a place the host cannot see
+  // a wrapper's own option gave the wrapped command another working directory, so a relative operand of
+  // that command names a place the host cannot see
   readonly setsDirectory: boolean;
+  // a wrapper gave the wrapped command another root (`chroot NEWROOT`, `sudo -R`, `unshare -R`), so every
+  // operand of that command, absolute or relative, names a place inside the new root
+  readonly setsRoot: boolean;
   readonly opaque: boolean;
 }
 
@@ -271,36 +274,47 @@ const LEADING_POSITIONALS: Record<string, number> = { timeout: 1, chroot: 1 };
 const SKIPS_ASSIGNMENTS: ReadonlySet<string> = new Set(['env', 'sudo']);
 const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-// The options that give the wrapped command another working directory or another root. For `sudo` the
-// letter `-C` is `--close-from`, which changes no directory, so only `env` lists it.
+// The options that give the wrapped command another working directory. For `sudo` the letter `-C` is
+// `--close-from`, which changes no directory, so only `env` lists it.
 const DIRECTORY_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   env: new Set(['-C', '--chdir']),
-  sudo: new Set(['-D', '--chdir', '-R', '--chroot']),
-  unshare: new Set(['-w', '--wd', '-R', '--root']),
+  sudo: new Set(['-D', '--chdir']),
+  unshare: new Set(['-w', '--wd']),
+};
+
+// The options that give the wrapped command another root. `chroot` takes its new root as a positional,
+// not as an option, so the peel flags it where it consumes that positional.
+const ROOT_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  sudo: new Set(['-R', '--chroot']),
+  unshare: new Set(['-R', '--root']),
 };
 
 interface OptionRead {
   // tokens the option takes, itself included
   readonly consumed: number;
   readonly unmodelled: boolean;
-  // the option sets the working directory or the root of the wrapped command
+  // the option sets the working directory of the wrapped command
   readonly directory: boolean;
+  // the option sets the root of the wrapped command
+  readonly root: boolean;
 }
 
 function readLongOption(
   opts: OptionTable,
   dirs: ReadonlySet<string> | undefined,
+  roots: ReadonlySet<string> | undefined,
   tok: string,
 ): OptionRead {
   const eq = tok.indexOf('=');
   const name = eq === -1 ? tok : tok.slice(0, eq);
   if (!opts.operand.has(name) && !opts.flags.has(name)) {
-    return { consumed: 1, unmodelled: true, directory: false };
+    return { consumed: 1, unmodelled: true, directory: false, root: false };
   }
   return {
     consumed: eq === -1 && opts.operand.has(name) ? 2 : 1,
     unmodelled: false,
     directory: dirs?.has(name) === true,
+    root: roots?.has(name) === true,
   };
 }
 
@@ -310,6 +324,7 @@ function readLongOption(
 function readShortCluster(
   opts: OptionTable,
   dirs: ReadonlySet<string> | undefined,
+  roots: ReadonlySet<string> | undefined,
   tok: string,
 ): OptionRead {
   for (let k = 1; k < tok.length; k++) {
@@ -319,22 +334,26 @@ function readShortCluster(
         consumed: k === tok.length - 1 ? 2 : 1,
         unmodelled: false,
         directory: dirs?.has(opt) === true,
+        root: roots?.has(opt) === true,
       };
     }
-    if (!opts.flags.has(opt)) return { consumed: 1, unmodelled: true, directory: false };
+    if (!opts.flags.has(opt)) {
+      return { consumed: 1, unmodelled: true, directory: false, root: false };
+    }
   }
-  return { consumed: 1, unmodelled: false, directory: false };
+  return { consumed: 1, unmodelled: false, directory: false, root: false };
 }
 
 function readOption(runner: string, tok: string): OptionRead {
   const opts = OPTIONS[runner];
-  if (opts === undefined) return { consumed: 1, unmodelled: true, directory: false };
+  if (opts === undefined) return { consumed: 1, unmodelled: true, directory: false, root: false };
   const dirs = DIRECTORY_OPTIONS[runner];
-  if (tok.startsWith('--')) return readLongOption(opts, dirs, tok);
+  const roots = ROOT_OPTIONS[runner];
+  if (tok.startsWith('--')) return readLongOption(opts, dirs, roots, tok);
   if (runner === 'nice' && /^-[0-9]+$/.test(tok)) {
-    return { consumed: 1, unmodelled: false, directory: false };
+    return { consumed: 1, unmodelled: false, directory: false, root: false };
   }
-  return readShortCluster(opts, dirs, tok);
+  return readShortCluster(opts, dirs, roots, tok);
 }
 
 // Skip an arg-runner's own options — and, for an option that takes an operand, its operand token —
@@ -349,11 +368,15 @@ function innerStart(
   readonly unmodelled: boolean;
   readonly skipped: boolean;
   readonly directory: boolean;
+  readonly root: boolean;
+  // how many leading positionals were consumed (`chroot`'s NEWROOT, `timeout`'s DURATION)
+  readonly positionals: number;
 } {
   let i = 0;
   let unmodelled = false;
   let skipped = false;
   let directory = false;
+  let root = false;
   while (i < rest.length) {
     const tok = rest[i]!;
     if (SKIPS_ASSIGNMENTS.has(runner) && ASSIGNMENT_WORD.test(tok)) {
@@ -373,11 +396,11 @@ function innerStart(
     const option = readOption(runner, tok);
     unmodelled ||= option.unmodelled;
     directory ||= option.directory;
+    root ||= option.root;
     i += option.consumed;
   }
-  const positionals = LEADING_POSITIONALS[runner] ?? 0;
-  for (let p = 0; p < positionals && i < rest.length; p++) i++;
-  return { start: i, unmodelled, skipped, directory };
+  const positionals = Math.min(LEADING_POSITIONALS[runner] ?? 0, Math.max(rest.length - i, 0));
+  return { start: i + positionals, unmodelled, skipped, directory, root, positionals };
 }
 
 // `fold` makes the name matching case-insensitive, for a host whose file system is (darwin, win32).
@@ -387,6 +410,7 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
   let anyUnmodelled = false;
   let anySkipped = false;
   let anyDirectory = false;
+  let anyRoot = false;
   let cur = argv;
   // peel arg-runners until we reach a real command or an opaque spawner
   for (;;) {
@@ -401,12 +425,13 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
         peeled,
         skippedAssignment: anySkipped,
         setsDirectory: anyDirectory,
+        setsRoot: anyRoot,
         opaque: true,
       };
     }
     if (ARG_RUNNERS.has(head)) {
       const rest = cur.slice(1);
-      const { start, unmodelled, skipped, directory } = innerStart(head, rest);
+      const { start, unmodelled, skipped, directory, root, positionals } = innerStart(head, rest);
       const inner = rest.slice(start);
       if (inner.length === 0) {
         // wrapper with no inner command (e.g. bare `sudo`) — opaque, force ask
@@ -417,6 +442,7 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
           peeled,
           skippedAssignment: anySkipped,
           setsDirectory: anyDirectory,
+          setsRoot: anyRoot,
           opaque: true,
         };
       }
@@ -425,6 +451,8 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
       anyUnmodelled ||= unmodelled;
       anySkipped ||= skipped;
       anyDirectory ||= directory;
+      // `chroot NEWROOT cmd` changes the root once it has consumed its NEWROOT positional
+      anyRoot ||= root || (head === 'chroot' && positionals > 0);
       cur = inner;
       continue;
     }
@@ -437,6 +465,7 @@ export function unwrapArgv(argv: readonly string[], fold = false): Unwrapped {
       peeled,
       skippedAssignment: anySkipped,
       setsDirectory: anyDirectory,
+      setsRoot: anyRoot,
       opaque: anyUnmodelled,
     };
   }

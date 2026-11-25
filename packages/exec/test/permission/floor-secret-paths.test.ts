@@ -36,7 +36,7 @@ async function yoloVerdict(command: string): Promise<'allow' | 'deny' | 'ask'> {
     resolvedCommand: command,
     resolvedPaths: [],
   };
-  const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo' });
+  const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
   const pending = engine.check(request);
   const iter = engine.requests[Symbol.asyncIterator]();
   const first = await Promise.race([
@@ -53,7 +53,6 @@ async function yoloVerdict(command: string): Promise<'allow' | 'deny' | 'ask'> {
 let savedXdg: string | undefined;
 beforeEach(() => {
   savedXdg = process.env.XDG_DATA_HOME;
-  delete process.env.XDG_DATA_HOME;
 });
 afterEach(() => {
   if (savedXdg === undefined) delete process.env.XDG_DATA_HOME;
@@ -109,6 +108,10 @@ describe('the store directory is a secret location for the floor', () => {
     const host = { ...linuxHost, store: storeDir({}, linuxHost.home) };
     expect(onHost(host, 'echo x > ~/.local/share/minitui/grants.json')).toBe(true);
     expect(onHost(host, 'echo x > /elsewhere/minitui/grants.json')).toBe(false);
+  });
+  it('the engine reads the store from its injected host, not from the process environment', async () => {
+    process.env.XDG_DATA_HOME = '/elsewhere';
+    expect(await yoloVerdict('echo x > ~/.local/share/minitui/grants.json')).toBe('deny');
   });
   it('leaves a sibling directory and the parent alone', () => {
     expect(blocked('ls ~/.local/share')).toBe(false);
@@ -291,6 +294,7 @@ async function grantedVerdict(command: string, word: string): Promise<'allow' | 
   const engine = createEngine({
     initialRules: { rules: [{ pattern: word, effect: 'allow', layer: 'user' }] },
     mode: 'default',
+    host: linuxHost,
   });
   const pending = engine.check(request);
   const iter = engine.requests[Symbol.asyncIterator]();
@@ -328,5 +332,38 @@ describe('more secret file names are floored in every mode', () => {
   });
   it('lets a command with no secret name through under a grant (control)', async () => {
     expect(await grantedVerdict('cat notes.txt', 'cat')).toBe('allow');
+  });
+});
+
+// The floor's reason for a command it denies under YOLO. Called only once the verdict is known to be a
+// deny, so the check never waits on a person.
+async function yoloReason(command: string): Promise<string | undefined> {
+  const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+  const decision = await engine.check({
+    id: `sr${counter++}`,
+    descriptor: { danger: false, resourceTemplate: command, summaryTemplate: command },
+    resolvedCommand: command,
+    resolvedPaths: [],
+  });
+  return decision.kind === 'deny' ? decision.reason : undefined;
+}
+
+// An assignment's value reaches the floor for every root that owns it, the root of a redirect with no
+// command included: the file such a redirect writes or reads is the value the shell substitutes.
+describe('a variable-held secret path on a bare redirect is denied in every mode', () => {
+  it.each([
+    ['X=~/.ssh/id_rsa; > $X', '>'],
+    ['X=~/.ssh/id_rsa; >> $X', '>>'],
+    ['X=~/.ssh/id_rsa; < $X', '<'],
+    ['X=~/.ssh/id_rsa && > $X', '>'],
+    ['A=1; X=~/.ssh/id_rsa; > $X', '>'],
+  ])('denies %s under YOLO and under a grant for the operator', async (command, operator) => {
+    expect(await yoloVerdict(command)).toBe('deny');
+    expect(await grantedVerdict(command, operator)).toBe('deny');
+    expect(await yoloReason(command)).toBe('touching a secret file is never permitted');
+  });
+  it('keeps the verdicts of the controls', async () => {
+    expect(await yoloVerdict('X=/tmp/ok; > $X')).toBe('ask');
+    expect(await yoloVerdict('> ~/.ssh/id_rsa')).toBe('deny');
   });
 });

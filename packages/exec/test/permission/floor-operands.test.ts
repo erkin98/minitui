@@ -46,7 +46,7 @@ async function verdictOf(
   mode: 'yolo' | 'default',
   rules: PermissionRule[] = [],
 ): Promise<Kind> {
-  const engine = createEngine({ initialRules: { rules }, mode });
+  const engine = createEngine({ initialRules: { rules }, mode, host: linuxHost });
   const pending = engine.check(request(command));
   const iter = engine.requests[Symbol.asyncIterator]();
   const first = await Promise.race([
@@ -376,7 +376,6 @@ describe('what cannot be resolved reaches the human', () => {
     ['ls ~/[abcdef]*', ['ls']],
     ['ls ~/[a-d]*', ['ls']],
     ['rm -rf /ho[a\\]m]e', ['rm']],
-    ['cat ~/.ss[\\h]/known_hosts', ['cat']],
     ['env PATH=/tmp/evil ffmpeg -i a.mp4 b.mp4', ['env', 'ffmpeg']],
     ['sudo PATH=/tmp/evil ffmpeg -i a.mp4 b.mp4', ['sudo', 'ffmpeg']],
   ];
@@ -606,5 +605,105 @@ describe('a relative delete after a change of directory or root asks', () => {
     ['sudo -R / rm -rf /home', ['sudo', 'rm'], ['deny', 'deny']],
   ] as const)('keeps the verdict of %s', async (command, names, expected) => {
     expect(await bothModes(command, ...names)).toEqual(expected);
+  });
+});
+
+// An assignment's value reaches the floor on the root of a redirect with no command: a device path held
+// in a variable is the file such a redirect opens.
+describe('a variable-held device path on a bare redirect is denied in every mode', () => {
+  const command = 'T=/dev/tcp/example.invalid/80; > $T';
+  it('denies it under YOLO and under a grant for the operator, with the device reason', async () => {
+    expect(await bothModes(command, '>')).toEqual(['deny', 'deny']);
+    const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+    const decision = await engine.check(request(command));
+    expect(decision).toEqual({
+      kind: 'deny',
+      reason: 'network access through a device path is never permitted',
+    });
+  });
+});
+
+// Under a changed root every path the inner command names is read inside the new root, so an absolute
+// rm operand is as unknowable as a relative one: the delete asks in every mode. The floor still runs
+// first, so a spelling it refuses stays a deny.
+describe('a delete under a changed root asks for every operand', () => {
+  it.each([
+    ['chroot / rm -rf home', ['chroot', 'rm']],
+    ['chroot /srv rm -rf ./x', ['chroot', 'rm']],
+    ['chroot /srv rm -rf /x', ['chroot', 'rm']],
+    ['sudo -R /srv rm -rf /x', ['sudo', 'rm']],
+    ['unshare -R /srv rm -rf /x', ['unshare', 'rm']],
+    ['chroot --userspec=u /srv rm -rf /x', ['chroot', 'rm']],
+  ] as const)('asks for %s in YOLO and under a grant for every name', async (command, names) => {
+    expect(await bothModes(command, ...names)).toEqual(['ask', 'ask']);
+  });
+  it.each([
+    ['chroot / rm -rf /home', ['chroot', 'rm'], ['deny', 'deny']],
+    ['sudo -R / rm -rf /home', ['sudo', 'rm'], ['deny', 'deny']],
+    ['chroot /srv ls x', ['chroot', 'ls'], ['allow', 'allow']],
+    ['chroot /new ls', ['chroot', 'ls'], ['allow', 'allow']],
+    ['env -C /srv rm -rf /x', ['env', 'rm'], ['allow', 'allow']],
+    ['sudo -u root rm -rf build', ['sudo', 'rm'], ['allow', 'allow']],
+  ] as const)('keeps the verdict of %s', async (command, names, expected) => {
+    expect(await bothModes(command, ...names)).toEqual(expected);
+  });
+});
+
+// Two word-like pieces with no byte between them are one word to the shell, but the grammar can hand them
+// over as two arguments, so the floor would decide on words the shell never runs. The extractor refuses
+// such a command (a parse error, denied in every mode). The inputs below are the 2026-11-12 audit
+// record's own; each was allowed under YOLO before the guard. The first row is the repository's own
+// case: it asked before (owner decision of 2026-11-25: it is now denied).
+describe('touching word-like pieces are refused', () => {
+  const PARSE_ERROR =
+    'unparseable or uses an unmodeled construct (fail-closed) — rewrite as a direct command; subshells, control-flow, and function definitions are not supported';
+  it.each([
+    ['cat ~/.ss[\\h]/known_hosts'],
+    ['cat $HOME/.s$1sh/config'],
+    ['cat "$HOME/.s"\\sh/config'],
+    ["cat < '/dev/t'\\cp/127.0.0.1/9"],
+    ["rm -rf '/ho'\\me/u"],
+    ["'r'\\m -rf ~"],
+    ["'cu'\\rl x"],
+    ["'b'\\ash -c 'id'"],
+    ['env -u $ curl x'],
+    ['sudo -p $ rm -rf ~'],
+    ["git 'pu'\\sh origin"],
+    ["git '-'\\c core.pager=id log"],
+  ])('denies %s under YOLO with the parse-error reason', async (command) => {
+    expect(await verdictOf(command, 'yolo')).toBe('deny');
+    const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+    expect(await engine.check(request(command))).toEqual({ kind: 'deny', reason: PARSE_ERROR });
+  });
+  it.each([
+    ["'ffmpeg' '-i' '/a b.mp4' '/o.mp4'", ['ffmpeg'], ['allow', 'allow']],
+    ['echo hi>out', ['echo'], ['allow', 'allow']],
+  ] as const)('keeps the verdict of %s', async (command, names, expected) => {
+    expect(await bothModes(command, ...names)).toEqual(expected);
+  });
+});
+
+// The grammar takes an escaped space as whitespace and gives it no node, but the shell passes it as a
+// one-space word: `sudo -p \  rm -rf ~` runs `rm -rf ~` with a one-space prompt, while the floor read
+// `sudo -p rm -rf ~`. Anything but spaces and tabs between two words refuses the command. Both rows were
+// allowed under YOLO before.
+describe('an escaped space the grammar drops is refused', () => {
+  const PARSE_ERROR =
+    'unparseable or uses an unmodeled construct (fail-closed) — rewrite as a direct command; subshells, control-flow, and function definitions are not supported';
+  it.each([['env -u \\  curl x'], ['sudo -p \\  rm -rf ~']])(
+    'denies %s under YOLO with the parse-error reason',
+    async (command) => {
+      expect(await verdictOf(command, 'yolo')).toBe('deny');
+      const engine = createEngine({ initialRules: { rules: [] }, mode: 'yolo', host: linuxHost });
+      expect(await engine.check(request(command))).toEqual({ kind: 'deny', reason: PARSE_ERROR });
+    },
+  );
+  it('keeps the verdict of a command whose words are a space apart (echo é x)', async () => {
+    expect(await bothModes('echo é x', 'echo')).toEqual(['allow', 'allow']);
+  });
+  // A tab is a control character, which the engine's canonical check refuses on its own, so the tab
+  // control is at the parse level, where the gap check runs.
+  it('parses words a tab apart without a parse error', () => {
+    expect(parseShellCommand('cat a\t\tb', linuxHost).parseError).toBe(false);
   });
 });

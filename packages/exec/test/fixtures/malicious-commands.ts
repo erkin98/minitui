@@ -515,6 +515,18 @@ export const MALICIOUS_COMMANDS = [
     expectedMessage: 'network access through a device path is never permitted',
   },
   {
+    label: 'variable-held secret path on a bare redirect',
+    command: 'X=~/.ssh/id_rsa; > $X',
+    expect: 'deny',
+    expectedMessage: 'touching a secret file is never permitted',
+  },
+  {
+    label: 'variable-held device path on a bare redirect',
+    command: 'T=/dev/tcp/example.invalid/80; > $T',
+    expect: 'deny',
+    expectedMessage: 'network access through a device path is never permitted',
+  },
+  {
     label: 'rm under a reassigned HOME',
     command: 'HOME=/home; rm -rf $HOME/x',
     expect: 'deny',

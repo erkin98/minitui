@@ -3,6 +3,7 @@ import { createEngine } from '../../src/permission/engine.js';
 import { ensureParserReady, setParseBudgetMsForTest } from '../../src/permission/shell/parser.js';
 import { parseShellCommand } from '../../src/permission/shell/roots.js';
 import { OPAQUE_SPAWNERS } from '../../src/permission/shell/wrappers.js';
+import { gapHidesWord, touchingWords } from '../../src/permission/shell/accounting.js';
 
 beforeAll(async () => {
   await ensureParserReady();
@@ -197,5 +198,98 @@ describe('the root of a relative delete after a change of directory or root is o
   it('marks only the wrapped root: env -C / ls home is not made opaque', () => {
     const roots = parseShellCommand('env -C / ls home').roots;
     expect(roots.find((r) => r.name === 'ls')?.opaque).toBeUndefined();
+  });
+});
+
+// A line break inside an assignment value or a redirect target is one word the shell reads differently
+// from the grammar, so the extractor refuses it in both branches, not only the engine's canonical check.
+describe('a line break in an assignment value or a bare redirect target is a parse error', () => {
+  it.each([["X='a\nb'; > f"], ["> 'a\nb'"], ["X='a\nb' ls"]])('refuses %j', (command) => {
+    expect(parseShellCommand(command).parseError).toBe(true);
+  });
+});
+
+// Under a changed root (`chroot NEWROOT`, `sudo -R`, `unshare -R`) the inner command reads every path
+// inside the new root, so `/x` names NEWROOT/x: every rm operand, absolute or relative, is opaque.
+describe('a changed root makes every rm operand opaque', () => {
+  const rmRoot = (command: string) => parseShellCommand(command).roots.find((r) => r.name === 'rm');
+  it.each([
+    ['chroot / rm -rf home'],
+    ['chroot /srv rm -rf ./x'],
+    ['chroot /srv rm -rf /x'],
+    ['sudo -R /srv rm -rf /x'],
+    ['unshare -R /srv rm -rf /x'],
+    ['chroot --userspec=u /srv rm -rf /x'],
+  ])('marks the rm of %s opaque', (command) => {
+    expect(rmRoot(command)?.opaque).toBe(true);
+  });
+  it('leaves a command other than rm under a changed root as it was', () => {
+    const roots = parseShellCommand('chroot /srv ls x').roots;
+    expect(roots.find((r) => r.name === 'ls')?.opaque).toBeUndefined();
+  });
+  it('leaves an absolute operand under a changed directory as it was', () => {
+    expect(rmRoot('env -C /srv rm -rf /x')?.opaque).toBeUndefined();
+  });
+});
+
+// Two entries of one argument list touch when no byte separates them. Plain spans, no parse tree.
+describe('touchingWords', () => {
+  const span = (startIndex: number, endIndex: number) => ({ startIndex, endIndex, type: 'word' });
+  it('is true for a touching pair', () => {
+    expect(touchingWords([span(0, 3), span(3, 5)])).toBe(true);
+    expect(touchingWords([span(0, 2), span(3, 5), span(5, 6)])).toBe(true);
+  });
+  it('is false for entries a byte apart, for one entry and for none', () => {
+    expect(touchingWords([span(0, 3), span(4, 5)])).toBe(false);
+    expect(touchingWords([span(0, 3)])).toBe(false);
+    expect(touchingWords([])).toBe(false);
+  });
+});
+
+describe('redirect nodes are never compared with a neighbour', () => {
+  it.each([['<in>out cmd'], ['2>/dev/null>out cmd a'], ['echo hi>out']])(
+    'parses %s without a parse error',
+    (command) => {
+      expect(parseShellCommand(command).parseError).toBe(false);
+    },
+  );
+});
+
+// The grammar gives a command three anonymous children: the lone `$`, `==` and `=~`. The walk reads named
+// children only, so each would vanish from argv and a wrapper option could then swallow the real command
+// (`env -u $ curl x` read as `env -u curl x`). The accounting counts every child of a command, so such a
+// token is a word no root owns: the command is a parse error.
+describe("an anonymous token among a command's words is a parse error", () => {
+  it.each([['echo $'], ['echo == x'], ['ls =~ y'], ['echo $"x"'], ['env -u $ curl x']])(
+    'refuses %s',
+    (command) => {
+      expect(parseShellCommand(command).parseError).toBe(true);
+    },
+  );
+  it.each([['echo a$'], ['echo "$"'], ['X=1 ls'], ['ls & echo']])(
+    'parses %s as before',
+    (command) => {
+      expect(parseShellCommand(command).parseError).toBe(false);
+    },
+  );
+});
+
+// Between two consecutive entries of one list the source must hold only spaces and tabs. The grammar takes
+// an escaped space (`\ `) as whitespace and gives it no node, though the shell passes it as a word, so a
+// gap holding anything else means a word was dropped.
+describe('gapHidesWord', () => {
+  const span = (startIndex: number, endIndex: number) => ({ startIndex, endIndex, type: 'word' });
+  it('passes a gap of spaces or tabs', () => {
+    expect(gapHidesWord([span(0, 3), span(4, 5)], 'cat a')).toBe(false);
+    expect(gapHidesWord([span(0, 3), span(5, 6)], 'cat\t\tb')).toBe(false);
+  });
+  it('refuses an escaped space, an empty gap and any other character', () => {
+    expect(gapHidesWord([span(0, 3), span(4, 6), span(10, 14)], 'env -u \\  curl')).toBe(true);
+    expect(gapHidesWord([span(0, 3), span(3, 5)], 'catab')).toBe(true);
+    expect(gapHidesWord([span(0, 3), span(5, 6)], 'cat;xb')).toBe(true);
+  });
+  it('passes one entry and none', () => {
+    expect(gapHidesWord([span(0, 3)], 'cat')).toBe(false);
+    expect(gapHidesWord([], '')).toBe(false);
   });
 });

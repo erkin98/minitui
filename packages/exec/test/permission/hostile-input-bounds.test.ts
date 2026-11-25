@@ -5,6 +5,7 @@ import { hasGlobOrBrace } from '../../src/permission/shell/names.js';
 import { hasBraceExpansion, textIsUnresolved } from '../../src/permission/shell/operands.js';
 import { ensureParserReady } from '../../src/permission/shell/parser.js';
 import { storeDir } from '../../src/permission/secret-paths.js';
+import { matchedRule } from '../../src/permission/rules.js';
 
 beforeAll(async () => {
   await ensureParserReady();
@@ -178,5 +179,21 @@ describe('the brace-expansion scan agrees with the form it replaced', () => {
     ['', false],
   ] as const)('reads %j as %s', (text, expected) => {
     expect(hasBraceExpansion(text)).toBe(expected);
+  });
+});
+
+describe('the multi-word deny matcher is linear in the command', () => {
+  // A deny written as several words scans every non-option token of the command when the contiguous
+  // match misses (`git x x ...` against `git push`). The cost must grow at most about linearly with the
+  // number of tokens.
+  const rules = { rules: [{ pattern: 'git push', effect: 'deny', layer: 'managed' }] } as const;
+  const command = (tokens: number): (() => unknown) => {
+    const value = 'git ' + 'x '.repeat(tokens);
+    return () => matchedRule(rules, value);
+  };
+  it('grows at most about linearly with the number of tokens', () => {
+    expect(command(8)()).toBeUndefined();
+    expect(command(8000)()).toBeUndefined();
+    expect(growth(command, 8000, 16)).toBeLessThan(64);
   });
 });

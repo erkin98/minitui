@@ -2,7 +2,7 @@ import type { ParsedCommand, CommandRoot } from '@minitui/types';
 import { freeTree, parseToTree, type SyntaxNode } from './parser.js';
 import { hasSubstitution } from './substitution.js';
 import { unwrapArgv, type PeeledWrapper } from './wrappers.js';
-import { unaccountedNodes } from './accounting.js';
+import { hasHiddenWords, unaccountedNodes } from './accounting.js';
 import { hasGlobOrBrace, hasLineBreak, isNonCommandName } from './names.js';
 import {
   hasRelativeOperand,
@@ -61,7 +61,8 @@ const ALLOWED_NODE_KINDS: ReadonlySet<string> = new Set([
 
 // True iff every NAMED node in the tree is a kind this file models. A dangerous construct always
 // introduces a NAMED node (subshell/compound_statement/arithmetic_expansion/…), so the named-node
-// allowlist is the tight fail-closed gate; anonymous operator/quote tokens need no check.
+// allowlist is the tight fail-closed gate. An anonymous token that stands as a word of a command (the
+// lone `$`, `==`, `=~`) is caught by the accounting instead (`accounting.ts`, `argumentLists`).
 function hasOnlyKnownNodes(node: SyntaxNode): boolean {
   if (node.isNamed && !ALLOWED_NODE_KINDS.has(node.type)) return false;
   for (const child of node.namedChildren) {
@@ -299,17 +300,33 @@ function assignmentValues(raw: RawRoot): string[] {
     .filter((value) => value.length > 0);
 }
 
+// Whether a command's argv names any operand: a token that is not an option, or any token after `--`.
+function hasOperand(argv: readonly string[]): boolean {
+  let options = true;
+  for (const token of argv.slice(1)) {
+    if (options && token === '--') {
+      options = false;
+      continue;
+    }
+    if (!options || !token.startsWith('-')) return true;
+  }
+  return false;
+}
+
 // Whether the host can fully account for what a root runs or touches. An assignment (a leading one, or
 // a standalone one earlier in the command) can change what runs; an operand the host cannot resolve
 // (a glob, a brace, an expansion other than exact `$HOME`) is a word the shell decides later; a
-// relative `..` operand of rm cannot be resolved without a working directory; and neither can any
-// relative operand of rm once the command changes directory (`directoryChanged`: it holds a `cd` or
-// `pushd`, or a wrapper option set the directory or the root for this root).
+// relative `..` operand of rm cannot be resolved without a working directory; neither can any relative
+// operand of rm once the command changes directory (`directoryChanged`: it holds a `cd` or `pushd`, or a
+// wrapper option set the directory for this root); and no operand of rm at all, absolute ones included,
+// once a wrapper changes the root (`rootChanged`: `chroot NEWROOT`, `sudo -R`, `unshare -R`), because
+// every path then names a place inside the new root.
 function isOpaqueByOperands(
   raw: RawRoot,
   name: string,
   argv: readonly string[],
   directoryChanged: boolean,
+  rootChanged: boolean,
 ): boolean {
   const inAssignmentScope = raw.scoped || raw.assigned.length > 0;
   if (inAssignmentScope) return true;
@@ -320,7 +337,11 @@ function isOpaqueByOperands(
       isUnresolved(node, false),
   );
   if (unresolved || name !== 'rm') return unresolved;
-  return argv.slice(1).some(isRelativeDotDot) || (directoryChanged && hasRelativeOperand(argv));
+  return (
+    argv.slice(1).some(isRelativeDotDot) ||
+    (rootChanged && hasOperand(argv)) ||
+    (directoryChanged && hasRelativeOperand(argv))
+  );
 }
 
 // The builtins that evaluate a quoted operand as an array subscript or a callback string, and the
@@ -399,22 +420,30 @@ function wrapperRoots(
   ];
 }
 
+// The root of a redirect with no command (`> ~/.ssh/authorized_keys`, `X=~/.ssh/id_rsa; > $X`): named
+// for the operator text, it carries every destination and the value of every assignment it owns, so the
+// floor sees the file the shell will open. A line break in any of them fails closed, as in a command.
+function redirectOnlyRoots(raw: RawRoot): CommandRoot[] | undefined {
+  const name = raw.operator ?? '';
+  const extras = [...raw.targets, ...assignmentValues(raw)];
+  if (name === '' || extras.some(hasLineBreak)) return undefined;
+  return [{ name, argv: [name, ...extras], opaque: true }];
+}
+
 // The roots one raw root yields, or undefined when the command must fail closed.
 //  - a name that is (partly) a parameter expansion, before or after the wrapper peel, is UNRESOLVABLE:
 //    the host cannot know which binary runs, so it can never be matched against egress / allow rules
 //    (expansions in ARGUMENTS stay as text so the hard-floor still sees `$HOME`; only the NAME forces
 //    this deny, and a wrapper can hide one from the pre-peel check: `sudo $CMD`, `timeout 5 ${X}`);
 //  - a name that is only digits, a reserved word or an assignment word is not a command;
-//  - a token that spans lines is one word the shell reads differently.
+//  - a token that spans lines (a word, a redirect target or an assignment value) is one word the shell
+//    reads differently.
 // The wire inner root carries {name, argv}, plus opaque:true when the peel hit a spawner (`sh -c`) or
 // bottomed out at an empty inner command; set ONLY when true, so a resolvable root keeps the plain
 // shape. Each peeled wrapper is ALSO emitted as its own non-opaque root so a managed `deny sudo`
 // still fires and no inner grant silently covers the wrapped form; the inner root stays FIRST.
 function rootsOf(raw: RawRoot, fold: boolean, afterCd: boolean): CommandRoot[] | undefined {
-  if (raw.cmd === undefined) {
-    const name = raw.operator ?? '';
-    return name === '' ? undefined : [{ name, argv: [name, ...raw.targets], opaque: true }];
-  }
+  if (raw.cmd === undefined) return redirectOnlyRoots(raw);
   if (commandNameHasExpansion(raw.cmd) || commandNameHasGlob(raw.cmd)) return undefined;
   const words = [...argvOf(raw.cmd), ...raw.absorbed];
   const {
@@ -423,24 +452,26 @@ function rootsOf(raw: RawRoot, fold: boolean, afterCd: boolean): CommandRoot[] |
     peeled,
     skippedAssignment,
     setsDirectory,
+    setsRoot,
     opaque: peelOpaque,
   } = unwrapArgv(words, fold);
   if (name.includes('$') || hasGlobOrBrace(name) || isNonCommandName(name)) return undefined;
-  if ([...words, ...raw.targets].some(hasLineBreak)) return undefined;
   const extras = [...raw.targets, ...assignmentValues(raw)];
+  if ([...words, ...extras].some(hasLineBreak)) return undefined;
   const full = [...argv, ...extras];
   const opaque =
     peelOpaque ||
     skippedAssignment ||
     evaluatesQuotedOperand(name, argv) ||
-    isOpaqueByOperands(raw, name, argv, afterCd || setsDirectory);
+    isOpaqueByOperands(raw, name, argv, afterCd || setsDirectory, setsRoot);
   const inner: CommandRoot = opaque ? { name, argv: full, opaque: true } : { name, argv: full };
   return [inner, ...peeled.flatMap((wrapper) => wrapperRoots(wrapper, argv, extras))];
 }
 
 // The extraction step, separate from the parse so a test can hand it a collector that drops a word.
-// Every argument-position node of the tree must be owned by exactly one raw root; otherwise the
-// command is a parse error, denied in every approval mode.
+// Every argument-position node of the tree must be owned by exactly one raw root, and two consecutive
+// word-like pieces of one argument list must be separated by spaces or tabs only (not touching, no
+// escaped space the grammar dropped); otherwise the command is a parse error, denied in every mode.
 export function extractParsedCommand(
   command: string,
   root: SyntaxNode,
@@ -452,7 +483,8 @@ export function extractParsedCommand(
     unaccountedNodes(
       root,
       raw.flatMap((r) => r.owned),
-    ).length > 0
+    ).length > 0 ||
+    hasHiddenWords(root, command)
   )
     return fail(command);
   const roots: CommandRoot[] = [];

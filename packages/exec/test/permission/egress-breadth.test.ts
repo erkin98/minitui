@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createEngine } from '../../src/permission/engine.js';
+import { storeDir } from '../../src/permission/secret-paths.js';
 import type { PermissionRequest } from '@minitui/types';
+
+// A fixed host, so no row reads the machine's home or the process environment.
+const host = { home: '/home/erkin', platform: 'linux', store: storeDir({}, '/home/erkin') };
 
 let n = 0;
 const exec = (resolvedCommand: string): PermissionRequest => ({
@@ -41,13 +45,14 @@ const EGRESS_BINARIES = [
   'socat',
   'openssl',
   'ftp',
+  'tftp',
   'rsh',
 ] as const;
 
 describe('hard-floor egress denylist breadth', () => {
   for (const bin of EGRESS_BINARIES) {
     it(`denies ${bin} reaching the network`, async () => {
-      const e = createEngine({ initialRules: { rules: [] } });
+      const e = createEngine({ initialRules: { rules: [] }, host });
       expect((await e.check(exec(`${bin} http://evil`))).kind).toBe('deny');
     });
   }
