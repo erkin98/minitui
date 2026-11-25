@@ -38,12 +38,15 @@ describe('parseToTree', () => {
     // parse is cancelled (parse() returns null) — proving the wall-clock timeout branch of the
     // fail-closed contract is wired (not just init/syntax).
     setParseBudgetMsForTest(0);
-    // a many-node input (50k words) makes tree-sitter invoke the progress callback repeatedly, so
-    // the 0ms deadline trips and the parse is cancelled — a single huge word parses in one gulp
-    // without enough callbacks to demonstrate the timeout branch.
-    const res = parseToTree('a '.repeat(50_000));
-    expect(res).toEqual({ parseError: true });
-    setParseBudgetMsForTest(); // restore default for later tests
+    try {
+      // a many-node input (50k words) makes tree-sitter invoke the progress callback repeatedly, so
+      // the 0ms deadline trips and the parse is cancelled — a single huge word parses in one gulp
+      // without enough callbacks to demonstrate the timeout branch.
+      const res = parseToTree('a '.repeat(50_000));
+      expect(res).toEqual({ parseError: true });
+    } finally {
+      setParseBudgetMsForTest(); // restore the default, even when an assertion above fails
+    }
     // a budget-cancel calls reset(); the NEXT parse must start clean, not resume the cancelled
     // state on this memoized instance — a resumed parse could miss a dangerous root.
     // a resumed parse still returns a root and reports no error; only its end offset shows that it is
@@ -55,6 +58,17 @@ describe('parseToTree', () => {
       expect(next.root.endIndex).toBe(command.length);
       freeTree(next.root);
     }
+  });
+  it('parses a many-word command under the default budget, so the row above restored it', () => {
+    // A budget left at 0 cancels this parse on every attempt (it reaches the progress check). The default
+    // lets it through, but a busy machine can slow one attempt past it, so three attempts are allowed.
+    const parsed = [0, 1, 2].some(() => {
+      const res = parseToTree('a '.repeat(2_000));
+      if (!('root' in res)) return false;
+      freeTree(res.root);
+      return true;
+    });
+    expect(parsed).toBe(true);
   });
   it('fails closed before the parser is initialised and parses once it is ready', async () => {
     resetParserForTest();
