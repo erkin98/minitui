@@ -27,6 +27,17 @@ function ffconcatEscape(path: string): string {
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
 
+/**
+ * The containers an input may be in: common video files only. Each comma entry is one ffmpeg demuxer name, matched
+ * element by element; the concat demuxer hands the same list to every file its list opens.
+ */
+const INPUT_FORMATS = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts';
+
+/** One input, opened only through the file protocol and only in a listed container (no playlist, no URL). */
+function guardedInput(formats: string, path: string): string[] {
+  return ['-protocol_whitelist', 'file', '-format_whitelist', formats, '-i', path];
+}
+
 function assertAbsoluteInputs(spec: MergeSpec): void {
   for (const p of [...spec.inputs, spec.output]) {
     if (!isAbsolute(p))
@@ -67,8 +78,7 @@ export function buildFfmpegRun(
       'concat',
       '-safe',
       '0',
-      '-i',
-      listFile,
+      ...guardedInput(`concat,${INPUT_FORMATS}`, listFile),
       ...(spec.codec === undefined ? ['-c', 'copy'] : ['-c:v', spec.codec, '-c:a', 'copy']),
       spec.output,
     ];
@@ -85,7 +95,7 @@ export function buildFfmpegRun(
   }
 
   // filter-concat: inline -i per input, build the concat filter graph. No list file.
-  const inputArgs = spec.inputs.flatMap((p) => ['-i', p]);
+  const inputArgs = spec.inputs.flatMap((p) => guardedInput(INPUT_FORMATS, p));
   const n = spec.inputs.length;
   const filter = `${spec.inputs.map((_, i) => `[${i}:v][${i}:a]`).join('')}concat=n=${n}:v=1:a=1[v][a]`;
   const args = [

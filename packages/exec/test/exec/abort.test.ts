@@ -3,13 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { getEventListeners } from 'node:events';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { PassThrough } from 'node:stream';
 // Import the runner from its OWN module, NOT the exec/ barrel — the barrel re-exports the
 // ffmpeg and capabilities modules, which are written after this test, so importing it here would drag
 // in modules that do not exist yet.
-import { createLocalRunner, quoteCommand } from '../../src/exec/local-runner.js';
+import { createLocalRunner } from '../../src/exec/local-runner.js';
+import { quoteCommand } from '../../src/exec/quote.js';
+import { FakeChild, StreamChild, fakeSandbox, passHardFloor } from './runner-doubles.js';
 import { makeFfmpegProgressParser } from '../../src/exec/progress.js';
 import { SandboxUnavailableError } from '../../src/errors.js';
 import { checkHardFloor } from '../../src/permission/hard-floor.js';
@@ -22,70 +23,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const EMIT = join(here, '..', 'fixtures', 'fake-bins', 'emit.mjs');
 const policy = { allowWrite: [here], allowEgress: [] } as const;
 
-// A REAL-shaped fake handle (the sandbox surface) — pass-through wrap, no `as never`. The shell double
-// execs the program, so the direct child is the program on every /bin/sh (dash forks otherwise).
-function fakeSandbox(overrides?: Partial<SandboxManagerHandle>): SandboxManagerHandle {
-  return {
-    probe: { supported: true, errors: [], warnings: [], platform: process.platform },
-    active: true,
-    wrapCommand: async (cmd) => cmd,
-    wrapArgv: async (command: string) => ({
-      argv: ['/bin/sh', '-c', `exec ${command}`],
-      env: { ...process.env },
-    }),
-    violationsFor: async () => [],
-    assertGatable: () => {},
-    cleanup: () => {},
-    dispose: async () => {},
-    ...overrides,
-  } satisfies SandboxManagerHandle;
-}
-
-// Exec-time re-gate: the runner re-gates the resolved argv[0] through the hard-floor before spawn. Pass-through
-// by default; the re-gate test below injects a blocking one to prove the fail-closed backstop.
-const passHardFloor = (): { blocked: boolean; reason?: string } => ({ blocked: false });
-
-// A real child-process object that never spawns anything. It holds what the runner reads (pid, the two
-// output streams, the exit state, kill), so the spawn doubles below need no cast to ChildProcess. The exit
-// code is given and never null: the runner's orphan guard signals the group of a child that has not exited.
-class FakeChild extends ChildProcess {
-  override readonly pid: number | undefined;
-  override stdout = null;
-  override stderr = null;
-  override readonly exitCode: number | null;
-  override readonly signalCode = null;
-
-  constructor(pid: number, exitCode: number) {
-    super();
-    this.pid = pid;
-    this.exitCode = exitCode;
-  }
-
-  override kill(): boolean {
-    return true;
-  }
-}
-
-// A real child-process object with real output streams and no process behind it: the row writes whole 'data'
-// events itself, so the byte boundaries of each read are exact (a pipe would pick them by timing).
-class StreamChild extends ChildProcess {
-  override readonly pid: number | undefined;
-  override readonly stdout = new PassThrough();
-  override readonly stderr = new PassThrough();
-  override readonly exitCode: number | null;
-  override readonly signalCode = null;
-
-  constructor(pid: number, exitCode: number) {
-    super();
-    this.pid = pid;
-    this.exitCode = exitCode;
-  }
-
-  override kill(): boolean {
-    return true;
-  }
-}
-
 async function collect(spec: RunSpec, signal: AbortSignal): Promise<RunnerEvent[]> {
   const out: RunnerEvent[] = [];
   const runner = createLocalRunner({ sandbox: fakeSandbox(), checkHardFloor: passHardFloor });
@@ -97,6 +34,23 @@ async function drain(run: AsyncGenerator<RunnerEvent>): Promise<RunnerEvent[]> {
   const out: RunnerEvent[] = [];
   for await (const ev of run) out.push(ev);
   return out;
+}
+
+/** The stderr lines a run reports when its child writes exactly these reads, one 'data' event each. */
+async function stderrLinesOf(reads: readonly string[]): Promise<string[]> {
+  const child = new StreamChild(4245, 0);
+  const run = createLocalRunner({
+    sandbox: fakeSandbox(),
+    checkHardFloor: passHardFloor,
+    spawn: (() => child) as SpawnFn,
+  }).run(
+    { command: process.execPath, args: [], cwd: here, sandboxPolicy: policy },
+    new AbortController().signal,
+  );
+  await run.next(); // started
+  for (const read of reads) child.stderr.emit('data', Buffer.from(read));
+  child.emit('close', 0, null);
+  return (await drain(run)).flatMap((e) => (e.kind === 'stderr' ? [e.text] : []));
 }
 
 // The pass-through shell wrap of fakeSandbox, and a wrap whose program dies on SIGTERM and otherwise sleeps.
@@ -398,6 +352,51 @@ describe('createLocalRunner', () => {
     }
   });
 
+  it('refuses a command that is not an absolute path before the re-gate: nothing is wrapped or spawned', async () => {
+    for (const command of ['bin/ffmpeg', 'node']) {
+      const { sandbox, counts } = countingSandbox(shellWrap);
+      let spawnCalls = 0;
+      const spawnSpy = ((): never => {
+        spawnCalls++;
+        throw new Error('unexpected spawn');
+      }) as SpawnFn;
+      const gen = createLocalRunner({
+        sandbox,
+        checkHardFloor: passHardFloor,
+        spawn: spawnSpy,
+      }).run({ command, args: [], cwd: here, sandboxPolicy: policy }, new AbortController().signal);
+      await expect(gen.next(), command).rejects.toThrow('the command is not an absolute path');
+      expect(counts(), command).toEqual({ wraps: 0, cleanups: 0 });
+      expect(spawnCalls, command).toBe(0);
+    }
+  });
+
+  it('spawns the command as given: an absolute link keeps its own spelling in the wrapped command', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'minitui-as-given-'));
+    try {
+      const link = join(dir, 'node-link');
+      symlinkSync(process.execPath, link);
+      const wrapped: string[] = [];
+      const sandbox = fakeSandbox({
+        wrapArgv: async (command: string) => {
+          wrapped.push(command);
+          return shellWrap(command);
+        },
+      });
+      const events = await drain(
+        createLocalRunner({ sandbox, checkHardFloor: passHardFloor }).run(
+          { command: link, args: [EMIT, 'out:hi'], cwd: here, sandboxPolicy: policy },
+          new AbortController().signal,
+        ),
+      );
+      expect(wrapped[0]?.startsWith(`'${link}' `)).toBe(true);
+      expect(wrapped[0]).not.toContain(`'${realpathSync(link)}'`);
+      expect(events.at(-1)).toMatchObject({ kind: 'exit', code: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('splits on a lone carriage return: two stats lines give two progress events, and the error line after them reaches stderr', async () => {
     // ffmpeg ends its interim stats lines with a carriage return; a split on line feeds alone would read
     // the three writes below as one line, report one progress event and lose the error text.
@@ -472,6 +471,19 @@ describe('createLocalRunner', () => {
     expect(lines('stdout')).toEqual(['é', replacement]);
     expect(lines('stderr')).toEqual(['ü']);
     expect(events.at(-1)).toEqual({ kind: 'exit', code: 0, signal: null });
+  });
+
+  it('drops the line feed of a CRLF split across two reads', async () => {
+    expect(await stderrLinesOf(['a\r', '\nb\n'])).toEqual(['a', 'b']);
+  });
+
+  it('keeps a blank line after a CRLF split across reads', async () => {
+    // the bytes `a\r\n\nb\n`: the second read completes the CRLF, the third starts a blank line
+    expect(await stderrLinesOf(['a\r', '\n', '\nb\n'])).toEqual(['a', '', 'b']);
+  });
+
+  it('a lone carriage return at the end of a read still ends its line', async () => {
+    expect(await stderrLinesOf(['a\r', 'b\n'])).toEqual(['a', 'b']);
   });
 
   it('kills the group and removes the abort listener when the consumer abandons the run right after started', async () => {

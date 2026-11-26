@@ -1,10 +1,13 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
+import type { Readable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { sanitize } from '../sanitize/index.js';
 import { buildSpawnOptions } from './spawn-opts.js';
 import { HardFloorError, SandboxUnavailableError } from '../errors.js';
+import { reportSafely } from '../report.js';
+import { quoteCommand } from './quote.js';
 import type { RunnerEvent, RunSpec, RunnerDeps } from '../types.js';
 
 /** Grace window between SIGTERM and the SIGKILL escalation when a child ignores the term. */
@@ -61,18 +64,33 @@ function splitLines(buffer: string): { lines: string[]; rest: string } {
   return { lines: parts, rest };
 }
 
-/** POSIX single-quote-escape one token (mirrors the stdio-MCP shellQuote). */
-function shellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
+/** Above this many unread events the runner pauses the child's output; it resumes below the low mark. */
+const HIGH_WATER = 1_024;
+const LOW_WATER = 256;
 
 /**
- * Joins the resolved command + args into ONE POSIX-shell-quoted string for sandbox.wrapArgv —
- * ASRT wraps it as [shell, '-c', <wrapped>], so a naive space-join would be a shell-injection
- * surface; every token is single-quote-escaped first.
+ * Pauses the child's output streams while the consumer is behind and resumes them once it has caught up,
+ * so the queue is bounded and no event is dropped. A read is split in full before a pause can act, so the
+ * queue holds at most HIGH_WATER events plus the lines of one read. While paused the queue holds at least
+ * LOW_WATER events, so the consumer is never left waiting on an empty queue.
  */
-export function quoteCommand(command: string, args: readonly string[]): string {
-  return [command, ...args].map(shellQuote).join(' ');
+function backpressure(streams: readonly (Readable | null)[]): {
+  afterPush(length: number): void;
+  afterShift(length: number): void;
+} {
+  let paused = false;
+  return {
+    afterPush(length) {
+      if (paused || length <= HIGH_WATER) return;
+      paused = true;
+      for (const stream of streams) stream?.pause();
+    },
+    afterShift(length) {
+      if (!paused || length >= LOW_WATER) return;
+      paused = false;
+      for (const stream of streams) stream?.resume();
+    },
+  };
 }
 
 export function createLocalRunner(deps: RunnerDeps): LocalRunner {
@@ -85,8 +103,13 @@ export function createLocalRunner(deps: RunnerDeps): LocalRunner {
         yield { kind: 'exit', code: null, signal: 'SIGTERM' };
         return;
       }
+      // A relative command would be resolved against the host's directory here and against the child's
+      // there, so the re-gate could check a different file from the one spawned: refuse it first.
+      if (!isAbsolute(spec.command))
+        throw new HardFloorError('the command is not an absolute path');
       // Exec-time re-gate BEFORE the wrap: re-resolve argv[0] to its real absolute path and re-run the
-      // hard-floor. A block throws HardFloorError here — nothing is wrapped, nothing is spawned.
+      // hard-floor. A block throws HardFloorError here — nothing is wrapped, nothing is spawned. The
+      // command is still spawned as given, so a binary that dispatches on its own name keeps working.
       reGateResolvedCommand(spec, deps.checkHardFloor);
       // Sandbox-wrap — the handle's wrapArgv is ASYNC (it adapts ASRT's async
       // wrapWithSandboxArgv) and fail-closed: a throw here means NOTHING is spawned.
@@ -132,8 +155,10 @@ export function createLocalRunner(deps: RunnerDeps): LocalRunner {
         let exitEvent: Extract<RunnerEvent, { kind: 'exit' }> | null = null;
         let killTimer: NodeJS.Timeout | null = null;
 
+        const flow = backpressure([child.stdout, child.stderr]);
         const push = (ev: RunnerEvent): void => {
           queue.push(ev);
+          flow.afterPush(queue.length);
           resolveNext?.();
           resolveNext = null;
         };
@@ -156,11 +181,18 @@ export function createLocalRunner(deps: RunnerDeps): LocalRunner {
           // byte arrives, instead of being decoded as two replacement characters.
           const decoder = new StringDecoder('utf8');
           let pending = '';
+          let cr = false; // the last decoded text ended in a CR, so a CRLF may be cut between two reads
           return {
             // arrow properties, not method shorthand, so passing `outCh.onData`/`outCh.flush` as
             // event listeners below carries no unbound-method `this` hazard (they close over `pending`).
             onData: (chunk: Buffer): void => {
-              const { lines, rest } = splitLines(pending + decoder.write(chunk));
+              const text = decoder.write(chunk);
+              // The CR of a cut CRLF already ended its line, so the LF that opens this read is dropped,
+              // not read as an empty line. `cr` follows the decoded text, never the text after the drop,
+              // so a blank line right after the CRLF is kept.
+              const drop = cr && text.startsWith('\n');
+              if (text !== '') cr = text.endsWith('\r');
+              const { lines, rest } = splitLines(pending + (drop ? text.slice(1) : text));
               for (const line of lines) emitLine(channel, line);
               // cap the unterminated remainder: a stream that never breaks a line must not grow the buffer
               // without bound, nor be re-split in full on every chunk
@@ -202,7 +234,8 @@ export function createLocalRunner(deps: RunnerDeps): LocalRunner {
           // OS-sandbox (seccomp) denial: warn through the composition-root diagnostics sink (complements
           // the handler's stderr classifier, which prefixes the RuntimeFault excerpt for the escalation UX).
           if (sig === 'SIGSYS' || code === 159)
-            deps.diagnostics?.warn(
+            reportSafely(
+              deps.diagnostics,
               'command terminated by seccomp (SIGSYS / exit 159) — likely sandbox denial',
               { argv: [spec.command, ...spec.args] },
             );
@@ -243,7 +276,9 @@ export function createLocalRunner(deps: RunnerDeps): LocalRunner {
               });
               continue;
             }
-            yield queue.shift()!;
+            const next = queue.shift()!;
+            flow.afterShift(queue.length);
+            yield next;
           }
           if (exitEvent) yield exitEvent;
         } finally {

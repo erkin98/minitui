@@ -152,6 +152,25 @@ async function finishQuietly(finish: OutputFinish | undefined, keep: boolean): P
   }
 }
 
+/** ffmpeg's text when an input's protocol or container is outside the planner's whitelists. */
+const INPUT_REFUSED = /not on whitelist/;
+const INPUT_NOT_ALLOWED = "an input's format is not allowed";
+
+/**
+ * The fault text of a failed run: the windowed stderr, then the refusal phrase, then the sandbox marker.
+ * The markers sit at the END because the observation router keeps the tail when it cuts.
+ */
+function faultExcerpt(
+  stderrTail: string,
+  inputRefused: boolean,
+  exitCode: number | null,
+  signal: NodeJS.Signals | null,
+): string {
+  const refusal = inputRefused ? `\n${INPUT_NOT_ALLOWED}` : '';
+  const denied = isLikelySandboxDenied({ stderr: stderrTail, exitCode, signal });
+  return `${boundFaultText(stderrTail)}${refusal}${denied ? '\n[sandbox-denied]' : ''}`;
+}
+
 /** Streams the run, forwards each mapped event to both sinks, and settles on the exit code. */
 async function streamRun(
   ctx: DispatchContext,
@@ -162,28 +181,32 @@ async function streamRun(
   let exitCode: number | null = null; // a stream that never reports an exit is not a success
   let exitSignal: NodeJS.Signals | null = null;
   let stderrTail = '';
+  let inputRefused = false; // read per line: a refusal early in a long run is not lost to the window
   // The runner awaits the sandbox wrap itself; a fail-closed wrap throws before any spawn and the router
   // maps that throw to a failed outcome.
-  for await (const ev of deps.runner.run(built.run, deps.signal)) {
+  for await (const raw of deps.runner.run(built.run, deps.signal)) {
+    if (raw.kind === 'stderr') {
+      stderrTail = (stderrTail + raw.text + '\n').slice(-STDERR_TAIL_CAP);
+      inputRefused ||= INPUT_REFUSED.test(raw.text);
+    }
+    // A run whose input ffmpeg refused never reports success, on the wire or in the outcome: a refused
+    // later concat entry ends the input early and ffmpeg exits 0 with a partial file.
+    const ev = raw.kind === 'exit' && inputRefused && raw.code === 0 ? { ...raw, code: 1 } : raw;
     const wire = toExecEvent(ev);
     if (wire) {
       deps.onEvent(wire);
       ctx.onEvent?.(wire);
     }
-    if (ev.kind === 'stderr') stderrTail = (stderrTail + ev.text + '\n').slice(-STDERR_TAIL_CAP);
     if (ev.kind === 'exit') {
       exitCode = ev.code;
       exitSignal = ev.signal;
     }
   }
   if (exitCode === 0) return { status: 'settled', result: { output: merge.output } };
-  // The marker sits at the END of the excerpt because the observation router keeps the tail when it cuts.
-  const safeTail = boundFaultText(stderrTail);
-  const denied = isLikelySandboxDenied({ stderr: stderrTail, exitCode, signal: exitSignal });
   return failed(
     ctx.actionName,
     exitCode ?? -1,
-    denied ? `${safeTail}\n[sandbox-denied]` : safeTail,
+    faultExcerpt(stderrTail, inputRefused, exitCode, exitSignal),
   );
 }
 
