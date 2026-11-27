@@ -1,10 +1,40 @@
 import { spawn as nodeSpawn } from 'node:child_process';
-import { access, stat } from 'node:fs/promises';
+import { access, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { statSync } from 'node:fs';
 import { buildSpawnOptions, type SpawnFn } from './spawn-opts.js';
 import { BinNotFoundError } from '../errors.js';
+import { checkHardFloor } from '../permission/hard-floor.js';
+import type { Host } from '../permission/shell/host.js';
+
+const MISSING = { exists: false, readable: false, isFile: false } as const;
+
+/**
+ * Whether the hard floor refuses a read of this path. No `paths` argument: only the floor's secret and
+ * device locations count, so the home directory itself (a file picker's usual root) is not refused.
+ */
+function floorRefuses(path: string, host: Host | undefined): boolean {
+  return checkHardFloor(
+    {
+      raw: '',
+      roots: [{ name: 'stat', argv: ['stat', path] }],
+      hasSubstitution: false,
+      parseError: false,
+    },
+    undefined,
+    host,
+  ).blocked;
+}
+
+/** The real path, or undefined when it cannot be taken (a missing file, a loop). */
+async function realpathOrUndefined(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
+}
 
 export interface CapabilityProvider {
   listEncoders(): Promise<readonly string[]>;
@@ -69,6 +99,8 @@ function parseList(output: string): readonly string[] {
 export function createCapabilityProvider(deps?: {
   spawn?: SpawnFn;
   env?: NodeJS.ProcessEnv;
+  /** The machine the floor reads; tests only. Default: the current machine, read at each call. */
+  host?: Host | undefined;
 }): CapabilityProvider {
   const spawn = deps?.spawn ?? nodeSpawn;
   const env = deps?.env ?? process.env;
@@ -88,6 +120,11 @@ export function createCapabilityProvider(deps?: {
     listCodecs: () => probe('codecs', '-codecs'),
     listFilters: () => probe('filters', '-filters'),
     async statFile(path) {
+      // The model reads this answer, so a path the floor protects answers missing: whether a protected
+      // file exists is never told. Both spellings count, the typed one and the one it resolves to.
+      if (!isAbsolute(path) || floorRefuses(path, deps?.host)) return MISSING;
+      const real = await realpathOrUndefined(path);
+      if (real !== undefined && real !== path && floorRefuses(real, deps?.host)) return MISSING;
       try {
         const st = await stat(path);
         let readable = false;
@@ -99,7 +136,7 @@ export function createCapabilityProvider(deps?: {
         }
         return { exists: true, readable, isFile: st.isFile() };
       } catch {
-        return { exists: false, readable: false, isFile: false };
+        return MISSING;
       }
     },
   };

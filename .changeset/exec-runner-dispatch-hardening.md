@@ -1,0 +1,5 @@
+---
+'@minitui/exec': patch
+---
+
+A merge whose output name is already taken (a file, a directory, a link, a dangling link) is now refused before the consent prompt with `the output file already exists`, instead of failing after the person approved it; the real path of the output is floored too when it differs from the typed one, before anything is learnt about the name. ffmpeg opens every input through the file protocol only and only in the listed containers (mp4/mov, Matroska/WebM, AVI, MPEG-TS), so a playlist or URL among the inputs is refused, and a run that ffmpeg refused an input for fails with `an input's format is not allowed` and never reports success, even when ffmpeg exits 0. The local runner refuses a command that is not an absolute path, contains a diagnostics sink that throws or rejects, bounds its event queue by pausing the child's output while the reader is behind, and no longer reports an empty line for a CRLF cut between two reads. The capability provider's `statFile` answers missing for a relative path and for a path, typed or resolved, that the hard floor protects. No export changes.

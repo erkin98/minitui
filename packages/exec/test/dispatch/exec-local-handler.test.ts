@@ -393,3 +393,88 @@ describe('isLikelySandboxDenied', () => {
     ).toBe(false);
   });
 });
+
+describe('handleExecLocal: an input that ffmpeg refuses by the input whitelists', () => {
+  const PHRASE = "an input's format is not allowed";
+  const FORMAT_REFUSED = "[hls @ 0x1] Format not on whitelist 'mov,mp4,m4a,3gp,3g2,mj2'";
+  const refusedRun = (events: RunnerEvent[], over: Parameters<typeof execLocalDeps>[0] = {}) =>
+    handleExecLocal(
+      mergeCtx(),
+      withDeps(
+        execLocalDeps({
+          runner: makeRunner(async function* () {
+            yield* events;
+          }).runner,
+          ...over,
+        }),
+      ),
+    );
+  const excerptOf = (out: Awaited<ReturnType<typeof handleExecLocal>>): string =>
+    out.status === 'failed' ? out.fault.stderrExcerpt : '';
+
+  it('ends the excerpt with the fixed phrase for a refused format', async () => {
+    const out = await refusedRun([
+      { kind: 'stderr', text: FORMAT_REFUSED },
+      { kind: 'exit', code: 234, signal: null },
+    ]);
+    expect(out).toMatchObject({ status: 'failed', fault: { exitCode: 234 } });
+    expect(excerptOf(out).endsWith(`\n${PHRASE}`)).toBe(true);
+  });
+
+  it('ends the excerpt with the fixed phrase for a refused protocol', async () => {
+    const out = await refusedRun([
+      { kind: 'stderr', text: "[http @ 0x1] Protocol 'http' not on whitelist 'file'!" },
+      { kind: 'exit', code: 1, signal: null },
+    ]);
+    expect(excerptOf(out).endsWith(`\n${PHRASE}`)).toBe(true);
+  });
+
+  it('fails a run that holds a refusal even when ffmpeg exits 0: a nonzero code everywhere, and the output is not kept', async () => {
+    // a later concat entry that is refused ends the input early and ffmpeg exits 0 with a partial file
+    const keeps: boolean[] = [];
+    const wire: ExecEvent[] = [];
+    const out = await refusedRun(
+      [
+        { kind: 'stderr', text: FORMAT_REFUSED },
+        { kind: 'exit', code: 0, signal: null },
+      ],
+      {
+        ensureOutputFile: async () => async (keep: boolean) => {
+          keeps.push(keep);
+        },
+        onEvent: (ev) => wire.push(ev),
+      },
+    );
+    expect(out).toMatchObject({ status: 'failed', fault: { exitCode: 1 } });
+    expect(excerptOf(out)).toContain(PHRASE);
+    expect(wire.filter((ev) => ev.kind === 'exit')).toEqual([{ kind: 'exit', code: 1 }]);
+    expect(keeps).toEqual([false]);
+  });
+
+  it('finds a refusal early in a long run, past the tail window', async () => {
+    const out = await refusedRun([
+      { kind: 'stderr', text: FORMAT_REFUSED },
+      { kind: 'stderr', text: 'x'.repeat(20_000) },
+      { kind: 'exit', code: 1, signal: null },
+    ]);
+    expect(excerptOf(out).endsWith(`\n${PHRASE}`)).toBe(true);
+  });
+
+  it('puts the phrase before the sandbox marker, which stays last', async () => {
+    const out = await refusedRun([
+      { kind: 'stderr', text: FORMAT_REFUSED },
+      { kind: 'stderr', text: 'ffmpeg: Permission denied' },
+      { kind: 'exit', code: 1, signal: null },
+    ]);
+    expect(excerptOf(out).endsWith(`\n${PHRASE}\n[sandbox-denied]`)).toBe(true);
+  });
+
+  it('adds nothing to an ordinary failure', async () => {
+    const out = await refusedRun([
+      { kind: 'stderr', text: 'invalid codec parameter' },
+      { kind: 'exit', code: 1, signal: null },
+    ]);
+    expect(out).toMatchObject({ status: 'failed', fault: { exitCode: 1 } });
+    expect(excerptOf(out)).not.toContain(PHRASE);
+  });
+});

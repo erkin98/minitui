@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MinituiEvent } from '@minitui/agent-core';
@@ -76,8 +77,12 @@ export const capableHost: CapabilityProvider = {
   statFile: () => Promise.resolve({ exists: true, readable: true, isFile: true }),
 };
 
-/** An output whose directory exists, since the router resolves it before it asks for consent. */
-export const OUTPUT = join(tmpdir(), 'minitui-cli-test-out.mp4');
+/**
+ * An output whose directory exists, since the router resolves it before it asks for consent. The name is
+ * new per test file: the router refuses a name that already exists, so a run in one file that makes this
+ * file for a moment must not decide another file's row.
+ */
+export const OUTPUT = join(tmpdir(), `minitui-cli-test-out-${randomUUID()}.mp4`);
 
 /** The patch lines of a merge app that passes the real validation loop against `capableHost`. */
 export const VALID_SPEC_LINES = [

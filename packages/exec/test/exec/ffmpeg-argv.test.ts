@@ -26,6 +26,9 @@ function withPlantedFfmpeg<T>(plan: (env: NodeJS.ProcessEnv) => T): T {
   }
 }
 
+// The containers an input may be in; concat-demux adds `concat` first.
+const INPUT_FORMATS = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts';
+
 describe('buildFfmpegRun', () => {
   it('resolves ffmpeg absolutely, plans (does NOT write) the list, writes only via writeList()', async () => {
     const spec: MergeSpec = {
@@ -117,6 +120,16 @@ describe('buildFfmpegRun', () => {
     expect(built.run.args).toContain('/abs/a.mp4');
     expect(built.run.args).toContain('libx264');
     expect(built.run.args.filter((a) => a === '-i')).toHaveLength(2);
+    // every input is opened as a file, in a listed container only
+    built.run.args.forEach((arg, i) => {
+      if (arg !== '-i') return;
+      expect(built.run.args.slice(i - 4, i)).toEqual([
+        '-protocol_whitelist',
+        'file',
+        '-format_whitelist',
+        INPUT_FORMATS,
+      ]);
+    });
     await built.cleanup();
   });
 
@@ -133,6 +146,10 @@ describe('buildFfmpegRun', () => {
       'concat',
       '-safe',
       '0',
+      '-protocol_whitelist',
+      'file',
+      '-format_whitelist',
+      `concat,${INPUT_FORMATS}`,
       '-i',
       plain.listFile,
       '-c',
@@ -148,6 +165,10 @@ describe('buildFfmpegRun', () => {
       'concat',
       '-safe',
       '0',
+      '-protocol_whitelist',
+      'file',
+      '-format_whitelist',
+      `concat,${INPUT_FORMATS}`,
       '-i',
       coded.listFile,
       '-c:v',

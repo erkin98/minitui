@@ -1,5 +1,12 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { SandboxUnavailableError } from '../../src/errors.js';
 import { createActionRouter } from '../../src/dispatch/index.js';
@@ -391,6 +398,7 @@ describe('createActionRouter: an unsettled run and its output file', () => {
 
 describe("createActionRouter: the output's directory is resolved before consent", () => {
   const UNRESOLVED = 'the output directory cannot be resolved';
+  const EXISTS = 'the output file already exists';
 
   beforeAll(async () => {
     await ensureParserReady();
@@ -416,13 +424,20 @@ describe("createActionRouter: the output's directory is resolved before consent"
       const out = await createActionRouter(
         routerDeps(engine, {
           buildPermissionRequest,
-          execLocal: execLocalDeps({ runner: runner.runner, buildFfmpegRun: planner.build }),
+          execLocal: execLocalDeps({
+            runner: runner.runner,
+            buildFfmpegRun: planner.build,
+            ensureOutputFile: undefined, // the real exclusive create
+          }),
         }),
       ).dispatch(
         'merge',
         mergeCtx({ resolvedParams: { inputs: [typedInput], output: typedOutput } }),
       );
       expect(out).toEqual({ status: 'settled', result: { output: realOutput } });
+      // the one file made is the real output, kept by the settled run; nothing appears at any other path
+      expect(readdirSync(join(dir, 'real'))).toEqual(['out.mp4']);
+      expect(readdirSync(dir).sort()).toEqual(['link', 'real']);
       expect(engine.calls[0]?.resolvedPaths).toEqual([typedInput, realOutput]);
       expect(engine.calls[0]?.resolvedCommand).toContain(`'${realOutput}'`);
       expect(engine.calls[0]?.resolvedCommand).not.toContain(typedOutput);
@@ -502,7 +517,9 @@ describe("createActionRouter: the output's directory is resolved before consent"
   it('denies an output that only resolves onto the home directory', async () => {
     await inTempDir(async (dir) => {
       const home = join(dir, 'homes', 'alice');
-      mkdirSync(home, { recursive: true });
+      // only the parent exists: an entry at the name itself would be refused as existing before the
+      // engine, the one floor here that holds this home
+      mkdirSync(join(dir, 'homes'));
       symlinkSync('homes', join(dir, 'up'));
       const host: Host = { home, platform: process.platform, store: storeDir({}, home) };
       const runner = makeRunner();
@@ -546,13 +563,14 @@ describe("createActionRouter: the output's directory is resolved before consent"
     });
   });
 
-  it('reports EEXIST, never a denial, when the output itself is a dangling link', async () => {
+  it('refuses a dangling link at the output name before consent, by its own name, never following it', async () => {
     await inTempDir(async (dir) => {
       mkdirSync(join(dir, 'real'));
       symlinkSync('real', join(dir, 'link'));
       symlinkSync('missing-target', join(dir, 'real', 'out.mp4'));
+      const engine = makeEngine();
       const out = await createActionRouter(
-        routerDeps(allowEngine, {
+        routerDeps(engine, {
           buildPermissionRequest,
           execLocal: execLocalDeps({
             runner: makeRunner(exitZero).runner,
@@ -565,10 +583,83 @@ describe("createActionRouter: the output's directory is resolved before consent"
           resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'link', 'out.mp4') },
         }),
       );
+      // resolving the whole output would fail on the dangling link and give the resolver's phrase
+      expect(out).toEqual({ status: 'denied', reason: EXISTS });
+      expect(engine.calls).toHaveLength(0);
+    });
+  });
+
+  it('refuses an output name that already exists, before the engine, and changes nothing', async () => {
+    await inTempDir(async (dir) => {
+      writeFileSync(join(dir, 'file.mp4'), 'KEEP');
+      mkdirSync(join(dir, 'adir.mp4'));
+      symlinkSync('missing-target', join(dir, 'dangling.mp4'));
+      for (const name of ['file.mp4', 'adir.mp4', 'dangling.mp4']) {
+        const engine = makeEngine();
+        const runner = makeRunner(exitZero);
+        const planner = fakePlanner();
+        const out = await createActionRouter(
+          routerDeps(engine, {
+            buildPermissionRequest,
+            execLocal: execLocalDeps({
+              runner: runner.runner,
+              buildFfmpegRun: planner.build,
+              ensureOutputFile: undefined,
+            }),
+          }),
+        ).dispatch(
+          'merge',
+          mergeCtx({ resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, name) } }),
+        );
+        expect(out, name).toEqual({ status: 'denied', reason: EXISTS });
+        expect(engine.calls, name).toHaveLength(0);
+        expect(planner.builds, name).toHaveLength(0);
+        expect(runner.calls, name).toHaveLength(0);
+      }
+      expect(readdirSync(dir).sort()).toEqual(['adir.mp4', 'dangling.mp4', 'file.mp4']);
+      expect(readFileSync(join(dir, 'file.mp4'), 'utf8')).toBe('KEEP');
+    });
+  });
+
+  it('floors the real path before the existence check: a linked directory into a protected one', async () => {
+    await inTempDir(async (dir) => {
+      mkdirSync(join(dir, '.aws'));
+      writeFileSync(join(dir, '.aws', 'out.mp4'), 'x');
+      symlinkSync('.aws', join(dir, 'ok'));
+      const engine = makeEngine();
+      const runner = makeRunner(exitZero);
+      const out = await createActionRouter(
+        routerDeps(engine, {
+          buildPermissionRequest,
+          execLocal: execLocalDeps({ runner: runner.runner }),
+        }),
+      ).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, 'ok', 'out.mp4') },
+        }),
+      );
+      // the floor's reason, not the existence phrase: the real path is floored before it is looked at
       expect(out).toMatchObject({
-        status: 'failed',
-        fault: { stderrExcerpt: expect.stringContaining('EEXIST') },
+        status: 'denied',
+        reason: expect.stringMatching(/protected secret/),
       });
+      expect(engine.calls).toHaveLength(0);
+      expect(runner.calls).toHaveLength(0);
+    });
+  });
+
+  it('refuses an output name it cannot look up with the resolver phrase, before the engine', async () => {
+    await inTempDir(async (dir) => {
+      const engine = makeEngine();
+      const out = await createActionRouter(routerDeps(engine, { buildPermissionRequest })).dispatch(
+        'merge',
+        mergeCtx({
+          resolvedParams: { inputs: ['/abs/a.mp4'], output: join(dir, `${'x'.repeat(256)}.mp4`) },
+        }),
+      );
+      expect(out).toEqual({ status: 'denied', reason: UNRESOLVED });
+      expect(engine.calls).toHaveLength(0);
     });
   });
 

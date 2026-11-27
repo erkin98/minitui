@@ -1,8 +1,8 @@
 import { beforeAll, describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { resolveOutputParent } from '../../src/dispatch/resolve-output.js';
-import { quoteCommand } from '../../src/exec/local-runner.js';
+import { quoteCommand } from '../../src/exec/quote.js';
 import { checkHardFloor } from '../../src/permission/hard-floor.js';
 import { buildPermissionRequest } from '../../src/permission/resolve-request.js';
 import { storeDir } from '../../src/permission/secret-paths.js';
@@ -13,6 +13,7 @@ import type { DispatchContext } from '@minitui/renderer-core';
 import { inTempDir, mergeCtx } from './doubles.js';
 
 const UNRESOLVED = 'the output directory cannot be resolved';
+const EXISTS = 'the output file already exists';
 const deps = { buildPermissionRequest };
 
 const ctxOf = (output: string, over: Partial<DispatchContext> = {}): DispatchContext =>
@@ -77,7 +78,7 @@ describe('resolveOutputParent: the directory is resolved', () => {
     });
   });
 
-  it('leaves the last component alone: a dangling link, and a link to a file elsewhere', async () => {
+  it('never follows the last component: a dangling link and a link to a file elsewhere are refused by their own names', async () => {
     await inTempDir(async (dir) => {
       mkdirSync(join(dir, 'real'));
       mkdirSync(join(dir, 'other'));
@@ -86,9 +87,12 @@ describe('resolveOutputParent: the directory is resolved', () => {
       symlinkSync('missing-target', join(dir, 'real', 'dangling'));
       symlinkSync('../other/file.bin', join(dir, 'real', 'pointer'));
       for (const name of ['dangling', 'pointer']) {
-        const out = await resolveOutputParent(ctxOf(join(dir, 'link', name)), deps);
-        expect(out.resolvedParams.output, name).toBe(join(dir, 'real', name));
+        await expect(
+          resolveOutputParent(ctxOf(join(dir, 'link', name)), deps),
+          name,
+        ).rejects.toMatchObject({ message: EXISTS });
       }
+      expect(readFileSync(join(dir, 'other', 'file.bin'), 'utf8')).toBe('x');
     });
   });
 
@@ -240,7 +244,10 @@ describe('resolveOutputParent: the typed-spelling floor and the engine floor agr
         host,
       }).then(
         () => false,
-        (err: unknown) => err instanceof Error && err.message !== UNRESOLVED,
+        // the resolver's own two phrases are not floor refusals: an existing entry (`/etc/passwd`,
+        // `/proc/self/environ`) is refused by the existence check, not by the floor
+        (err: unknown) =>
+          err instanceof Error && err.message !== UNRESOLVED && err.message !== EXISTS,
       );
       expect(refused, output).toBe(engineFloor.blocked);
       if (engineFloor.blocked) blocked += 1;

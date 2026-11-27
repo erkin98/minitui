@@ -2,7 +2,7 @@ import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CONSENT_FORBIDDEN } from '@minitui/sanitizer';
 import { FfmpegSpecError } from '../errors.js';
-import { quoteCommand } from '../exec/local-runner.js';
+import { quoteCommand } from '../exec/quote.js';
 import { exceedsConsentBudget } from './consent.js';
 import type { PermissionDescriptor, PermissionRequest } from '@minitui/types';
 import type { DispatchContext } from '@minitui/renderer-core';
