@@ -15,13 +15,27 @@ describe('bindExecEventToStore', () => {
     expect(mergeOf(store)).toEqual({ progress: 0.5, status: '' });
   });
 
-  it('writes the exit as done or as a failure with its code', () => {
+  it('writes the exit as done or as a failure with its code, and a settled exit fills the bar', () => {
     const store = seeded();
     const bridge = bindExecEventToStore(store);
     bridge({ kind: 'exit', code: 0 });
-    expect(mergeOf(store)).toEqual({ progress: 0, status: 'done' });
+    expect(mergeOf(store)).toEqual({ progress: 1, status: 'done' });
     bridge({ kind: 'exit', code: 7 });
-    expect(mergeOf(store)).toEqual({ progress: 0, status: 'failed (exit 7)' });
+    expect(mergeOf(store)).toEqual({ progress: 1, status: 'failed (exit 7)' });
+  });
+
+  it('a settled exit after partial progress leaves the bar full', () => {
+    const store = seeded();
+    const bridge = bindExecEventToStore(store);
+    bridge({ kind: 'progress', value: 0.28 });
+    bridge({ kind: 'exit', code: 0 });
+    expect(mergeOf(store)).toEqual({ progress: 1, status: 'done' });
+  });
+
+  it('a store with no progress field still shows done after a settled exit', () => {
+    const store = createDataStore({ initial: { merge: { status: '' } } });
+    bindExecEventToStore(store)({ kind: 'exit', code: 0 });
+    expect(mergeOf(store)).toEqual({ status: 'done' });
   });
 
   it('writes a stderr chunk to the status pointer', () => {

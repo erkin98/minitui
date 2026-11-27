@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppSpec } from '@minitui/types';
 import type { ActionDispatcher, ActionOutcome } from '@minitui/renderer-core';
 import { mountInk } from '../src/mount.js';
+import { refusalLine } from '../src/binder/refusal-line.js';
 import { createInkBinding } from '../src/widgets/bindings.js';
 import { makeCatalog } from './support/make-catalog.js';
 import { controlledIo } from './support/store-io.js';
@@ -41,6 +42,15 @@ const failed = (stderrExcerpt: string): ActionOutcome => ({
   status: 'failed',
   fault: { actionKey: 'merge', exitCode: 1, stderrExcerpt },
 });
+
+// A failed merge's text as exec hands it on: ffmpeg's banner first, the cause and exec's phrase last.
+const FFMPEG_FAILURE = `ffmpeg version 6.1.1 Copyright (c) 2000-2023 ${'y'.repeat(150)}\nan input's format is not allowed`;
+
+// The frame lines that belong to the refusal row: a wrapped lead would leave part of it on a second line.
+const refusalRows = (frame: string): string[] =>
+  frame.split('\n').filter((line) => line.includes('did not'));
+
+const faultOf = (stderrExcerpt: string) => ({ actionKey: 'merge', exitCode: 1, stderrExcerpt });
 
 // A mount whose dispatcher returns the scripted outcomes in order, and whose lifecycle sink records
 // the phase of every event.
@@ -101,12 +111,44 @@ describe('the refusal row under the app', () => {
     run.handle.unmount();
   });
 
-  it('the reason is cut to 160 characters', async () => {
-    const run = harness([{ status: 'denied', reason: 'x'.repeat(1000) }], 300);
+  it('the reason keeps its last 160 characters, with … in front', async () => {
+    const run = harness([failed(`${'h'.repeat(500)}${'t'.repeat(500)}`)], 300);
     await pressMerge(run);
     await until(() => run.frame().includes('did not complete'), 'the refusal line');
-    expect(run.frame()).toContain(`${'x'.repeat(160)}…`);
-    expect(run.frame()).not.toContain('x'.repeat(161));
+    expect(run.frame()).toContain(`…${'t'.repeat(160)}`);
+    expect(run.frame()).not.toContain('t'.repeat(161));
+    expect(run.frame()).not.toContain('hh');
+    run.handle.unmount();
+  });
+
+  it('a long failure shows the whole lead and the end of the reason on one line at 100 columns', async () => {
+    const run = harness([failed(FFMPEG_FAILURE)], 100);
+    await pressMerge(run);
+    await until(() => run.frame().includes('did not'), 'the refusal line');
+    const row = refusalRows(run.frame());
+    expect(row).toHaveLength(1);
+    expect(row[0]).toContain('Action "merge" did not complete:');
+    expect(row[0]?.trimEnd().endsWith("an input's format is not allowed")).toBe(true);
+    expect(run.frame()).not.toContain('ffmpeg version');
+    run.handle.unmount();
+  });
+
+  it('at 60 columns the lead stays whole on one line and the reason shows its end', async () => {
+    const run = harness([failed(FFMPEG_FAILURE)], 60);
+    await pressMerge(run);
+    await until(() => run.frame().includes('did not'), 'the refusal line');
+    const row = refusalRows(run.frame());
+    expect(row).toHaveLength(1);
+    expect(row[0]).toContain('Action "merge" did not complete:');
+    expect(row[0]?.trimEnd().endsWith('format is not allowed')).toBe(true);
+    run.handle.unmount();
+  });
+
+  it('a failure with no reason shows the one sentence', async () => {
+    const run = harness([failed('')]);
+    await pressMerge(run);
+    await until(() => run.frame().includes('did not complete'), 'the refusal line');
+    expect(run.frame()).toContain('Action "merge" did not complete.');
     run.handle.unmount();
   });
 
@@ -139,5 +181,25 @@ describe('the refusal row under the app', () => {
     await until(() => run.lifecycle.length === 2, 'the two events');
     expect(run.lifecycle).toEqual(['started', 'error']);
     run.handle.unmount();
+  });
+});
+
+describe('refusalLine', () => {
+  it('keeps the last 160 code points of a long reason, with … in front', () => {
+    const line = refusalLine('merge', faultOf(`${'a'.repeat(40)}${'b'.repeat(160)}`));
+    expect(line.lead).toBe('Action "merge" did not complete:');
+    expect([...line.reason]).toHaveLength(161);
+    expect(line.reason).toBe(`…${'b'.repeat(160)}`);
+  });
+
+  it('keeps a reason of 160 code points whole', () => {
+    expect(refusalLine('merge', faultOf('c'.repeat(160))).reason).toBe('c'.repeat(160));
+  });
+
+  it('cuts a reason of wide characters by code points', () => {
+    const wide = String.fromCodePoint(0x1d7d8);
+    const line = refusalLine('merge', faultOf(wide.repeat(200)));
+    expect([...line.reason]).toHaveLength(161);
+    expect(line.reason).toBe(`…${wide.repeat(160)}`);
   });
 });
