@@ -23,7 +23,7 @@ import { checkElementTree, hasCanonicalKeys } from '@minitui/catalog'; // the sh
 import { RendererRefusal } from './refusal.js';
 import { applyStatePatchTo } from './state-patch.js';
 import { reportFault } from './binder/report.js';
-import { refusalLine } from './binder/refusal-line.js';
+import { refusalLine, type RefusalLine } from './binder/refusal-line.js';
 import { sanitize, sanitizeSpecStrings } from '@minitui/sanitizer';
 import { buildHandlers, ELEMENT_KEY } from './binder/build-handlers.js';
 import { ConsentOverlay, type ConsentController } from './widgets/consent-overlay.js';
@@ -313,7 +313,7 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
 
   // The refusal row: the last refused or failed gated action, cleared when the next one starts. It is
   // updated before the host's sink runs, so a throwing sink cannot leave it stale.
-  let refusalText: string | undefined;
+  let refusalText: RefusalLine | undefined;
   const emitLifecycle = (e: ActionLifecycleEvent): void => {
     const next =
       e.phase === 'error'
@@ -504,7 +504,18 @@ export function mountInk(args: MountInkArgs): InkMountHandle {
                 Fallback as never /* narrowed props — receives the full component-render props at runtime */
               }
             />
-            {refusalText !== undefined ? <Text wrap="truncate-end">{refusalText}</Text> : null}
+            {refusalText === undefined ? null : refusalText.reason === '' ? (
+              <Text>{refusalText.lead}</Text>
+            ) : (
+              // The lead never shrinks, so it stays on one line; the reason is cut from the front to the width
+              // that is left, so its end shows. The margin is the space between them in every mode.
+              <Box>
+                <Box flexShrink={0} marginRight={1}>
+                  <Text>{refusalText.lead}</Text>
+                </Box>
+                <Text wrap="truncate-start">{refusalText.reason}</Text>
+              </Box>
+            )}
           </Box>
           <ConsentOverlay controller={view} live={() => consent.request} />
         </JSONUIProvider>
