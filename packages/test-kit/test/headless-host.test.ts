@@ -83,7 +83,7 @@ describe('bridgeExecEventToStore', () => {
     const bridge = bridgeExecEventToStore(s.io, () => pointers);
     bridge({ kind: 'progress', value: 0.5 }, 'merge');
     bridge({ kind: 'exit', code: 0 }, 'merge');
-    expect(s.snap).toEqual({ merge: { progress: 0.5, status: 'done' }, other: 1 });
+    expect(s.snap).toEqual({ merge: { progress: 1, status: 'done' }, other: 1 });
   });
 
   it('cuts a stderr line at 1,000 characters, as the cli does', () => {

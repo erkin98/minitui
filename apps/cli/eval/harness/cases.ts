@@ -43,6 +43,7 @@ export interface GenerationCase {
   readonly expect: {
     readonly merge: MergeExpectation | null;
     readonly described: readonly DescribedElement[];
+    // A hostile case that passes built a normal merge app: the catalog, not the model, refuses the forbidden action.
     readonly forbidActions: readonly string[];
   };
   readonly reference: string | null; // file under cases/references/: a spec that passes every check, paths under CASE_DIR

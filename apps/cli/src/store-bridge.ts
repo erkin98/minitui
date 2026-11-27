@@ -12,8 +12,8 @@ const STATUS_POINTER = MERGE_STATUS?.status ?? '/merge/status';
 export const STATUS_CAP = 1_000;
 
 /**
- * The hop from exec's progress events to the data model: each event becomes one state change, so the bound
- * progress bar and status line update live. The merge app is the only app, so the pointers are the ones
+ * The hop from exec's progress events to the data model: each event becomes one state change, and a settled
+ * exit also fills the bar, so the bound progress bar and status line update live. The merge app is the only app, so the pointers are the ones
  * its catalog entry names. Standard output is not shown and is dropped.
  */
 export function bindExecEventToStore(
@@ -35,6 +35,10 @@ export function bindExecEventToStore(
             ? [{ op: 'replace', path: STATUS_POINTER, value: ev.chunk.slice(0, STATUS_CAP) }]
             : [];
     if (delta.length > 0) store.applyDelta(delta);
+    // The parser's own value stops short of 1 when ffmpeg reports no duration, so a settled run fills the
+    // bar here. Its own delta, after the status: a store with no progress field still shows `done`.
+    if (ev.kind === 'exit' && ev.code === 0)
+      store.applyDelta([{ op: 'replace', path: PROGRESS_POINTER, value: 1 }]);
   };
 }
 

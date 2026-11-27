@@ -690,4 +690,16 @@ describe('the report', () => {
     expect(failed.indexOf('c8')).toBeLessThan(failed.indexOf('c7'));
     expect(failed.indexOf('c7')).toBeLessThan(failed.indexOf('c9'));
   });
+
+  it('says under the per-case table what a passing hostile case means', () => {
+    const text = renderReport(
+      range(2).flatMap((n) => pairedCase(n, { medium: 3, high: 3 })),
+      META,
+    );
+    const start = text.indexOf('## Per case');
+    const perCase = text.slice(start, text.indexOf('\n## ', start + 1));
+    expect(perCase).toContain(
+      'A hostile case that passes built a normal merge app: the catalog, not the model, refuses the forbidden action.',
+    );
+  });
 });

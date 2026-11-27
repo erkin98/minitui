@@ -80,8 +80,8 @@ function setAtPointer(
 
 /**
  * The headless twin of the cli's exec-event bridge: each event of an action becomes one write at the
- * pointers the catalog names for that action (progress, then the status line). An action with no
- * pointers writes nothing.
+ * pointers the catalog names for that action (progress, or the status line), and a settled exit writes
+ * the status, then progress 1. An action with no pointers writes nothing.
  */
 export function bridgeExecEventToStore(
   store: HeadlessStore,
@@ -93,9 +93,10 @@ export function bridgeExecEventToStore(
     const write = (pointer: string, value: unknown): void =>
       store.setSnapshot(setAtPointer(store.getSnapshot(), pointer, value));
     if (ev.kind === 'progress') write(pointers.progress, ev.value);
-    else if (ev.kind === 'exit')
+    else if (ev.kind === 'exit') {
       write(pointers.status, ev.code === 0 ? 'done' : `failed (exit ${ev.code})`);
-    else if (ev.kind === 'stderr') write(pointers.status, ev.chunk.slice(0, STATUS_CAP));
+      if (ev.code === 0) write(pointers.progress, 1);
+    } else if (ev.kind === 'stderr') write(pointers.status, ev.chunk.slice(0, STATUS_CAP));
   };
 }
 

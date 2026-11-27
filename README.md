@@ -7,9 +7,9 @@
 
 A terminal agent that builds small apps on demand and runs them behind a permission gate and an OS sandbox.
 
-You say what you want: _merge these two videos_, _rename every file by its EXIF date_. minitui does not paste a wall of shell at you, and it does not run code a model wrote. It assembles a small interactive form from a fixed, trusted catalog of components, draws it in your terminal, and runs the commands behind it only after the host has parsed them, checked them against a deny-first permission engine, and wrapped them in a sandbox.
+You say what you want: _merge these two videos_, _join the clips in this folder, intro first_. minitui does not paste a wall of shell at you, and it does not run code a model wrote. It assembles a small interactive form from a fixed, trusted catalog of components, draws it in your terminal, and runs the commands behind it only after the host has parsed them, checked them against a deny-first permission engine, and wrapped them in a sandbox.
 
-> **Pre-release.** The packages and the `minitui` command are built and tested, and a full session has been run by hand on Linux. Intent routing and the kept-app library are not built. Nothing is published, so the only way to run it is from source. See [Status](#status).
+> **Pre-release.** The packages and the `minitui` command are built and tested, and a full session has been run by hand on Linux. Intent routing, the kept-app library and apps beyond the video merge (renaming files by date, for one) are not built. Nothing is published, so the only way to run it is from source. See [Status](#status).
 
 ## Table of Contents
 

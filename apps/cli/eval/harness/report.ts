@@ -236,6 +236,11 @@ function comparison(rows: readonly EvalRow[], meta: ReportMeta): string {
   return `## The comparison\n\n${lines.join('\n')}`;
 }
 
+// What a passing hostile case means: the check cannot fail on a valid spec, since the catalog admits
+// no other action.
+const HOSTILE_PASS =
+  'A hostile case that passes built a normal merge app: the catalog, not the model, refuses the forbidden action.';
+
 function perCase(rows: readonly EvalRow[], meta: ReportMeta): string {
   const body = caseIdsOf(rows).map((id) => {
     const of = rows.filter((r) => r.caseId === id);
@@ -251,7 +256,7 @@ function perCase(rows: readonly EvalRow[], meta: ReportMeta): string {
     `${armOf(effort)} pass-all`,
     `${armOf(effort)} pass^${meta.trials}`,
   ]);
-  return `## Per case\n\n${table(['case', 'suite', ...head, 'excluded trials'], body)}`;
+  return `## Per case\n\n${table(['case', 'suite', ...head, 'excluded trials'], body)}\n\n${HOSTILE_PASS}`;
 }
 
 const CLASSES = ['structural', 'catalog', 'semantic'] as const;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createMockProvider } from '@minitui/agent-core';
+import { createMockProvider, type MinituiEvent } from '@minitui/agent-core';
 import { videoMergeCatalog } from '@minitui/catalog';
 import type { ActionDispatcher, RendererPort } from '@minitui/renderer-core';
 import { createInkBinding } from '@minitui/renderer-ink';
@@ -44,6 +44,48 @@ const fault: RuntimeFault = {
   exitCode: 1,
   stderrExcerpt: 'codec libvpx-vp9 not found',
 };
+
+// Two valid replies that differ only in the button label, so a prompt shows which one it quotes.
+const VALID_SPEC_A = VALID_SPEC_LINES.replace('"label":"Merge"', '"label":"Merge A"');
+const VALID_SPEC_B = VALID_SPEC_LINES.replace('"label":"Merge"', '"label":"Merge B"');
+
+const GAVE_UP = 'post-mount repair produced no valid spec';
+const tick = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
+const giveUps = (log: ReturnType<typeof recordingDiagnostics>): number =>
+  log.records.filter((r) => r.msg === GAVE_UP).length;
+const skipped = (msg: string) => ({ level: 'warn', msg, meta: { actionKey: 'merge' } });
+
+// A gate a turn waits on until the row opens it.
+function opened(): { wait: Promise<void>; open: () => void } {
+  let open = (): void => {};
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
+}
+
+async function* gatedTurn(wait: Promise<void>, text: string): AsyncGenerator<MinituiEvent> {
+  await wait;
+  yield* textTurn(text);
+}
+
+// eslint-disable-next-line require-yield -- a turn that fails before it yields anything
+async function* throwingTurn(): AsyncGenerator<MinituiEvent> {
+  await Promise.resolve();
+  throw new Error('provider is down');
+}
+
+// Three repairs, each left to give up before the next fault, so none is dropped as running.
+async function threeGiveUps(
+  graph: { observeFault: (f: RuntimeFault) => void },
+  log: ReturnType<typeof recordingDiagnostics>,
+): Promise<void> {
+  for (let n = 1; n <= 3; n += 1) {
+    graph.observeFault(fault);
+    await until(() => giveUps(log) === n, `repair ${String(n)} to give up`);
+    await tick();
+  }
+}
 
 // Builds a graph on real ports: a real sandbox handle (active or not), a real capability provider and
 // a scripted session. The wiring the session was handed is kept for inspection.
@@ -248,22 +290,170 @@ describe('buildAppGraph: the repair of a failed action', () => {
     expect(applied[0]?.root).toBe('go');
   });
 
-  it('starts no new turn after a cancel: the regeneration of the repair ends', async () => {
-    const prompts: string[] = [];
+  it('starts no turn after a cancel, and says why', async () => {
+    const { graph, session, log } = await build({ session: fakeSession() });
+    graph.bindHostSession({ updateSpec: () => {} });
+    graph.cancel();
+    graph.observeFault(fault);
+    await tick();
+    expect(session.submits).toEqual([]);
+    expect(log.records).toContainEqual(skipped('repair skipped: the run was cancelled'));
+  });
+
+  it('starts no turn while no app is mounted, and says why', async () => {
+    const { graph, session, log } = await build({ session: fakeSession() });
+    graph.observeFault(fault);
+    await tick();
+    expect(session.submits).toEqual([]);
+    expect(log.records).toContainEqual(skipped('repair skipped: no app is mounted'));
+  });
+
+  it('names the cancel first when the run is cancelled and no app is mounted', async () => {
+    const { graph, session, log } = await build({ session: fakeSession() });
+    graph.cancel();
+    graph.observeFault(fault);
+    await tick();
+    expect(session.submits).toEqual([]);
+    expect(log.records).toContainEqual(skipped('repair skipped: the run was cancelled'));
+    expect(log.records).not.toContainEqual(skipped('repair skipped: no app is mounted'));
+  });
+
+  it('drops a fault that arrives while a repair runs, and says why', async () => {
+    const gate = opened();
+    let calls = 0;
     const session = fakeSession({
-      submit: (prompt) => {
-        prompts.push(prompt);
-        return textTurn('not a spec');
+      submit: () => {
+        calls += 1;
+        return calls === 1 ? gatedTurn(gate.wait, 'not a spec') : textTurn('not a spec');
       },
     });
     const { graph, log } = await build({ session });
-    graph.cancel();
+    graph.bindHostSession({ updateSpec: () => {} });
     graph.observeFault(fault);
-    await until(
-      () => log.records.some((r) => r.msg === 'post-mount repair produced no valid spec'),
-      'the repair to give up',
-    );
-    expect(prompts).toHaveLength(1);
+    graph.observeFault(fault);
+    await tick();
+    expect(session.submits).toHaveLength(1);
+    expect(log.records).toContainEqual(skipped('repair skipped: a repair is already running'));
+    gate.open();
+    await until(() => giveUps(log) === 1, 'the repair to give up');
+  });
+
+  it('starts no fourth repair in one app session, and says why', async () => {
+    const session = fakeSession({ submit: () => textTurn('not a spec') });
+    const { graph, log } = await build({ session });
+    graph.bindHostSession({ updateSpec: () => {} });
+    await threeGiveUps(graph, log);
+    const before = session.submits.length;
+    graph.observeFault(fault);
+    await tick();
+    expect(session.submits).toHaveLength(before);
+    expect(log.records).toContainEqual(skipped('repair skipped: the repair budget is spent'));
+  });
+
+  it('a released app session gives the next app its own three repairs', async () => {
+    const session = fakeSession({ submit: () => textTurn('not a spec') });
+    const { graph, log } = await build({ session });
+    graph.bindHostSession({ updateSpec: () => {} });
+    await threeGiveUps(graph, log);
+    graph.bindHostSession(undefined);
+    graph.bindHostSession({ updateSpec: () => {} });
+    graph.observeFault(fault);
+    await until(() => giveUps(log) === 4, 'a fourth repair to give up');
+  });
+
+  it('a repair whose turn throws leaves the bridge free for the next fault', async () => {
+    let calls = 0;
+    const session = fakeSession({
+      submit: () => {
+        calls += 1;
+        return calls === 1 ? throwingTurn() : textTurn('not a spec');
+      },
+    });
+    const { graph, log } = await build({ session });
+    graph.bindHostSession({ updateSpec: () => {} });
+    graph.observeFault(fault);
+    await until(() => log.records.some((r) => r.msg === 'reprompt turn failed'), 'the throw');
+    graph.observeFault(fault);
+    await until(() => giveUps(log) === 1, 'the second repair to give up');
+  });
+
+  it("drops the fault a refused repaired spec raises, and keeps the mounted spec's text", async () => {
+    let calls = 0;
+    const session = fakeSession({
+      submit: () => {
+        calls += 1;
+        return textTurn(calls === 1 ? VALID_SPEC_A : VALID_SPEC_B);
+      },
+    });
+    const { graph, log } = await build({ session });
+    const applied: MiniAppSpec[] = [];
+    graph.generation.previousText = 'MOUNTED-TEXT';
+    graph.bindHostSession({
+      updateSpec: (s) => {
+        applied.push(s);
+        // the host's own refusal of the first repaired spec: it reports a fault inside the apply
+        if (applied.length === 1) graph.observeFault(fault);
+      },
+    });
+    graph.observeFault(fault);
+    await until(() => applied.length >= 1, 'the first apply');
+    await tick();
+    expect(applied).toHaveLength(1);
+    expect(log.records).toContainEqual(skipped('repair skipped: the repaired spec was refused'));
+    graph.observeFault(fault);
+    await until(() => applied.length === 2, 'the second apply');
+    await tick();
+    expect(session.submits[1]?.intent).toContain('MOUNTED-TEXT');
+    expect(session.submits[1]?.intent).not.toContain('Merge A');
+    graph.observeFault(fault);
+    await until(() => session.submits.length === 3, 'the third repair');
+    expect(session.submits[2]?.intent).toContain('Merge B');
+  });
+
+  it('an apply that throws leaves the bridge free for the next fault', async () => {
+    let applies = 0;
+    const session = fakeSession({ submit: () => textTurn(VALID_SPEC_A) });
+    const { graph, log } = await build({ session });
+    graph.bindHostSession({
+      updateSpec: () => {
+        applies += 1;
+        if (applies === 1) throw new Error('the app was built wrong');
+      },
+    });
+    graph.observeFault(fault);
+    await until(() => log.records.some((r) => r.msg === 'reprompt turn failed'), 'the throw');
+    graph.observeFault(fault);
+    await until(() => applies === 2, 'the second apply');
+  });
+
+  it("each repair's first prompt quotes the mounted spec, its regenerations its own last reply", async () => {
+    const session = fakeSession({ submit: () => textTurn('REPLY-A') });
+    const { graph, log } = await build({ session });
+    graph.generation.previousText = 'MOUNTED-TEXT';
+    graph.bindHostSession({ updateSpec: () => {} });
+    graph.observeFault(fault);
+    await until(() => giveUps(log) === 1, 'the first repair to give up');
+    expect(session.submits[1]?.intent).toContain('REPLY-A');
+    const firstOfSecond = session.submits.length;
+    graph.observeFault(fault);
+    await until(() => session.submits.length > firstOfSecond, 'the second repair');
+    expect(session.submits[firstOfSecond]?.intent).toContain('MOUNTED-TEXT');
+    expect(session.submits[firstOfSecond]?.intent).not.toContain('REPLY-A');
+  });
+
+  it('an applied repair becomes the mounted text the next repair quotes', async () => {
+    const session = fakeSession({ submit: () => textTurn(VALID_SPEC_A) });
+    const { graph } = await build({ session });
+    const applied: MiniAppSpec[] = [];
+    graph.generation.previousText = 'MOUNTED-TEXT';
+    graph.bindHostSession({ updateSpec: (s) => applied.push(s) });
+    graph.observeFault(fault);
+    await until(() => applied.length === 1, 'the apply');
+    await tick();
+    graph.observeFault(fault);
+    await until(() => session.submits.length === 2, 'the second repair');
+    expect(session.submits[1]?.intent).toContain('Merge A');
+    expect(session.submits[1]?.intent).not.toContain('MOUNTED-TEXT');
   });
 
   it('a turn that throws is logged and does not escape as an unhandled rejection', async () => {
@@ -275,6 +465,7 @@ describe('buildAppGraph: the repair of a failed action', () => {
       },
     });
     const { graph, log } = await build({ session });
+    graph.bindHostSession({ updateSpec: () => {} });
     graph.observeFault(fault);
     await until(
       () => log.records.some((r) => r.msg === 'reprompt turn failed'),
@@ -284,16 +475,30 @@ describe('buildAppGraph: the repair of a failed action', () => {
     expect(String(record?.meta?.error)).toContain('provider is down');
   });
 
-  it('applies nothing after the mounted session is released', async () => {
-    const session = fakeSession({ submit: () => textTurn(VALID_SPEC_LINES) });
+  it('applies nothing when the mounted session is released while the repair runs', async () => {
+    const gate = opened();
+    const session = fakeSession({ submit: () => gatedTurn(gate.wait, VALID_SPEC_LINES) });
     const { graph } = await build({ session });
     const applied: MiniAppSpec[] = [];
     graph.bindHostSession({ updateSpec: (s) => applied.push(s) });
-    graph.bindHostSession(undefined);
     graph.observeFault(fault);
     await until(() => session.submits.length > 0, 'the repair turn');
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    graph.bindHostSession(undefined);
+    gate.open();
+    await tick();
     expect(applied).toEqual([]);
+  });
+
+  it('applies the repair when nothing is released: the row above can fail', async () => {
+    const gate = opened();
+    const session = fakeSession({ submit: () => gatedTurn(gate.wait, VALID_SPEC_LINES) });
+    const { graph } = await build({ session });
+    const applied: MiniAppSpec[] = [];
+    graph.bindHostSession({ updateSpec: (s) => applied.push(s) });
+    graph.observeFault(fault);
+    await until(() => session.submits.length > 0, 'the repair turn');
+    gate.open();
+    await until(() => applied.length === 1, 'the apply');
   });
 
   it('starts no repair when the sandbox is inactive, and says why', async () => {
@@ -319,6 +524,7 @@ describe('buildAppGraph: the repair of a failed action', () => {
       session,
       redactionPolicy: { extraSecretPatterns: [/TOPSECRET\d+/] },
     });
+    graph.bindHostSession({ updateSpec: () => {} });
     graph.observeFault({ ...fault, stderrExcerpt: 'failed with TOPSECRET123 set' });
     await until(() => prompts.length > 0, 'the first repair prompt');
     expect(prompts[0]).not.toContain('TOPSECRET123');
@@ -334,6 +540,7 @@ describe('buildAppGraph: the repair of a failed action', () => {
       },
     });
     const { graph } = await build({ session });
+    graph.bindHostSession({ updateSpec: () => {} });
     graph.observeFault({ ...fault, stderrExcerpt: 'failed with TOPSECRET123 set' });
     await until(() => prompts.length > 0, 'the first repair prompt');
     expect(prompts[0]).toContain('TOPSECRET123');

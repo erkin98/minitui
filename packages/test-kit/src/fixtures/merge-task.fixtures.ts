@@ -92,7 +92,6 @@ export const MERGE_TOOL_OK: ScriptedTool = {
   lifecycle: [
     { phase: 'started' },
     { phase: 'progress', progress: 0.5, message: 'merging' },
-    { phase: 'progress', progress: 1, message: 'finalizing' },
     { phase: 'result', outcome: { exitCode: 0, stdout: 'out.mp4', kind: 'exec-local' } },
   ],
 };
